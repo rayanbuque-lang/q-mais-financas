@@ -553,7 +553,7 @@ export default function DashboardPage() {
                   {item.valor !== null ? (
                     <span
                       className={`text-sm font-semibold ${
-                        item.inverter
+                        item.invert
                           ? item.valor > 0
                             ? "text-red-500"
                             : "text-emerald-600"
