@@ -50,6 +50,12 @@ export default function AuditPage() {
   const [pagina, setPagina] = useState(1);
   const [expandidoId, setExpandidoId] = useState<string | null>(null);
   const [usuarios, setUsuarios] = useState<string[]>([]);
+
+  // Filtros de data
+  const [filtroData, setFiltroData] = useState<"todos" | "hoje" | "semana" | "mes" | "personalizado">("todos");
+  const [dataInicio, setDataInicio] = useState("");
+  const [dataFim, setDataFim] = useState("");
+
   const itensPorPagina = 30;
 
   const supabase = createClient();
@@ -70,7 +76,7 @@ export default function AuditPage() {
     setLoading(false);
   }
 
-  useEffect(() => { carregarLogs(); }, []);
+  useEffect(() => { carregarDados(); }, []);
 
   function fmtData(iso: string) {
     const d = new Date(iso);
@@ -151,25 +157,49 @@ export default function AuditPage() {
     const nome = log.detalhes || "";
 
     switch (log.acao) {
-      case "criou":
-        return `cadastrou ${tabela.toLowerCase()}${nome ? `: ${nome}` : ""}`;
-      case "editou":
-        return `alterou ${tabela.toLowerCase()}${nome ? `: ${nome}` : ""}`;
-      case "excluiu":
-        return `excluiu ${tabela.toLowerCase()}${nome ? `: ${nome}` : ""}`;
-      case "pagou":
-        return `marcou como pago${nome ? `: ${nome}` : ""}`;
-      case "fechou":
-        return `fechou o período${nome ? `: ${nome}` : ""}`;
-      case "reabriu":
-        return `reabriu o período${nome ? `: ${nome}` : ""}`;
-      case "recebeu":
-        return `confirmou recebimento${nome ? `: ${nome}` : ""}`;
-      case "importou":
-        return `importou dados${nome ? `: ${nome}` : ""}`;
-      default:
-        return `${log.acao} em ${tabela.toLowerCase()}`;
+      case "criou": return `cadastrou ${tabela.toLowerCase()}${nome ? `: ${nome}` : ""}`;
+      case "editou": return `alterou ${tabela.toLowerCase()}${nome ? `: ${nome}` : ""}`;
+      case "excluiu": return `excluiu ${tabela.toLowerCase()}${nome ? `: ${nome}` : ""}`;
+      case "pagou": return `marcou como pago${nome ? `: ${nome}` : ""}`;
+      case "fechou": return `fechou o período${nome ? `: ${nome}` : ""}`;
+      case "reabriu": return `reabriu o período${nome ? `: ${nome}` : ""}`;
+      case "recebeu": return `confirmou recebimento${nome ? `: ${nome}` : ""}`;
+      case "importou": return `importou dados${nome ? `: ${nome}` : ""}`;
+      default: return `${log.acao} em ${tabela.toLowerCase()}`;
     }
+  }
+
+  function getDataFiltroRange(): { inicio: Date; fim: Date } | null {
+    const hoje = new Date();
+    hoje.setHours(23, 59, 59, 999);
+
+    if (filtroData === "hoje") {
+      const inicio = new Date();
+      inicio.setHours(0, 0, 0, 0);
+      return { inicio, fim: hoje };
+    }
+
+    if (filtroData === "semana") {
+      const inicio = new Date();
+      inicio.setDate(inicio.getDate() - 7);
+      inicio.setHours(0, 0, 0, 0);
+      return { inicio, fim: hoje };
+    }
+
+    if (filtroData === "mes") {
+      const inicio = new Date();
+      inicio.setDate(inicio.getDate() - 30);
+      inicio.setHours(0, 0, 0, 0);
+      return { inicio, fim: hoje };
+    }
+
+    if (filtroData === "personalizado" && dataInicio) {
+      const inicio = new Date(dataInicio + "T00:00:00");
+      const fim = dataFim ? new Date(dataFim + "T23:59:59") : new Date(dataInicio + "T23:59:59");
+      return { inicio, fim };
+    }
+
+    return null;
   }
 
   // Filtros
@@ -177,6 +207,14 @@ export default function AuditPage() {
     if (filtroAcao !== "todas" && log.acao !== filtroAcao) return false;
     if (filtroTabela !== "todas" && log.tabela !== filtroTabela) return false;
     if (filtroUsuario !== "todos" && log.usuario_nome !== filtroUsuario) return false;
+
+    // Filtro de data
+    const range = getDataFiltroRange();
+    if (range) {
+      const dataLog = new Date(log.created_at);
+      if (dataLog < range.inicio || dataLog > range.fim) return false;
+    }
+
     if (busca) {
       const b = busca.toLowerCase();
       const texto = `${log.usuario_nome} ${log.detalhes} ${tabelasLabels[log.tabela] || log.tabela} ${log.acao}`.toLowerCase();
@@ -203,6 +241,19 @@ export default function AuditPage() {
     semanaAtras.setDate(semanaAtras.getDate() - 7);
     return d >= semanaAtras;
   }).length;
+
+  function limparFiltros() {
+    setFiltroAcao("todas");
+    setFiltroTabela("todas");
+    setFiltroUsuario("todos");
+    setFiltroData("todos");
+    setDataInicio("");
+    setDataFim("");
+    setBusca("");
+    setPagina(1);
+  }
+
+  const temFiltroAtivo = filtroAcao !== "todas" || filtroTabela !== "todas" || filtroUsuario !== "todos" || filtroData !== "todos" || busca !== "";
 
   return (
     <div className="space-y-6">
@@ -233,6 +284,7 @@ export default function AuditPage() {
 
       {/* Filtros */}
       <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-4 space-y-3">
+        {/* Filtro de ação */}
         <div className="flex flex-wrap gap-2 items-center">
           <span className="text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Ação:</span>
           <button onClick={() => { setFiltroAcao("todas"); setPagina(1); }} className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${filtroAcao === "todas" ? "bg-gray-800 text-white" : "bg-[var(--color-bg)] text-[var(--color-text-muted)] border border-[var(--color-border)]"}`}>
@@ -245,6 +297,37 @@ export default function AuditPage() {
           ))}
         </div>
 
+        {/* Filtro de data */}
+        <div className="flex flex-wrap gap-2 items-center">
+          <span className="text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Período:</span>
+          {[
+            { key: "todos", label: "Todos" },
+            { key: "hoje", label: "Hoje" },
+            { key: "semana", label: "7 dias" },
+            { key: "mes", label: "30 dias" },
+            { key: "personalizado", label: "📅 Personalizado" },
+          ].map((opt) => (
+            <button key={opt.key} onClick={() => { setFiltroData(opt.key as typeof filtroData); setPagina(1); }} className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${filtroData === opt.key ? "bg-blue-600 text-white" : "bg-[var(--color-bg)] text-[var(--color-text-muted)] border border-[var(--color-border)]"}`}>
+              {opt.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Datas personalizadas */}
+        {filtroData === "personalizado" && (
+          <div className="flex flex-wrap gap-3 items-end">
+            <div>
+              <label className="block text-[10px] font-semibold mb-1 text-[var(--color-text-muted)] uppercase">De</label>
+              <input type="date" value={dataInicio} onChange={(e) => { setDataInicio(e.target.value); setPagina(1); }} className="px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-xs focus:outline-none" />
+            </div>
+            <div>
+              <label className="block text-[10px] font-semibold mb-1 text-[var(--color-text-muted)] uppercase">Até</label>
+              <input type="date" value={dataFim} onChange={(e) => { setDataFim(e.target.value); setPagina(1); }} className="px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-xs focus:outline-none" />
+            </div>
+          </div>
+        )}
+
+        {/* Módulo, usuário, busca */}
         <div className="flex flex-wrap gap-3">
           <select value={filtroTabela} onChange={(e) => { setFiltroTabela(e.target.value); setPagina(1); }} className="px-3 py-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-xs focus:outline-none">
             <option value="todas">Todos os módulos</option>
@@ -259,10 +342,16 @@ export default function AuditPage() {
             ))}
           </select>
           <input type="text" value={busca} onChange={(e) => { setBusca(e.target.value); setPagina(1); }} placeholder="Buscar..." className="flex-1 min-w-[150px] px-3 py-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-xs focus:outline-none" />
+          {temFiltroAtivo && (
+            <button onClick={limparFiltros} className="px-3 py-2 rounded-lg bg-red-50 text-red-500 text-xs font-semibold hover:bg-red-100 transition">
+              ✕ Limpar
+            </button>
+          )}
         </div>
 
         <p className="text-xs text-[var(--color-text-muted)]">
           {logsFiltrados.length} {logsFiltrados.length === 1 ? "registro encontrado" : "registros encontrados"}
+          {temFiltroAtivo && " (filtrado)"}
         </p>
       </div>
 
