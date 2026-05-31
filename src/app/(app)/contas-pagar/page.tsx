@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { registrarLog } from "@/lib/audit";
+import { registrarLog, verificarMesFechado, verificarAdmin } from "@/lib/audit";
 
 interface ContaPagar {
   id: string;
@@ -45,6 +45,11 @@ export default function ContasPagarPage() {
   const [pagandoId, setPagandoId] = useState<string | null>(null);
   const [dataPagamentoInline, setDataPagamentoInline] = useState("");
 
+  // Lote
+  const [selecionadas, setSelecionadas] = useState<Set<string>>(new Set());
+  const [modoLote, setModoLote] = useState(false);
+  const [loteDataPagamento, setLoteDataPagamento] = useState(new Date().toISOString().split("T")[0]);
+
   const supabase = createClient();
 
   async function carregarDados() {
@@ -81,6 +86,20 @@ export default function ContasPagarPage() {
 
   async function handleSalvar(e: React.FormEvent) {
     e.preventDefault(); setLoading(true); setMensagem("");
+
+    // Verificar se mês está fechado (para edição)
+    if (editandoId) {
+      const { fechado, nomeMes } = await verificarMesFechado(dataVencimento);
+      if (fechado) {
+        const isAdmin = await verificarAdmin();
+        if (!isAdmin) {
+          setMensagem(`Não é possível editar. ${nomeMes} está fechado. Apenas administradores podem alterar.`);
+          setLoading(false); setTimeout(() => setMensagem(""), 5000);
+          return;
+        }
+      }
+    }
+
     const dados: Record<string, unknown> = { fornecedor, descricao, valor: parseFloat(valor.replace(",", ".")), data_vencimento: dataVencimento, categoria_id: categoriaId, observacao, status: statusInicial };
     if (statusInicial === "pago") { dados.data_pagamento = dataPagamento || new Date().toISOString().split("T")[0]; } else { dados.data_pagamento = null; }
 
@@ -89,15 +108,19 @@ export default function ContasPagarPage() {
     else { const r = await supabase.from("contas_pagar").insert(dados).select("id").single(); error = r.error; if (r.data) contaId = r.data.id; }
 
     if (!error && statusInicial === "pago" && contaId && !editandoId) {
-      await supabase.from("movimentacoes").insert({ tipo: "saida", data: dados.data_pagamento, valor: parseFloat(valor.replace(",", ".")), categoria_id: categoriaId, observacao: `Pagamento: ${fornecedor}${descricao ? ` - ${descricao}` : ""}`, revisar: false });
-      setMensagem("Cadastrada como paga! Movimentação criada no DRE.");
+      await supabase.from("movimentacoes").insert({ tipo: "saida", data: dados.data_pagamento as string, valor: parseFloat(valor.replace(",", ".")), categoria_id: categoriaId, observacao: `Pagamento: ${fornecedor}${descricao ? ` - ${descricao}` : ""}`, revisar: false });
+      await registrarLog({ acao: "criou", tabela: "contas_pagar", registroId: contaId, dadosNovos: dados, detalhes: `${fornecedor} - ${fmt(parseFloat(valor.replace(",", ".")))}` });
+      setMensagem("Cadastrada como paga! Movimentação criada.");
     } else if (error) { setMensagem("Erro ao salvar."); }
-    else { setMensagem(editandoId ? "Atualizada!" : "Cadastrada!"); }
+    else {
+      await registrarLog({ acao: editandoId ? "editou" : "criou", tabela: "contas_pagar", registroId: contaId || undefined, dadosNovos: dados, detalhes: `${fornecedor} - ${fmt(parseFloat(valor.replace(",", ".")))}` });
+      setMensagem(editandoId ? "Atualizada!" : "Cadastrada!");
+    }
 
     resetarFormulario(); setShowForm(false); carregarDados(); setLoading(false); setTimeout(() => setMensagem(""), 4000);
   }
 
-  // Pagamento inline (simplificado)
+  // Pagamento individual
   function iniciarPagamento(conta: ContaPagar) {
     setPagandoId(conta.id);
     setDataPagamentoInline(new Date().toISOString().split("T")[0]);
@@ -108,7 +131,6 @@ export default function ContasPagarPage() {
     const dataPag = dataPagamentoInline;
 
     const { error: err1 } = await supabase.from("contas_pagar").update({ status: "pago", data_pagamento: dataPag }).eq("id", conta.id);
-
     if (err1) { setMensagem("Erro ao confirmar."); setLoading(false); return; }
 
     await supabase.from("movimentacoes").insert({
@@ -116,23 +138,57 @@ export default function ContasPagarPage() {
       observacao: `Pagamento: ${conta.fornecedor}${conta.descricao ? ` - ${conta.descricao}` : ""}`, revisar: false,
     });
 
-    await registrarLog({
-      acao: "pagou",
-      tabela: "contas_pagar",
-      registroId: conta.id,
-      dadosNovos: { data_pagamento: dataPag, valor: conta.valor },
-      detalhes: `${conta.fornecedor} - ${fmt(conta.valor)}`,
-    });
-    await registrarLog({
-      acao: "pagou",
-      tabela: "contas_pagar",
-      registroId: conta.id,
-      dadosNovos: { data_pagamento: dataPag, valor: conta.valor },
-      detalhes: `${conta.fornecedor} - ${fmt(conta.valor)}`,
-    });
+    await registrarLog({ acao: "pagou", tabela: "contas_pagar", registroId: conta.id, dadosNovos: { data_pagamento: dataPag, valor: conta.valor }, detalhes: `${conta.fornecedor} - ${fmt(conta.valor)}` });
+
     setPagandoId(null);
-    setMensagem("Pago! Movimentação criada no DRE.");
+    setMensagem("Pago! Movimentação criada.");
     setLoading(false); carregarDados(); setTimeout(() => setMensagem(""), 4000);
+  }
+
+  // Pagamento em lote
+  function toggleSelecionada(id: string) {
+    setSelecionadas((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  function selecionarTodasPendentes() {
+    const pendentes = contas.filter((c) => c.status === "pendente");
+    if (selecionadas.size === pendentes.length) {
+      setSelecionadas(new Set());
+    } else {
+      setSelecionadas(new Set(pendentes.map((c) => c.id)));
+    }
+  }
+
+  async function pagarLote() {
+    if (selecionadas.size === 0) return;
+    const contasSelecionadas = contas.filter((c) => selecionadas.has(c.id));
+    const total = contasSelecionadas.reduce((a, c) => a + c.valor, 0);
+
+    if (!confirm(`Pagar ${contasSelecionadas.length} contas no valor total de ${fmt(total)}?`)) return;
+
+    setLoading(true);
+    let pagas = 0;
+
+    for (const conta of contasSelecionadas) {
+      const { error } = await supabase.from("contas_pagar").update({ status: "pago", data_pagamento: loteDataPagamento }).eq("id", conta.id);
+      if (!error) {
+        await supabase.from("movimentacoes").insert({
+          tipo: "saida", data: loteDataPagamento, valor: conta.valor, categoria_id: conta.categoria_id,
+          observacao: `Pagamento: ${conta.fornecedor}${conta.descricao ? ` - ${conta.descricao}` : ""}`, revisar: false,
+        });
+        await registrarLog({ acao: "pagou", tabela: "contas_pagar", registroId: conta.id, detalhes: `${conta.fornecedor} - ${fmt(conta.valor)}` });
+        pagas++;
+      }
+    }
+
+    setSelecionadas(new Set());
+    setModoLote(false);
+    setMensagem(`${pagas} contas pagas! Total: ${fmt(total)}`);
+    setLoading(false); carregarDados(); setTimeout(() => setMensagem(""), 5000);
   }
 
   async function desfazerPagamento(conta: ContaPagar) {
@@ -141,12 +197,13 @@ export default function ContasPagarPage() {
     const { data: movs } = await supabase.from("movimentacoes").select("id").eq("tipo", "saida").eq("valor", conta.valor).ilike("observacao", `%${conta.fornecedor}%`);
     if (movs && movs.length > 0) await supabase.from("movimentacoes").delete().eq("id", movs[0].id);
     await supabase.from("contas_pagar").update({ status: "pendente", data_pagamento: null }).eq("id", conta.id);
+    await registrarLog({ acao: "reabriu", tabela: "contas_pagar", registroId: conta.id, detalhes: `${conta.fornecedor} - ${fmt(conta.valor)}` });
     setMensagem("Desfeito!"); setLoading(false); carregarDados(); setTimeout(() => setMensagem(""), 3000);
   }
 
   async function handleExcluir(id: string) {
     if (!confirm("Excluir?")) return;
-    await registrarLog({ acao: "excluiu", tabela: "contas_pagar", registroId: id, detalhes: "Excluiu conta" });
+    await registrarLog({ acao: "excluiu", tabela: "contas_pagar", registroId: id });
     await supabase.from("contas_pagar").delete().eq("id", id);
     setMensagem("Excluída!"); carregarDados(); setTimeout(() => setMensagem(""), 3000);
   }
@@ -181,6 +238,7 @@ export default function ContasPagarPage() {
   const totalPago = contas.filter(c => c.status === "pago").reduce((a, c) => a + c.valor, 0);
   const contasVencidas = contas.filter(c => c.status === "pendente" && c.data_vencimento < new Date().toISOString().split("T")[0]);
   const semanas = agruparPorSemana(contasFiltradas);
+  const totalSelecionadoLote = contas.filter((c) => selecionadas.has(c.id)).reduce((a, c) => a + c.valor, 0);
 
   function renderConta(conta: ContaPagar) {
     const isVencida = conta.status === "pendente" && conta.data_vencimento < new Date().toISOString().split("T")[0];
@@ -190,6 +248,9 @@ export default function ContasPagarPage() {
       <div key={conta.id}>
         <div className={`p-4 flex items-center justify-between hover:bg-[var(--color-bg)] transition-colors ${conta.status === "pago" ? "opacity-60" : ""}`}>
           <div className="flex items-center gap-3 min-w-0">
+            {modoLote && conta.status === "pendente" && (
+              <input type="checkbox" checked={selecionadas.has(conta.id)} onChange={() => toggleSelecionada(conta.id)} className="w-4 h-4 rounded accent-emerald-600 shrink-0" />
+            )}
             <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-sm shrink-0 ${conta.status === "pago" ? "bg-emerald-50 text-emerald-600" : isVencida ? "bg-red-50 text-red-500" : "bg-amber-50 text-amber-600"}`}>
               {conta.status === "pago" ? "✓" : "⏳"}
             </div>
@@ -220,7 +281,6 @@ export default function ContasPagarPage() {
           </div>
         </div>
 
-        {/* Pagamento inline */}
         {isPagando && (
           <div className="bg-emerald-50 border-t border-emerald-200 px-4 py-4 mx-4 mb-2 rounded-xl flex items-center gap-3 flex-wrap">
             <span className="text-sm font-semibold text-emerald-800">📅 Data do pagamento:</span>
@@ -228,9 +288,7 @@ export default function ContasPagarPage() {
             <button onClick={() => confirmarPagamento(conta)} disabled={loading} className="px-5 py-2 bg-emerald-600 text-white rounded-lg text-sm font-semibold hover:bg-emerald-700 transition disabled:opacity-50">
               {loading ? "..." : "✓ Confirmar"}
             </button>
-            <button onClick={() => setPagandoId(null)} className="px-4 py-2 bg-white text-gray-500 rounded-lg text-sm font-medium border border-gray-300 hover:bg-gray-50 transition">
-              Cancelar
-            </button>
+            <button onClick={() => setPagandoId(null)} className="px-4 py-2 bg-white text-gray-500 rounded-lg text-sm font-medium border border-gray-300 hover:bg-gray-50 transition">Cancelar</button>
           </div>
         )}
       </div>
@@ -241,8 +299,36 @@ export default function ContasPagarPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div><h1 className="text-2xl font-bold tracking-tight">Contas a Pagar</h1><p className="text-[var(--color-text-muted)] text-sm mt-1">Boletos, fornecedores e compromissos</p></div>
-        <button onClick={abrirNovo} className="px-5 py-3 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white font-semibold rounded-xl hover:from-emerald-700 hover:to-emerald-600 transition-all text-sm shadow-md shadow-emerald-200">+ Nova Conta</button>
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={() => { setModoLote(!modoLote); setSelecionadas(new Set()); }} className={`px-4 py-3 font-semibold rounded-xl transition-all text-sm ${modoLote ? "bg-blue-600 text-white shadow-md" : "bg-[var(--color-surface)] border border-[var(--color-border)] text-[var(--color-text-muted)]"}`}>
+            ☑️ {modoLote ? "Sair do Lote" : "Selecionar Lote"}
+          </button>
+          <button onClick={abrirNovo} className="px-5 py-3 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white font-semibold rounded-xl hover:from-emerald-700 hover:to-emerald-600 transition-all text-sm shadow-md shadow-emerald-200">+ Nova Conta</button>
+        </div>
       </div>
+
+      {/* Barra de lote */}
+      {modoLote && (
+        <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 flex items-center justify-between flex-wrap gap-3">
+          <div className="flex items-center gap-3">
+            <button onClick={selecionarTodasPendentes} className="px-3 py-2 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700 transition">
+              {selecionadas.size === contas.filter((c) => c.status === "pendente").length ? "Desmarcar Todas" : "Selecionar Todas Pendentes"}
+            </button>
+            <span className="text-sm text-blue-800 font-medium">
+              {selecionadas.size} selecionada{selecionadas.size !== 1 ? "s" : ""} — Total: {fmt(totalSelecionadoLote)}
+            </span>
+          </div>
+          <div className="flex items-center gap-3">
+            <div>
+              <label className="block text-[10px] font-semibold text-blue-700 mb-1">DATA DO PAGAMENTO</label>
+              <input type="date" value={loteDataPagamento} onChange={(e) => setLoteDataPagamento(e.target.value)} className="px-3 py-2 rounded-lg border border-blue-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+            </div>
+            <button onClick={pagarLote} disabled={selecionadas.size === 0 || loading} className="px-5 py-3 bg-emerald-600 text-white rounded-xl text-sm font-semibold hover:bg-emerald-700 transition disabled:opacity-40">
+              💳 Pagar Selecionadas ({selecionadas.size})
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[{l:"Pendente",v:fmt(totalPendente),c:"text-amber-600"},{l:"Pago",v:fmt(totalPago),c:"text-emerald-600"},{l:"Vencidas",v:`${contasVencidas.length}`,c:"text-red-500"},{l:"Total",v:fmt(totalPendente+totalPago),c:"text-[var(--color-text)]"}].map(c=>(
@@ -257,9 +343,8 @@ export default function ContasPagarPage() {
         </div>
       )}
 
-      {mensagem && <div className={`p-3 rounded-xl text-sm font-medium text-center ${mensagem.includes("Erro") ? "bg-red-50 text-red-600" : "bg-emerald-50 text-emerald-700"}`}>{mensagem}</div>}
+      {mensagem && <div className={`p-3 rounded-xl text-sm font-medium text-center ${mensagem.includes("Erro") || mensagem.includes("Não é possível") ? "bg-red-50 text-red-600" : "bg-emerald-50 text-emerald-700"}`}>{mensagem}</div>}
 
-      {/* Formulário */}
       {showForm && (
         <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-6 shadow-sm">
           <div className="flex items-center justify-between mb-5">
@@ -277,7 +362,6 @@ export default function ContasPagarPage() {
               <div><label className="block text-sm font-semibold mb-2 text-[var(--color-text-muted)]">Categoria</label><select value={categoriaId} onChange={e => setCategoriaId(e.target.value)} required className="w-full px-4 py-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none">{categorias.map(cat => (<option key={cat.id} value={cat.id}>{cat.nome}</option>))}</select></div>
             </div>
             <div><label className="block text-sm font-semibold mb-2 text-[var(--color-text-muted)]">Observação</label><input type="text" value={observacao} onChange={e => setObservacao(e.target.value)} placeholder="Informação adicional" className="w-full px-4 py-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none" /></div>
-
             <div>
               <label className="block text-sm font-semibold mb-3 text-[var(--color-text-muted)]">Status</label>
               <div className="flex gap-3">
@@ -285,15 +369,12 @@ export default function ContasPagarPage() {
                 <button type="button" onClick={() => setStatusInicial("pago")} className={`flex-1 py-3 rounded-xl font-semibold text-sm transition-all ${statusInicial === "pago" ? "bg-emerald-600 text-white shadow-md shadow-emerald-200" : "bg-[var(--color-bg)] text-[var(--color-text-muted)] border border-[var(--color-border)]"}`}>✓ Já Pago</button>
               </div>
             </div>
-
             {statusInicial === "pago" && (
               <div>
                 <label className="block text-sm font-semibold mb-2 text-[var(--color-text-muted)]">Data do Pagamento</label>
                 <input type="date" value={dataPagamento} onChange={e => setDataPagamento(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none" />
-                <p className="text-xs text-[var(--color-text-muted)] mt-1">Se não informar, será considerado hoje.</p>
               </div>
             )}
-
             <div className="flex gap-3 pt-2">
               <button type="button" onClick={() => { setShowForm(false); resetarFormulario(); }} className="flex-1 py-3 bg-[var(--color-bg)] text-[var(--color-text-muted)] font-semibold rounded-xl border border-[var(--color-border)] hover:bg-gray-100 transition text-sm">Cancelar</button>
               <button type="submit" disabled={loading} className="flex-1 py-3 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white font-semibold rounded-xl hover:from-emerald-700 hover:to-emerald-600 transition-all disabled:opacity-50 text-sm shadow-md shadow-emerald-200">{loading ? "Salvando..." : editandoId ? "Atualizar" : "Salvar"}</button>
@@ -302,7 +383,6 @@ export default function ContasPagarPage() {
         </div>
       )}
 
-      {/* Filtros */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex gap-1 bg-[var(--color-bg)] rounded-xl p-1">
           {(["pendentes", "pagos", "todos"] as const).map(v => (
@@ -315,7 +395,6 @@ export default function ContasPagarPage() {
         </div>
       </div>
 
-      {/* Semanal */}
       {visualizacao === "semanal" && (
         <div className="space-y-4">
           {semanas.length === 0 ? (<div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-12 text-center text-[var(--color-text-muted)] text-sm">Nenhuma conta.</div>) : (
@@ -332,7 +411,6 @@ export default function ContasPagarPage() {
         </div>
       )}
 
-      {/* Lista */}
       {visualizacao === "lista" && (
         <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
           {contasFiltradas.length === 0 ? (<div className="p-12 text-center text-[var(--color-text-muted)] text-sm">Nenhuma conta.</div>) : (
