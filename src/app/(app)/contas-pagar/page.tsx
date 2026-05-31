@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { registrarLog } from "@/lib/audit";
 
 interface ContaPagar {
   id: string;
@@ -115,6 +116,20 @@ export default function ContasPagarPage() {
       observacao: `Pagamento: ${conta.fornecedor}${conta.descricao ? ` - ${conta.descricao}` : ""}`, revisar: false,
     });
 
+    await registrarLog({
+      acao: "pagou",
+      tabela: "contas_pagar",
+      registroId: conta.id,
+      dadosNovos: { data_pagamento: dataPag, valor: conta.valor },
+      detalhes: `${conta.fornecedor} - ${fmt(conta.valor)}`,
+    });
+    await registrarLog({
+      acao: "pagou",
+      tabela: "contas_pagar",
+      registroId: conta.id,
+      dadosNovos: { data_pagamento: dataPag, valor: conta.valor },
+      detalhes: `${conta.fornecedor} - ${fmt(conta.valor)}`,
+    });
     setPagandoId(null);
     setMensagem("Pago! Movimentação criada no DRE.");
     setLoading(false); carregarDados(); setTimeout(() => setMensagem(""), 4000);
@@ -131,6 +146,7 @@ export default function ContasPagarPage() {
 
   async function handleExcluir(id: string) {
     if (!confirm("Excluir?")) return;
+    await registrarLog({ acao: "excluiu", tabela: "contas_pagar", registroId: id, detalhes: "Excluiu conta" });
     await supabase.from("contas_pagar").delete().eq("id", id);
     setMensagem("Excluída!"); carregarDados(); setTimeout(() => setMensagem(""), 3000);
   }

@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { registrarLog } from "@/lib/audit";
 
 interface Categoria { id: string; nome: string; }
 
@@ -248,12 +249,23 @@ export default function MovimentacoesPage() {
       await supabase.from("movimentacao_itens").delete().eq("movimentacao_id",movId);
     }
     if (error) { setMensagem("Erro ao salvar."); }
-    else { setMensagem(editandoId?"Atualizado!":"Salvo!"); resetarFormulario(); setShowForm(false); carregarMovimentacoes(); }
+    else {
+      const nomeLog = `${tipo === "entrada" ? "Entrada" : "Saída"} de R$ ${parseFloat(valor.replace(",",".")).toFixed(2)}`;
+      await registrarLog({
+        acao: editandoId ? "editou" : "criou",
+        tabela: "movimentacoes",
+        registroId: movId || undefined,
+        dadosNovos: dados,
+        detalhes: nomeLog,
+      });
+      setMensagem(editandoId?"Atualizado!":"Salvo!"); resetarFormulario(); setShowForm(false); carregarMovimentacoes();
+    }
     setLoading(false); setTimeout(()=>setMensagem(""),3000);
   }
 
   async function handleExcluir(id:string) {
     if (!confirm("Excluir?")) return;
+    await registrarLog({ acao: "excluiu", tabela: "movimentacoes", registroId: id, detalhes: "Excluiu movimentação" });
     await supabase.from("movimentacoes").delete().eq("id",id);
     setMensagem("Excluída!"); carregarMovimentacoes(); setTimeout(()=>setMensagem(""),3000);
   }
