@@ -30,9 +30,13 @@ export default function UsuariosPage() {
   const [editPermissoes, setEditPermissoes] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [mensagem, setMensagem] = useState("");
+
+  // Form novo usuário
   const [novoNome, setNovoNome] = useState("");
   const [novoEmail, setNovoEmail] = useState("");
   const [novaSenha, setNovaSenha] = useState("");
+  const [novasPermissoes, setNovasPermissoes] = useState<string[]>([]);
+
   const supabase = createClient();
 
   async function carregarUsuarios() {
@@ -40,18 +44,41 @@ export default function UsuariosPage() {
     if (data) setUsuarios(data);
   }
 
-  useEffect(() => {
-    carregarUsuarios();
-  }, []);
+  useEffect(() => { carregarUsuarios(); }, []);
+
+  function resetarForm() {
+    setNovoNome("");
+    setNovoEmail("");
+    setNovaSenha("");
+    setNovasPermissoes([]);
+  }
+
+  function abrirForm() {
+    resetarForm();
+    setShowForm(true);
+  }
+
+  // Toggle permissão no formulário de criação
+  function toggleNovaPermissao(href: string) {
+    setNovasPermissoes((prev) =>
+      prev.includes(href) ? prev.filter((p) => p !== href) : [...prev, href]
+    );
+  }
+
+  function selecionarTodasNovas() {
+    setNovasPermissoes(modulos.map((m) => m.href));
+  }
+
+  function limparTodasNovas() {
+    setNovasPermissoes([]);
+  }
 
   async function handleCriarUsuario(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
     setMensagem("");
 
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
+    const { data: { session } } = await supabase.auth.getSession();
 
     const response = await fetch("/api/usuarios", {
       method: "POST",
@@ -68,20 +95,26 @@ export default function UsuariosPage() {
 
     const result = await response.json();
 
-    if (response.ok) {
+    if (response.ok && result.user) {
+      // Atualizar permissões do usuário criado
+      await supabase
+        .from("profiles")
+        .update({ permissoes: novasPermissoes })
+        .eq("id", result.user.id);
+
       setMensagem("Usuário criado com sucesso!");
-      setNovoNome("");
-      setNovoEmail("");
-      setNovaSenha("");
+      resetarForm();
       setShowForm(false);
       setTimeout(carregarUsuarios, 1500);
     } else {
       setMensagem(`Erro: ${result.error}`);
     }
+
     setLoading(false);
     setTimeout(() => setMensagem(""), 4000);
   }
 
+  // Editar permissões de usuário existente
   function iniciarEdicao(profile: Profile) {
     setEditandoId(profile.id);
     setEditPermissoes(profile.permissoes || []);
@@ -93,11 +126,11 @@ export default function UsuariosPage() {
     );
   }
 
-  function selecionarTodas() {
+  function selecionarTodasEdit() {
     setEditPermissoes(modulos.map((m) => m.href));
   }
 
-  function limparTodas() {
+  function limparTodasEdit() {
     setEditPermissoes([]);
   }
 
@@ -130,6 +163,7 @@ export default function UsuariosPage() {
 
   return (
     <div className="space-y-6">
+      {/* Cabeçalho */}
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Usuários</h1>
@@ -138,7 +172,7 @@ export default function UsuariosPage() {
           </p>
         </div>
         <button
-          onClick={() => setShowForm(!showForm)}
+          onClick={abrirForm}
           className="px-5 py-3 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white font-semibold rounded-xl hover:from-emerald-700 hover:to-emerald-600 transition-all text-sm shadow-md shadow-emerald-200"
         >
           + Novo Usuário
@@ -146,79 +180,114 @@ export default function UsuariosPage() {
       </div>
 
       {mensagem && (
-        <div
-          className={`p-3 rounded-xl text-sm font-medium text-center ${
-            mensagem.includes("Erro")
-              ? "bg-red-50 text-red-600"
-              : "bg-emerald-50 text-emerald-700"
-          }`}
-        >
+        <div className={`p-3 rounded-xl text-sm font-medium text-center ${
+          mensagem.includes("Erro") ? "bg-red-50 text-red-600" : "bg-emerald-50 text-emerald-700"
+        }`}>
           {mensagem}
         </div>
       )}
 
+      {/* Formulário de criação */}
       {showForm && (
         <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-6 shadow-sm">
           <div className="flex items-center justify-between mb-5">
             <h2 className="font-bold">Novo Usuário</h2>
             <button
-              onClick={() => setShowForm(false)}
+              onClick={() => { setShowForm(false); resetarForm(); }}
               className="w-8 h-8 rounded-lg hover:bg-[var(--color-bg)] flex items-center justify-center text-[var(--color-text-muted)]"
             >
               ✕
             </button>
           </div>
-          <form onSubmit={handleCriarUsuario} className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div>
-                <label className="block text-sm font-semibold mb-2 text-[var(--color-text-muted)]">
-                  Nome
-                </label>
-                <input
-                  type="text"
-                  value={novoNome}
-                  onChange={(e) => setNovoNome(e.target.value)}
-                  placeholder="Nome completo"
-                  required
-                  className="w-full px-4 py-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-semibold mb-2 text-[var(--color-text-muted)]">
-                  Email
-                </label>
-                <input
-                  type="email"
-                  value={novoEmail}
-                  onChange={(e) => setNovoEmail(e.target.value)}
-                  placeholder="email@empresa.com"
-                  required
-                  className="w-full px-4 py-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-semibold mb-2 text-[var(--color-text-muted)]">
-                  Senha
-                </label>
-                <input
-                  type="password"
-                  value={novaSenha}
-                  onChange={(e) => setNovaSenha(e.target.value)}
-                  placeholder="Mínimo 6 caracteres"
-                  required
-                  minLength={6}
-                  className="w-full px-4 py-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none"
-                />
+
+          <form onSubmit={handleCriarUsuario} className="space-y-5">
+            {/* Dados pessoais */}
+            <div>
+              <h3 className="text-sm font-semibold text-[var(--color-text-muted)] mb-3 uppercase tracking-wider">Dados de Acesso</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold mb-2 text-[var(--color-text-muted)]">Nome</label>
+                  <input
+                    type="text"
+                    value={novoNome}
+                    onChange={(e) => setNovoNome(e.target.value)}
+                    placeholder="Nome completo"
+                    required
+                    className="w-full px-4 py-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold mb-2 text-[var(--color-text-muted)]">Email</label>
+                  <input
+                    type="email"
+                    value={novoEmail}
+                    onChange={(e) => setNovoEmail(e.target.value)}
+                    placeholder="email@empresa.com"
+                    required
+                    className="w-full px-4 py-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold mb-2 text-[var(--color-text-muted)]">Senha</label>
+                  <input
+                    type="password"
+                    value={novaSenha}
+                    onChange={(e) => setNovaSenha(e.target.value)}
+                    placeholder="Mínimo 6 caracteres"
+                    required
+                    minLength={6}
+                    className="w-full px-4 py-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none"
+                  />
+                </div>
               </div>
             </div>
-            <p className="text-xs text-[var(--color-text-muted)]">
-              O novo usuário será criado como funcionário. Depois configure as
-              permissões dele clicando em "Permissões".
-            </p>
-            <div className="flex gap-3">
+
+            {/* Permissões */}
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
+                  O que esse usuário pode acessar
+                </h3>
+                <div className="flex gap-2">
+                  <button type="button" onClick={selecionarTodasNovas} className="text-xs text-emerald-600 font-medium hover:underline">
+                    Todas
+                  </button>
+                  <span className="text-xs text-[var(--color-text-muted)]">|</span>
+                  <button type="button" onClick={limparTodasNovas} className="text-xs text-red-500 font-medium hover:underline">
+                    Nenhuma
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {modulos.map((mod) => (
+                  <button
+                    key={mod.href}
+                    type="button"
+                    onClick={() => toggleNovaPermissao(mod.href)}
+                    className={`flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                      novasPermissoes.includes(mod.href)
+                        ? "bg-emerald-600 text-white shadow-sm"
+                        : "bg-[var(--color-bg)] text-[var(--color-text-muted)] border border-[var(--color-border)]"
+                    }`}
+                  >
+                    <span>{mod.icon}</span>
+                    <span className="truncate">{mod.label}</span>
+                  </button>
+                ))}
+              </div>
+
+              {novasPermissoes.length > 0 && (
+                <p className="text-xs text-emerald-600 mt-2">
+                  ✓ {novasPermissoes.length} {novasPermissoes.length === 1 ? "módulo selecionado" : "módulos selecionados"}
+                </p>
+              )}
+            </div>
+
+            <div className="flex gap-3 pt-2">
               <button
                 type="button"
-                onClick={() => setShowForm(false)}
+                onClick={() => { setShowForm(false); resetarForm(); }}
                 className="flex-1 py-3 bg-[var(--color-bg)] text-[var(--color-text-muted)] font-semibold rounded-xl border border-[var(--color-border)] hover:bg-gray-100 transition text-sm"
               >
                 Cancelar
@@ -243,44 +312,32 @@ export default function UsuariosPage() {
           </div>
         )}
         {usuarios.map((user) => (
-          <div
-            key={user.id}
-            className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden"
-          >
+          <div key={user.id} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
             <div className="p-4 flex items-center justify-between flex-wrap gap-3">
               <div className="flex items-center gap-3">
-                <div
-                  className={`w-10 h-10 rounded-xl flex items-center justify-center text-base shrink-0 ${
-                    user.role === "master"
-                      ? "bg-purple-50"
-                      : "bg-blue-50"
-                  }`}
-                >
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-base shrink-0 ${
+                  user.role === "master" ? "bg-purple-50" : "bg-blue-50"
+                }`}>
                   {user.role === "master" ? "👑" : "👤"}
                 </div>
                 <div>
                   <div className="flex items-center gap-2 flex-wrap">
-                    <p className="text-sm font-semibold">
-                      {user.nome || user.email}
-                    </p>
-                    <span
-                      className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                        user.role === "master"
-                          ? "bg-purple-100 text-purple-700"
-                          : "bg-blue-100 text-blue-700"
-                      }`}
-                    >
+                    <p className="text-sm font-semibold">{user.nome || user.email}</p>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                      user.role === "master" ? "bg-purple-100 text-purple-700" : "bg-blue-100 text-blue-700"
+                    }`}>
                       {user.role === "master" ? "MASTER" : "FUNCIONÁRIO"}
                     </span>
                     {!user.ativo && (
-                      <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-[10px] font-bold">
-                        INATIVO
-                      </span>
+                      <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-[10px] font-bold">INATIVO</span>
                     )}
                   </div>
-                  <p className="text-xs text-[var(--color-text-muted)]">
-                    {user.email}
-                  </p>
+                  <p className="text-xs text-[var(--color-text-muted)]">{user.email}</p>
+                  {user.role !== "master" && user.permissoes && (
+                    <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+                      Acesso: {user.permissoes.length} {user.permissoes.length === 1 ? "módulo" : "módulos"}
+                    </p>
+                  )}
                 </div>
               </div>
               <div className="flex gap-2">
@@ -307,6 +364,7 @@ export default function UsuariosPage() {
               </div>
             </div>
 
+            {/* Edição de permissões inline */}
             {editandoId === user.id && (
               <div className="border-t border-[var(--color-border)] p-4 bg-[var(--color-bg)]">
                 <div className="flex items-center justify-between mb-3">
@@ -314,27 +372,16 @@ export default function UsuariosPage() {
                     Módulos que {user.nome || user.email} pode acessar:
                   </p>
                   <div className="flex gap-2">
-                    <button
-                      onClick={selecionarTodas}
-                      className="text-xs text-emerald-600 font-medium hover:underline"
-                    >
-                      Todas
-                    </button>
-                    <span className="text-xs text-[var(--color-text-muted)]">
-                      |
-                    </span>
-                    <button
-                      onClick={limparTodas}
-                      className="text-xs text-red-500 font-medium hover:underline"
-                    >
-                      Nenhuma
-                    </button>
+                    <button onClick={selecionarTodasEdit} className="text-xs text-emerald-600 font-medium hover:underline">Todas</button>
+                    <span className="text-xs text-[var(--color-text-muted)]">|</span>
+                    <button onClick={limparTodasEdit} className="text-xs text-red-500 font-medium hover:underline">Nenhuma</button>
                   </div>
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
                   {modulos.map((mod) => (
                     <button
                       key={mod.href}
+                      type="button"
                       onClick={() => togglePermissao(mod.href)}
                       className={`flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
                         editPermissoes.includes(mod.href)
