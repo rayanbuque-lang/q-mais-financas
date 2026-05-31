@@ -22,6 +22,7 @@ const menuItems = [
   { label: "Fluxo de Caixa", href: "/fluxo-de-caixa", icon: "📈" },
   { label: "DRE", href: "/dre", icon: "📑" },
   { label: "Fechamento Mensal", href: "/fechamento", icon: "🔒" },
+  { label: "Conciliação Bancária", href: "/conciliacao", icon: "🏦" },
   { label: "Relatórios", href: "/relatorios", icon: "📄" },
   { label: "Análise Inteligente", href: "/analise", icon: "🧠" },
   { label: "Usuários", href: "/usuarios", icon: "👥" },
