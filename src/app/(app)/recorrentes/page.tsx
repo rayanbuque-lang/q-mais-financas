@@ -45,6 +45,7 @@ export default function RecorrentesPage() {
   const [observacao, setObservacao] = useState("");
   const [criarComo, setCriarComo] = useState<"movimentacao" | "conta_pagar">("movimentacao");
 
+  const mesesNomes = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
   const supabase = createClient();
   const categorias = tipo === "entrada" ? categoriasEntrada : categoriasSaida;
 
@@ -121,6 +122,46 @@ export default function RecorrentesPage() {
     else {
       setMensagem(editandoId ? "Atualizado!" : "Cadastrado!");
       await registrarLog({ acao: editandoId ? "editou" : "criou", tabela: "lancamentos_recorrentes", detalhes: `${descricao} - R$ ${parseFloat(valor.replace(",", ".")).toFixed(2)} (${frequencia})` });
+
+      // Se criou como conta a pagar e NÃO está editando, gerar agora
+      if (!editandoId && criarComo === "conta_pagar") {
+        const hoje = new Date();
+        const mesAtual = hoje.getMonth();
+        const anoAtual = hoje.getFullYear();
+        const ultimoDia = new Date(anoAtual, mesAtual + 1, 0).getDate();
+        const dia = Math.min(parseInt(diaVencimento), ultimoDia);
+        const dataVenc = `${anoAtual}-${String(mesAtual + 1).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
+        const val = parseFloat(valor.replace(",", "."));
+
+        await supabase.from("contas_pagar").insert({
+          fornecedor: descricao,
+          descricao: observacao || `Recorrente ${freqLabels[frequencia]}`,
+          valor: val,
+          data_vencimento: dataVenc,
+          status: "pendente",
+          categoria_id: categoriaId,
+          observacao: `Gerado automaticamente - Recorrente ${freqLabels[frequencia]}`,
+        });
+
+        setMensagem(`Conta a pagar criada! Vencimento: ${new Date(dataVenc + "T12:00:00").toLocaleDateString("pt-BR")}`);
+      } else if (!editandoId && criarComo === "movimentacao") {
+        // Gerar movimentação do mês atual
+        const hoje = new Date();
+        const mesAtual = hoje.getMonth();
+        const anoAtual = hoje.getFullYear();
+        const ultimoDia = new Date(anoAtual, mesAtual + 1, 0).getDate();
+        const dia = Math.min(parseInt(diaVencimento), ultimoDia);
+        const dataMov = `${anoAtual}-${String(mesAtual + 1).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
+        const val = parseFloat(valor.replace(",", "."));
+
+        await supabase.from("movimentacoes").insert({
+          tipo, data: dataMov, valor: val, categoria_id: categoriaId,
+          observacao: `Recorrente: ${descricao}${observacao ? ` · ${observacao}` : ""}`, revisar: false,
+        });
+
+        setMensagem(`Movimentação criada para ${mesesNomes[mesAtual]}/${anoAtual}!`);
+      }
+
       resetarForm(); setShowForm(false); carregarDados();
     }
     setLoading(false); setTimeout(() => setMensagem(""), 3000);

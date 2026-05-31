@@ -20,6 +20,7 @@ interface ContaPagar {
 interface Categoria { id: string; nome: string; }
 
 const diasSemana = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+const mesesNomes = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
 
 export default function ContasPagarPage() {
   const [contas, setContas] = useState<ContaPagar[]>([]);
@@ -30,6 +31,8 @@ export default function ContasPagarPage() {
   const [mensagem, setMensagem] = useState("");
   const [filtroStatus, setFiltroStatus] = useState<"pendentes" | "pagos" | "todos">("pendentes");
   const [visualizacao, setVisualizacao] = useState<"semanal" | "lista">("semanal");
+  const [mes, setMes] = useState(new Date().getMonth() + 1);
+  const [ano, setAno] = useState(new Date().getFullYear());
 
   // Form
   const [fornecedor, setFornecedor] = useState("");
@@ -53,8 +56,12 @@ export default function ContasPagarPage() {
   const supabase = createClient();
 
   async function carregarDados() {
+    // Buscar todas as contas do ano
+    const inicioAno = `${ano}-01-01`;
+    const fimAno = `${ano}-12-31`;
+
     const [r1, r2] = await Promise.all([
-      supabase.from("contas_pagar").select("*").order("data_vencimento", { ascending: true }),
+      supabase.from("contas_pagar").select("*").gte("data_vencimento", inicioAno).lte("data_vencimento", fimAno).order("data_vencimento", { ascending: true }),
       supabase.from("categorias_saida").select("*").eq("ativo", true).order("nome"),
     ]);
     if (r1.data) {
@@ -70,7 +77,7 @@ export default function ContasPagarPage() {
     if (r2.data) setCategorias(r2.data);
   }
 
-  useEffect(() => { carregarDados(); }, []);
+  useEffect(() => { carregarDados(); }, [mes, ano]);
 
   function resetarFormulario() {
     setFornecedor(""); setDescricao(""); setValor(""); setDataVencimento(""); setCategoriaId(""); setObservacao(""); setStatusInicial("pendente"); setDataPagamento(""); setEditandoId(null);
@@ -86,16 +93,13 @@ export default function ContasPagarPage() {
 
   async function handleSalvar(e: React.FormEvent) {
     e.preventDefault(); setLoading(true); setMensagem("");
-
-    // Verificar se mês está fechado (para edição)
     if (editandoId) {
       const { fechado, nomeMes } = await verificarMesFechado(dataVencimento);
       if (fechado) {
         const isAdmin = await verificarAdmin();
         if (!isAdmin) {
-          setMensagem(`Não é possível editar. ${nomeMes} está fechado. Apenas administradores podem alterar.`);
-          setLoading(false); setTimeout(() => setMensagem(""), 5000);
-          return;
+          setMensagem(`Não é possível editar. ${nomeMes} está fechado.`);
+          setLoading(false); setTimeout(() => setMensagem(""), 5000); return;
         }
       }
     }
@@ -110,17 +114,15 @@ export default function ContasPagarPage() {
     if (!error && statusInicial === "pago" && contaId && !editandoId) {
       await supabase.from("movimentacoes").insert({ tipo: "saida", data: dados.data_pagamento as string, valor: parseFloat(valor.replace(",", ".")), categoria_id: categoriaId, observacao: `Pagamento: ${fornecedor}${descricao ? ` - ${descricao}` : ""}`, revisar: false });
       await registrarLog({ acao: "criou", tabela: "contas_pagar", registroId: contaId, dadosNovos: dados, detalhes: `${fornecedor} - ${fmt(parseFloat(valor.replace(",", ".")))}` });
-      setMensagem("Cadastrada como paga! Movimentação criada.");
+      setMensagem("Cadastrada como paga!");
     } else if (error) { setMensagem("Erro ao salvar."); }
     else {
       await registrarLog({ acao: editandoId ? "editou" : "criou", tabela: "contas_pagar", registroId: contaId || undefined, dadosNovos: dados, detalhes: `${fornecedor} - ${fmt(parseFloat(valor.replace(",", ".")))}` });
       setMensagem(editandoId ? "Atualizada!" : "Cadastrada!");
     }
-
     resetarFormulario(); setShowForm(false); carregarDados(); setLoading(false); setTimeout(() => setMensagem(""), 4000);
   }
 
-  // Pagamento individual
   function iniciarPagamento(conta: ContaPagar) {
     setPagandoId(conta.id);
     setDataPagamentoInline(new Date().toISOString().split("T")[0]);
@@ -129,75 +131,49 @@ export default function ContasPagarPage() {
   async function confirmarPagamento(conta: ContaPagar) {
     setLoading(true);
     const dataPag = dataPagamentoInline;
-
     const { error: err1 } = await supabase.from("contas_pagar").update({ status: "pago", data_pagamento: dataPag }).eq("id", conta.id);
     if (err1) { setMensagem("Erro ao confirmar."); setLoading(false); return; }
-
-    await supabase.from("movimentacoes").insert({
-      tipo: "saida", data: dataPag, valor: conta.valor, categoria_id: conta.categoria_id,
-      observacao: `Pagamento: ${conta.fornecedor}${conta.descricao ? ` - ${conta.descricao}` : ""}`, revisar: false,
-    });
-
-    await registrarLog({ acao: "pagou", tabela: "contas_pagar", registroId: conta.id, dadosNovos: { data_pagamento: dataPag, valor: conta.valor }, detalhes: `${conta.fornecedor} - ${fmt(conta.valor)}` });
-
-    setPagandoId(null);
-    setMensagem("Pago! Movimentação criada.");
-    setLoading(false); carregarDados(); setTimeout(() => setMensagem(""), 4000);
+    await supabase.from("movimentacoes").insert({ tipo: "saida", data: dataPag, valor: conta.valor, categoria_id: conta.categoria_id, observacao: `Pagamento: ${conta.fornecedor}${conta.descricao ? ` - ${conta.descricao}` : ""}`, revisar: false });
+    await registrarLog({ acao: "pagou", tabela: "contas_pagar", registroId: conta.id, detalhes: `${conta.fornecedor} - ${fmt(conta.valor)}` });
+    setPagandoId(null); setMensagem("Pago!"); setLoading(false); carregarDados(); setTimeout(() => setMensagem(""), 4000);
   }
 
-  // Pagamento em lote
   function toggleSelecionada(id: string) {
-    setSelecionadas((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
+    setSelecionadas((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   }
 
   function selecionarTodasPendentes() {
-    const pendentes = contas.filter((c) => c.status === "pendente");
-    if (selecionadas.size === pendentes.length) {
-      setSelecionadas(new Set());
-    } else {
-      setSelecionadas(new Set(pendentes.map((c) => c.id)));
-    }
+    const pendentes = contasDoMes.filter((c) => c.status === "pendente");
+    if (selecionadas.size === pendentes.length) { setSelecionadas(new Set()); }
+    else { setSelecionadas(new Set(pendentes.map((c) => c.id))); }
   }
 
   async function pagarLote() {
     if (selecionadas.size === 0) return;
     const contasSelecionadas = contas.filter((c) => selecionadas.has(c.id));
     const total = contasSelecionadas.reduce((a, c) => a + c.valor, 0);
-
     if (!confirm(`Pagar ${contasSelecionadas.length} contas no valor total de ${fmt(total)}?`)) return;
-
     setLoading(true);
     let pagas = 0;
-
     for (const conta of contasSelecionadas) {
       const { error } = await supabase.from("contas_pagar").update({ status: "pago", data_pagamento: loteDataPagamento }).eq("id", conta.id);
       if (!error) {
-        await supabase.from("movimentacoes").insert({
-          tipo: "saida", data: loteDataPagamento, valor: conta.valor, categoria_id: conta.categoria_id,
-          observacao: `Pagamento: ${conta.fornecedor}${conta.descricao ? ` - ${conta.descricao}` : ""}`, revisar: false,
-        });
+        await supabase.from("movimentacoes").insert({ tipo: "saida", data: loteDataPagamento, valor: conta.valor, categoria_id: conta.categoria_id, observacao: `Pagamento: ${conta.fornecedor}${conta.descricao ? ` - ${conta.descricao}` : ""}`, revisar: false });
         await registrarLog({ acao: "pagou", tabela: "contas_pagar", registroId: conta.id, detalhes: `${conta.fornecedor} - ${fmt(conta.valor)}` });
         pagas++;
       }
     }
-
-    setSelecionadas(new Set());
-    setModoLote(false);
+    setSelecionadas(new Set()); setModoLote(false);
     setMensagem(`${pagas} contas pagas! Total: ${fmt(total)}`);
     setLoading(false); carregarDados(); setTimeout(() => setMensagem(""), 5000);
   }
 
   async function desfazerPagamento(conta: ContaPagar) {
-    if (!confirm("Desfazer? A movimentação no DRE será removida.")) return;
+    if (!confirm("Desfazer?")) return;
     setLoading(true);
     const { data: movs } = await supabase.from("movimentacoes").select("id").eq("tipo", "saida").eq("valor", conta.valor).ilike("observacao", `%${conta.fornecedor}%`);
     if (movs && movs.length > 0) await supabase.from("movimentacoes").delete().eq("id", movs[0].id);
     await supabase.from("contas_pagar").update({ status: "pendente", data_pagamento: null }).eq("id", conta.id);
-    await registrarLog({ acao: "reabriu", tabela: "contas_pagar", registroId: conta.id, detalhes: `${conta.fornecedor} - ${fmt(conta.valor)}` });
     setMensagem("Desfeito!"); setLoading(false); carregarDados(); setTimeout(() => setMensagem(""), 3000);
   }
 
@@ -210,7 +186,16 @@ export default function ContasPagarPage() {
 
   function fmt(v: number) { return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }); }
 
-  const contasFiltradas = contas.filter(c => {
+  function mesAnterior() { if (mes === 1) { setMes(12); setAno(ano - 1); } else setMes(mes - 1); }
+  function mesProximo() { if (mes === 12) { setMes(1); setAno(ano + 1); } else setMes(mes + 1); }
+
+  // Filtrar por mês
+  const contasDoMes = contas.filter((c) => {
+    const d = new Date(c.data_vencimento + "T12:00:00");
+    return d.getMonth() + 1 === mes && d.getFullYear() === ano;
+  });
+
+  const contasFiltradas = contasDoMes.filter(c => {
     if (filtroStatus === "pendentes" && c.status !== "pendente") return false;
     if (filtroStatus === "pagos" && c.status !== "pago") return false;
     return true;
@@ -234,9 +219,9 @@ export default function ContasPagarPage() {
     return grupos;
   }
 
-  const totalPendente = contas.filter(c => c.status === "pendente").reduce((a, c) => a + c.valor, 0);
-  const totalPago = contas.filter(c => c.status === "pago").reduce((a, c) => a + c.valor, 0);
-  const contasVencidas = contas.filter(c => c.status === "pendente" && c.data_vencimento < new Date().toISOString().split("T")[0]);
+  const totalPendente = contasDoMes.filter(c => c.status === "pendente").reduce((a, c) => a + c.valor, 0);
+  const totalPago = contasDoMes.filter(c => c.status === "pago").reduce((a, c) => a + c.valor, 0);
+  const contasVencidas = contasDoMes.filter(c => c.status === "pendente" && c.data_vencimento < new Date().toISOString().split("T")[0]);
   const semanas = agruparPorSemana(contasFiltradas);
   const totalSelecionadoLote = contas.filter((c) => selecionadas.has(c.id)).reduce((a, c) => a + c.valor, 0);
 
@@ -307,12 +292,19 @@ export default function ContasPagarPage() {
         </div>
       </div>
 
+      {/* Seletor de mês */}
+      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-4 flex items-center justify-between">
+        <button onClick={mesAnterior} className="px-4 py-2 rounded-xl bg-[var(--color-bg)] text-sm font-medium hover:bg-[var(--color-border)] transition">← Anterior</button>
+        <div className="text-center"><p className="font-bold capitalize">{mesesNomes[mes - 1]}</p><p className="text-sm text-[var(--color-text-muted)]">{ano}</p></div>
+        <button onClick={mesProximo} className="px-4 py-2 rounded-xl bg-[var(--color-bg)] text-sm font-medium hover:bg-[var(--color-border)] transition">Próximo →</button>
+      </div>
+
       {/* Barra de lote */}
       {modoLote && (
         <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-3">
             <button onClick={selecionarTodasPendentes} className="px-3 py-2 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700 transition">
-              {selecionadas.size === contas.filter((c) => c.status === "pendente").length ? "Desmarcar Todas" : "Selecionar Todas Pendentes"}
+              {selecionadas.size === contasDoMes.filter((c) => c.status === "pendente").length ? "Desmarcar Todas" : "Selecionar Todas Pendentes"}
             </button>
             <span className="text-sm text-blue-800 font-medium">
               {selecionadas.size} selecionada{selecionadas.size !== 1 ? "s" : ""} — Total: {fmt(totalSelecionadoLote)}
@@ -397,7 +389,7 @@ export default function ContasPagarPage() {
 
       {visualizacao === "semanal" && (
         <div className="space-y-4">
-          {semanas.length === 0 ? (<div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-12 text-center text-[var(--color-text-muted)] text-sm">Nenhuma conta.</div>) : (
+          {semanas.length === 0 ? (<div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-12 text-center text-[var(--color-text-muted)] text-sm">Nenhuma conta em {mesesNomes[mes - 1]}/{ano}.</div>) : (
             semanas.map((semana, i) => (
               <div key={i} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
                 <div className={`p-4 border-b border-[var(--color-border)] flex items-center justify-between ${semana.label.includes("Vencidas") ? "bg-red-50" : "bg-[var(--color-bg)]"}`}>
@@ -413,7 +405,7 @@ export default function ContasPagarPage() {
 
       {visualizacao === "lista" && (
         <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
-          {contasFiltradas.length === 0 ? (<div className="p-12 text-center text-[var(--color-text-muted)] text-sm">Nenhuma conta.</div>) : (
+          {contasFiltradas.length === 0 ? (<div className="p-12 text-center text-[var(--color-text-muted)] text-sm">Nenhuma conta em {mesesNomes[mes - 1]}/{ano}.</div>) : (
             <div className="divide-y divide-[var(--color-border)]">{contasFiltradas.map(c => renderConta(c))}</div>
           )}
         </div>
