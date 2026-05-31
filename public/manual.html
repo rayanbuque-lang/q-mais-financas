@@ -1,0 +1,783 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>+Q Finanças — Manual do Sistema</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --green: #059669;
+      --green-light: #d1fae5;
+      --green-dark: #065f46;
+      --blue: #2563eb;
+      --blue-light: #dbeafe;
+      --purple: #7c3aed;
+      --purple-light: #ede9fe;
+      --amber: #d97706;
+      --amber-light: #fef3c7;
+      --red: #dc2626;
+      --red-light: #fee2e2;
+      --gray-50: #f9fafb;
+      --gray-100: #f3f4f6;
+      --gray-200: #e5e7eb;
+      --gray-400: #9ca3af;
+      --gray-600: #4b5563;
+      --gray-800: #1f2937;
+      --gray-900: #111827;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Inter', -apple-system, sans-serif;
+      color: var(--gray-800);
+      line-height: 1.6;
+      background: #ffffff;
+    }
+
+    /* Cover */
+    .cover {
+      min-height: 100vh;
+      background: linear-gradient(135deg, #065f46 0%, #059669 50%, #34d399 100%);
+      color: white;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+      padding: 60px 30px;
+      position: relative;
+      overflow: hidden;
+    }
+    .cover::before {
+      content: '';
+      position: absolute;
+      top: -50%;
+      right: -30%;
+      width: 600px;
+      height: 600px;
+      background: rgba(255,255,255,0.05);
+      border-radius: 50%;
+    }
+    .cover::after {
+      content: '';
+      position: absolute;
+      bottom: -40%;
+      left: -20%;
+      width: 500px;
+      height: 500px;
+      background: rgba(255,255,255,0.03);
+      border-radius: 50%;
+    }
+    .cover-logo {
+      font-size: 48px;
+      font-weight: 800;
+      letter-spacing: -2px;
+      margin-bottom: 8px;
+      position: relative;
+      z-index: 1;
+    }
+    .cover-sub {
+      font-size: 16px;
+      font-weight: 300;
+      letter-spacing: 6px;
+      text-transform: uppercase;
+      opacity: 0.8;
+      margin-bottom: 40px;
+      position: relative;
+      z-index: 1;
+    }
+    .cover-title {
+      font-size: 32px;
+      font-weight: 700;
+      margin-bottom: 12px;
+      position: relative;
+      z-index: 1;
+    }
+    .cover-desc {
+      font-size: 16px;
+      font-weight: 300;
+      opacity: 0.85;
+      max-width: 500px;
+      position: relative;
+      z-index: 1;
+    }
+    .cover-version {
+      position: absolute;
+      bottom: 30px;
+      font-size: 12px;
+      opacity: 0.5;
+      z-index: 1;
+    }
+
+    /* TOC */
+    .toc {
+      max-width: 700px;
+      margin: 0 auto;
+      padding: 60px 30px;
+    }
+    .toc h2 {
+      font-size: 24px;
+      font-weight: 700;
+      color: var(--gray-900);
+      margin-bottom: 30px;
+      padding-bottom: 12px;
+      border-bottom: 3px solid var(--green);
+      display: inline-block;
+    }
+    .toc-list {
+      list-style: none;
+      counter-reset: toc;
+    }
+    .toc-list li {
+      counter-increment: toc;
+      padding: 14px 0;
+      border-bottom: 1px solid var(--gray-100);
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .toc-list li::before {
+      content: counter(toc, decimal-leading-zero);
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--green);
+      min-width: 28px;
+    }
+    .toc-list a {
+      color: var(--gray-800);
+      text-decoration: none;
+      font-size: 15px;
+      font-weight: 500;
+    }
+    .toc-list a:hover { color: var(--green); }
+    .toc-icon {
+      font-size: 20px;
+      min-width: 28px;
+      text-align: center;
+    }
+
+    /* Sections */
+    .section {
+      max-width: 700px;
+      margin: 0 auto;
+      padding: 50px 30px;
+      page-break-before: always;
+    }
+    .section-header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .section-icon {
+      width: 52px;
+      height: 52px;
+      border-radius: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 26px;
+      flex-shrink: 0;
+    }
+    .section h2 {
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--gray-900);
+    }
+    .section-subtitle {
+      font-size: 13px;
+      color: var(--gray-400);
+      font-weight: 500;
+    }
+    .section-desc {
+      font-size: 15px;
+      color: var(--gray-600);
+      margin-bottom: 24px;
+      line-height: 1.7;
+    }
+
+    /* Info box */
+    .info-box {
+      padding: 16px 20px;
+      border-radius: 12px;
+      margin-bottom: 20px;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    .info-box.green { background: var(--green-light); border-left: 4px solid var(--green); color: var(--green-dark); }
+    .info-box.blue { background: var(--blue-light); border-left: 4px solid var(--blue); color: #1e40af; }
+    .info-box.purple { background: var(--purple-light); border-left: 4px solid var(--purple); color: #5b21b6; }
+    .info-box.amber { background: var(--amber-light); border-left: 4px solid var(--amber); color: #92400e; }
+    .info-box.red { background: var(--red-light); border-left: 4px solid var(--red); color: #991b1b; }
+
+    /* Feature list */
+    .features {
+      list-style: none;
+      margin: 16px 0;
+    }
+    .features li {
+      padding: 10px 0;
+      padding-left: 28px;
+      position: relative;
+      font-size: 14px;
+      color: var(--gray-600);
+      border-bottom: 1px solid var(--gray-50);
+    }
+    .features li::before {
+      content: '✓';
+      position: absolute;
+      left: 0;
+      color: var(--green);
+      font-weight: 700;
+      font-size: 15px;
+    }
+
+    /* How it works */
+    .how-to {
+      background: var(--gray-50);
+      border-radius: 12px;
+      padding: 20px;
+      margin: 16px 0;
+    }
+    .how-to h4 {
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--gray-400);
+      margin-bottom: 14px;
+    }
+    .step {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 12px;
+      align-items: flex-start;
+    }
+    .step:last-child { margin-bottom: 0; }
+    .step-num {
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      background: var(--green);
+      color: white;
+      font-size: 12px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+    .step-text { font-size: 14px; color: var(--gray-600); }
+
+    /* Table */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 16px 0;
+      font-size: 13px;
+    }
+    th {
+      background: var(--gray-50);
+      padding: 10px 14px;
+      text-align: left;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--gray-400);
+      font-weight: 700;
+      border-bottom: 2px solid var(--gray-200);
+    }
+    td {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--gray-100);
+      color: var(--gray-600);
+    }
+
+    /* Divider */
+    .divider {
+      border: none;
+      border-top: 1px solid var(--gray-200);
+      margin: 40px 0;
+    }
+
+    /* Footer */
+    .footer {
+      max-width: 700px;
+      margin: 0 auto;
+      padding: 40px 30px 60px;
+      text-align: center;
+      color: var(--gray-400);
+      font-size: 13px;
+    }
+    .footer-logo {
+      font-size: 20px;
+      font-weight: 800;
+      color: var(--green);
+      margin-bottom: 8px;
+    }
+
+    /* Print */
+    @media print {
+      .cover { min-height: auto; padding: 80px 30px; page-break-after: always; }
+      .section { page-break-before: always; }
+      body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- COVER -->
+  <div class="cover">
+    <div class="cover-logo">+Q Finanças</div>
+    <div class="cover-sub">Inteligência Financeira</div>
+    <div class="cover-title">Manual do Sistema</div>
+    <div class="cover-desc">Guia completo de todas as funcionalidades. Como usar cada módulo para controlar as finanças do seu negócio de forma simples e eficiente.</div>
+    <div class="cover-version">Versão 1.0 · Maio 2026</div>
+  </div>
+
+  <!-- SUMÁRIO -->
+  <div class="toc">
+    <h2>Sumário</h2>
+    <ol class="toc-list">
+      <li><span class="toc-icon">📊</span><a href="#dashboard">Dashboard</a></li>
+      <li><span class="toc-icon">💰</span><a href="#movimentacoes">Movimentações</a></li>
+      <li><span class="toc-icon">📋</span><a href="#contas">Contas a Pagar</a></li>
+      <li><span class="toc-icon">🏦</span><a href="#maquinas">Máquinas e Contas Bancárias</a></li>
+      <li><span class="toc-icon">💳</span><a href="#vendas">Vendas na Maquininha</a></li>
+      <li><span class="toc-icon">🏷️</span><a href="#categorias">Categorias</a></li>
+      <li><span class="toc-icon">📈</span><a href="#fluxo">Fluxo de Caixa</a></li>
+      <li><span class="toc-icon">📑</span><a href="#dre">DRE — Demonstrativo</a></li>
+      <li><span class="toc-icon">🔒</span><a href="#fechamento">Fechamento Mensal</a></li>
+      <li><span class="toc-icon">🏦</span><a href="#conciliacao">Conciliação Bancária</a></li>
+      <li><span class="toc-icon">📄</span><a href="#relatorios">Relatórios</a></li>
+      <li><span class="toc-icon">🧠</span><a href="#analise">Análise Inteligente</a></li>
+      <li><span class="toc-icon">👥</span><a href="#usuarios">Usuários e Permissões</a></li>
+    </ol>
+  </div>
+
+  <!-- 1. DASHBOARD -->
+  <div class="section" id="dashboard">
+    <div class="section-header">
+      <div class="section-icon" style="background: var(--green-light);">📊</div>
+      <div>
+        <h2>Dashboard</h2>
+        <div class="section-subtitle">Visão geral do seu negócio</div>
+      </div>
+    </div>
+    <p class="section-desc">
+      O Dashboard é a primeira tela que você vê ao abrir o sistema. Ele mostra um resumo completo de tudo o que está acontecendo com as finanças do mês atual, de forma rápida e visual.
+    </p>
+
+    <div class="info-box green">
+      <strong>O que aparece no Dashboard:</strong>
+    </div>
+    <ul class="features">
+      <li><strong>Saúde Financeira</strong> — Indica se o mês está positivo (lucro) ou negativo (prejuízo), com cores e texto explicativo</li>
+      <li><strong>Contas do dia</strong> — Mostra quantas contas vencem hoje, com os valores e nomes dos fornecedores</li>
+      <li><strong>Contas vencidas</strong> — Alerta de contas que passaram do prazo de pagamento</li>
+      <li><strong>Itens para revisar</strong> — Movimentações marcadas com a bandeira de revisão</li>
+      <li><strong>Receita, Despesas, Lucro e Margem</strong> — Os 4 números principais do mês com comparação ao mês anterior</li>
+      <li><strong>Gráfico dos últimos 6 meses</strong> — Barras comparando entradas e saídas mês a mês</li>
+      <li><strong>Fluxo de Caixa</strong> — Barra visual mostrando a proporção de entradas vs saídas</li>
+      <li><strong>Atividade Recente</strong> — As 5 últimas movimentações cadastradas</li>
+      <li><strong>Ações Rápidas</strong> — Botões para cadastrar entradas, saídas, contas e acessar a análise</li>
+    </ul>
+
+    <div class="info-box blue">
+      <strong>Dica:</strong> O Dashboard atualiza automaticamente sempre que você cadastra ou altera uma movimentação. Não precisa fazer nada manual.
+    </div>
+  </div>
+
+  <!-- 2. MOVIMENTAÇÕES -->
+  <div class="section" id="movimentacoes">
+    <div class="section-header">
+      <div class="section-icon" style="background: var(--green-light);">💰</div>
+      <div>
+        <h2>Movimentações</h2>
+        <div class="section-subtitle">Entradas e saídas do dia a dia</div>
+      </div>
+    </div>
+    <p class="section-desc">
+      Este é o coração do sistema. Aqui você registra tudo que entra e sai de dinheiro. Cada movimentação tem um tipo (entrada ou saída), uma data, um valor, uma categoria e uma observação.
+    </p>
+
+    <div class="how-to">
+      <h4>Como usar</h4>
+      <div class="step"><div class="step-num">1</div><div class="step-text">Clique em <strong>+ Nova Movimentação</strong></div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Escolha se é <strong>Entrada</strong> (recebimento) ou <strong>Saída</strong> (pagamento)</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">Preencha a data, o valor e selecione a categoria</div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-text">Se quiser, adicione uma observação (ex: nome do cliente, fornecedor)</div></div>
+      <div class="step"><div class="step-num">5</div><div class="step-text">Clique em <strong>Salvar</strong></div></div>
+    </div>
+
+    <div class="info-box amber">
+      <strong>Valores individuais:</strong> Se uma movimentação tem vários valores (ex: várias vendas no Pix do dia), ative a opção "Valores individuais", digite cada valor separado por <strong>+</strong> e o sistema soma tudo automaticamente.
+    </div>
+
+    <div class="info-box blue">
+      <strong>Upload de extrato:</strong> Para as categorias <strong>Cartão, Pix Inter e Pix Santander</strong>, você pode enviar um arquivo CSV do banco e o sistema extrai os valores automaticamente, sem precisar digitar um por um.
+    </div>
+
+    <div class="info-box purple">
+      <strong>Marcar para revisar:</strong> Se uma movimentação precisa de atenção depois, marque a bandeira amarela. Ela aparece no Dashboard como alerta.
+    </div>
+
+    <ul class="features">
+      <li>Filtros por tipo, categoria, período e busca por texto (nome do fornecedor, cliente, etc.)</li>
+      <li>Visualização em lista (Lançamentos) ou resumo por categoria</li>
+      <li>Expansão para ver valores individuais de cada movimentação</li>
+      <li>Edição e exclusão de qualquer registro</li>
+      <li>Navegação por mês com seletor</li>
+    </ul>
+  </div>
+
+  <!-- 3. CONTAS A PAGAR -->
+  <div class="section" id="contas">
+    <div class="section-header">
+      <div class="section-icon" style="background: var(--amber-light);">📋</div>
+      <div>
+        <h2>Contas a Pagar</h2>
+        <div class="section-subtitle">Boletos, fornecedores e compromissos</div>
+      </div>
+    </div>
+    <p class="section-desc">
+      Controle todas as contas que precisa pagar: boletos, aluguel, fornecedores, funcionários, etc. O sistema avisa quando uma conta está vencendo ou já venceu.
+    </p>
+
+    <div class="how-to">
+      <h4>Como usar</h4>
+      <div class="step"><div class="step-num">1</div><div class="step-text">Clique em <strong>+ Nova Conta</strong></div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Preencha fornecedor, descrição, valor, data de vencimento e categoria</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">Escolha o status: <strong>Pendente</strong> (ainda não pagou) ou <strong>Já Pago</strong> (pagou antes de cadastrar)</div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-text">Se marcou "Já Pago", informe a data do pagamento</div></div>
+    </div>
+
+    <div class="info-box green">
+      <strong>Pagamento simplificado:</strong> Quando uma conta pendente é paga, basta clicar no botão 💳 ao lado dela. Aparece um campo com a data de hoje pré-preenchida. Você só confirma. O sistema atualiza o status e cria automaticamente a movimentação no DRE.
+    </div>
+
+    <ul class="features">
+      <li>Visualização <strong>Semanal</strong> (contas agrupadas por semana) ou <strong>Lista</strong> (todas em ordem)</li>
+      <li>Alerta de contas vencidas com destaque vermelho</li>
+      <li>Desfazer pagamento: volta para pendente e remove a movimentação do DRE</li>
+      <li>Filtros por status (pendentes, pagas, todas)</li>
+      <li>Resumo com totais pendente, pago e vencido</li>
+    </ul>
+  </div>
+
+  <!-- 4. MÁQUINAS E CONTAS -->
+  <div class="section" id="maquinas">
+    <div class="section-header">
+      <div class="section-icon" style="background: var(--blue-light);">🏦</div>
+      <div>
+        <h2>Máquinas e Contas Bancárias</h2>
+        <div class="section-subtitle">Cadastro de maquininhas, bancos e taxas</div>
+      </div>
+    </div>
+    <p class="section-desc">
+      Aqui você cadastra suas máquinas de cartão e contas bancárias, incluindo as taxas cobradas por cada modalidade de pagamento. Esses dados são usados para calcular o valor líquido que você recebe em cada venda.
+    </p>
+
+    <div class="how-to">
+      <h4>Campos do cadastro</h4>
+      <div class="step"><div class="step-num">1</div><div class="step-text"><strong>Nome:</strong> Identificação da máquina (ex: "Maquininha 1", "PDV Loja")</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text"><strong>Banco:</strong> Onde a máquina deposita (ex: Inter, Santander)</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text"><strong>Agência e Conta:</strong> Dados bancários para referência</div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-text"><strong>Taxa Débito (%):</strong> Percentual descontado em vendas no débito</div></div>
+      <div class="step"><div class="step-num">5</div><div class="step-text"><strong>Taxa Crédito (%):</strong> Percentual descontado em vendas no crédito</div></div>
+      <div class="step"><div class="step-num">6</div><div class="step-text"><strong>Taxa Pix (%):</strong> Percentual descontado em vendas via Pix</div></div>
+    </div>
+
+    <table>
+      <thead>
+        <tr><th>Modalidade</th><th>Prazo de recebimento</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>💳 Débito</td><td>Próximo dia útil (pula sábado, domingo e feriado)</td></tr>
+        <tr><td>💳 Crédito</td><td>30 dias corridos (se cair em fim de semana ou feriado, vai para o próximo dia útil)</td></tr>
+        <tr><td>📱 Pix</td><td>Na hora</td></tr>
+      </tbody>
+    </table>
+
+    <div class="info-box blue">
+      <strong>Feriados:</strong> Na página de Vendas Maquininha, há um botão para cadastrar feriados. O sistema considera essas datas nos cálculos de dias úteis.
+    </div>
+  </div>
+
+  <!-- 5. VENDAS NA MAQUININHA -->
+  <div class="section" id="vendas">
+    <div class="section-header">
+      <div class="section-icon" style="background: var(--blue-light);">💳</div>
+      <div>
+        <h2>Vendas na Maquininha</h2>
+        <div class="section-subtitle">Controle de vendas e recebimentos</div>
+      </div>
+    </div>
+    <p class="section-desc">
+      Registre cada venda feita na maquininha. O sistema calcula automaticamente a taxa, o valor líquido e a data prevista de recebimento. Quando o dinheiro cai na conta, você confirma o recebimento e o sistema verifica se o valor está correto.
+    </p>
+
+    <div class="how-to">
+      <h4>Fluxo de uma venda</h4>
+      <div class="step"><div class="step-num">1</div><div class="step-text"><strong>Registrar:</strong> Selecione a máquina, data, valor bruto e forma de pagamento</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text"><strong>Preview:</strong> O sistema mostra o valor da taxa, o líquido e a data prevista de recebimento</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text"><strong>Aguardar:</strong> A venda fica com status "Pendente" até o dinheiro cair</div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-text"><strong>Receber:</strong> Quando o valor cai, clique em "Receber" e confirme o valor real</div></div>
+      <div class="step"><div class="step-num">5</div><div class="step-text"><strong>Verificar:</strong> Se o valor recebido for diferente do esperado, o sistema marca como "Divergente"</div></div>
+    </div>
+
+    <div class="info-box red">
+      <strong>Divergências:</strong> Se o banco repassou um valor diferente do calculado (ex: cobrou uma tarifa extra), o sistema registra a diferença. Assim você consegue identificar cobranças indevidas.
+    </div>
+
+    <ul class="features">
+      <li>Filtros por mês, status, máquina e tipo de pagamento</li>
+      <li>Resumo do mês: bruto, taxas, líquido, pendente e divergências</li>
+      <li>Cadastro de feriados para cálculo correto de dias úteis</li>
+    </ul>
+  </div>
+
+  <!-- 6. CATEGORIAS -->
+  <div class="section" id="categorias">
+    <div class="section-header">
+      <div class="section-icon" style="background: var(--purple-light);">🏷️</div>
+      <div>
+        <h2>Categorias</h2>
+        <div class="section-subtitle">Organize suas entradas e saídas</div>
+      </div>
+    </div>
+    <p class="section-desc">
+      Categorias são como "gavetas" para classificar cada movimentação. Exemplos de categorias de entrada: Pix Inter, Pix Santander, Cartão, Empréstimo. Exemplos de saída: Aluguel, Energia, Funcionários, Fornecedores.
+    </p>
+
+    <ul class="features">
+      <li>Separação entre categorias de <strong>entrada</strong> e <strong>saída</strong></li>
+      <li>Ativar/desativar categorias (desativadas não aparecem nos formulários)</li>
+      <li>Criar, editar e excluir categorias</li>
+      <li>Contagem de quantas movimentações usam cada categoria</li>
+    </ul>
+
+    <div class="info-box green">
+      <strong>Dica:</strong> Use nomes que façam sentido para o seu negócio. Quanto mais específico, melhor para os relatórios e a análise inteligente.
+    </div>
+  </div>
+
+  <!-- 7. FLUXO DE CAIXA -->
+  <div class="section" id="fluxo">
+    <div class="section-header">
+      <div class="section-icon" style="background: var(--green-light);">📈</div>
+      <div>
+        <h2>Fluxo de Caixa</h2>
+        <div class="section-subtitle">Entradas e saídas dia a dia</div>
+      </div>
+    </div>
+    <p class="section-desc">
+      Mostra todas as movimentações organizadas por data, com o saldo acumulado. É como um extrato bancário do seu negócio. Permite ver quanto dinheiro entrou e saiu em cada dia e qual é o saldo final do período.
+    </p>
+
+    <ul class="features">
+      <li>Visualização diária, semanal ou mensal</li>
+      <li>Saldo acumulado linha por linha</li>
+      <li>Separador visual entre entradas e saídas</li>
+      <li>Filtro por período</li>
+    </ul>
+  </div>
+
+  <!-- 8. DRE -->
+  <div class="section" id="dre">
+    <div class="section-header">
+      <div class="section-icon" style="background: var(--amber-light);">📑</div>
+      <div>
+        <h2>DRE — Demonstrativo do Resultado</h2>
+        <div class="section-subtitle">Lucro ou prejuízo do período</div>
+      </div>
+    </div>
+    <p class="section-desc">
+      O DRE é um relatório financeiro que mostra se o seu negócio teve lucro ou prejuízo no mês. Ele organiza todas as receitas e despesas por categoria, mostra os totais e calcula a margem de lucro. É gerado automaticamente com base nas movimentações cadastradas.
+    </p>
+
+    <div class="info-box purple">
+      <strong>Como funciona:</strong> O DRE pega todas as entradas do mês como receita, todas as saídas como despesa, subtrai um do outro e mostra o resultado. Se o resultado for positivo, é lucro. Se for negativo, é prejuízo.
+    </div>
+
+    <ul class="features">
+      <li>Receitas agrupadas por categoria com valor e percentual</li>
+      <li>Despesas agrupadas por categoria com valor e percentual</li>
+      <li>Resultado (lucro ou prejuízo) com margem percentual</li>
+      <li>Navegação por mês e ano</li>
+      <li>Impressão e exportação do relatório</li>
+    </ul>
+  </div>
+
+  <!-- 9. FECHAMENTO MENSAL -->
+  <div class="section" id="fechamento">
+    <div class="section-header">
+      <div class="section-icon" style="background: var(--purple-light);">🔒</div>
+      <div>
+        <h2>Fechamento Mensal</h2>
+        <div class="section-subtitle">Congele e audite os dados de cada mês</div>
+      </div>
+    </div>
+    <p class="section-desc">
+      O fechamento mensal serve para "trancar" os dados de um mês. Quando você fecha um mês, os totais são registrados e você pode gerar um relatório completo. Isso garante que os dados passados não sejam alterados sem controle.
+    </p>
+
+    <div class="how-to">
+      <h4>Como funciona</h4>
+      <div class="step"><div class="step-num">1</div><div class="step-text">A página mostra os 12 meses do ano com o status de cada um (aberto ou fechado)</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Clique em um mês para expandir e ver todas as movimentações daquele período</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">Clique em <strong>Fechar Mês</strong> para registrar os totais (pode adicionar uma observação)</div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-text">Se precisar alterar algo depois, clique em <strong>Reabrir</strong></div></div>
+      <div class="step"><div class="step-num">5</div><div class="step-text">Use <strong>Fechar Todos Abertos</strong> para fechar vários meses de uma vez</div></div>
+    </div>
+
+    <ul class="features">
+      <li>Resumo anual com total de entradas, saídas, saldo e meses fechados</li>
+      <li>Impressão do relatório de fechamento com detalhes por categoria</li>
+      <li>Observações em cada fechamento (ex: "Mês auditado", "Faltou 1 boleto")</li>
+    </ul>
+  </div>
+
+  <!-- 10. CONCILIAÇÃO BANCÁRIA -->
+  <div class="section" id="conciliacao">
+    <div class="section-header">
+      <div class="section-icon" style="background: var(--blue-light);">🏦</div>
+      <div>
+        <h2>Conciliação Bancária</h2>
+        <div class="section-subtitle">Confira se o banco bate com o sistema</div>
+      </div>
+    </div>
+    <p class="section-desc">
+      A conciliação bancária compara o saldo que aparece no extrato do banco com o saldo registrado no sistema. Se os valores batem, está tudo certo. Se não batem, significa que tem algo faltando ou errado que precisa ser corrigido.
+    </p>
+
+    <div class="how-to">
+      <h4>Como usar</h4>
+      <div class="step"><div class="step-num">1</div><div class="step-text">Clique em <strong>+ Nova Conciliação</strong></div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Selecione o <strong>banco/categoria</strong> (o sistema lista as categorias cadastradas)</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">Selecione o <strong>mês</strong></div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-text">O sistema mostra automaticamente as movimentações daquele banco naquele mês</div></div>
+      <div class="step"><div class="step-num">5</div><div class="step-text">Digite o <strong>saldo do extrato bancário</strong> (o valor que aparece no app do banco)</div></div>
+      <div class="step"><div class="step-num">6</div><div class="step-text">O sistema compara e mostra se <strong>confere</strong> ou tem <strong>diferença</strong></div></div>
+    </div>
+
+    <table>
+      <thead>
+        <tr><th>Status</th><th>O que significa</th></tr>
+      </thead>
+      <tbody>
+        <tr><td style="color: var(--green); font-weight: 600;">✓ Conciliado</td><td>O saldo do extrato bate exatamente com o sistema</td></tr>
+        <tr><td style="color: var(--red); font-weight: 600;">⚠ Divergente</td><td>Existe diferença. Pode ser uma movimentação não registrada, tarifa bancária, etc.</td></tr>
+      </tbody>
+    </table>
+
+    <div class="info-box amber">
+      <strong>Dica:</strong> Faça a conciliação todo mês, logo após o fechamento. Assim você pega qualquer divergência rapidamente.
+    </div>
+  </div>
+
+  <!-- 11. RELATÓRIOS -->
+  <div class="section" id="relatorios">
+    <div class="section-header">
+      <div class="section-icon" style="background: var(--gray-100);">📄</div>
+      <div>
+        <h2>Relatórios</h2>
+        <div class="section-subtitle">Dados completos para impressão</div>
+      </div>
+    </div>
+    <p class="section-desc">
+      Gere relatórios detalhados de qualquer período. Os relatórios podem ser impressos em PDF ou exportados para análise. São úteis para reuniões, prestação de contas ou consulta histórica.
+    </p>
+
+    <ul class="features">
+      <li>Relatório por período (mês, trimestre, ano)</li>
+      <li>Detalhamento por categoria</li>
+      <li>Gráficos visuais</li>
+      <li>Impressão formatada para papel ou PDF</li>
+    </ul>
+  </div>
+
+  <!-- 12. ANÁLISE INTELIGENTE -->
+  <div class="section" id="analise">
+    <div class="section-header">
+      <div class="section-icon" style="background: var(--purple-light);">🧠</div>
+      <div>
+        <h2>Análise Inteligente</h2>
+        <div class="section-subtitle">Insights automáticos sobre suas finanças</div>
+      </div>
+    </div>
+    <p class="section-desc">
+      O sistema analisa os dados cadastrados e gera insights automáticos: identifica padrões de gastos, alerta sobre tendências, sugere onde cortar custos e onde investir mais. É como ter um consultor financeiro olhando seus números.
+    </p>
+
+    <ul class="features">
+      <li>Identificação das maiores despesas e onde reduzir</li>
+      <li>Comparativo mês a mês com tendências</li>
+      <li>Sugestões personalizadas baseadas nos seus dados</li>
+      <li>Alertas de gastos acima da média</li>
+    </ul>
+  </div>
+
+  <!-- 13. USUÁRIOS -->
+  <div class="section" id="usuarios">
+    <div class="section-header">
+      <div class="section-icon" style="background: var(--blue-light);">👥</div>
+      <div>
+        <h2>Usuários e Permissões</h2>
+        <div class="section-subtitle">Controle de acesso da equipe</div>
+      </div>
+    </div>
+    <p class="section-desc">
+      Gerencie quem pode acessar o sistema e o que cada pessoa pode ver ou fazer. Existem dois níveis de acesso: <strong>Administrador (Master)</strong> e <strong>Funcionário</strong>.
+    </p>
+
+    <table>
+      <thead>
+        <tr><th>Nível</th><th>O que pode fazer</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>👑 Administrador</strong></td>
+          <td>Acesso total a todos os módulos. Pode criar, editar e gerenciar outros usuários. Pode fechar meses, fazer conciliações e alterar configurações.</td>
+        </tr>
+        <tr>
+          <td><strong>👤 Funcionário</strong></td>
+          <td>Acesso restrito. O administrador escolhe quais módulos o funcionário pode ver. Não pode gerenciar outros usuários.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="how-to">
+      <h4>Como criar um usuário</h4>
+      <div class="step"><div class="step-num">1</div><div class="step-text">Vá em <strong>Usuários</strong> e clique em <strong>+ Novo Usuário</strong></div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Preencha nome, email e senha</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">Escolha o nível: <strong>Administrador</strong> (acesso total) ou <strong>Funcionário</strong> (acesso restrito)</div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-text">Se for Funcionário, selecione quais módulos ele pode acessar</div></div>
+      <div class="step"><div class="step-num">5</div><div class="step-text">Clique em <strong>Criar Usuário</strong></div></div>
+    </div>
+
+    <ul class="features">
+      <li>Alterar nível de acesso (promover ou rebaixar) a qualquer momento</li>
+      <li>Ativar e desativar usuários sem excluir</li>
+      <li>Editar permissões de módulos individualmente</li>
+      <li>Botões "Todas" e "Nenhuma" para facilitar a seleção</li>
+    </ul>
+  </div>
+
+  <!-- FOOTER -->
+  <hr class="divider" style="max-width: 700px; margin: 0 auto;">
+  <div class="footer">
+    <div class="footer-logo">+Q Finanças</div>
+    <p>Inteligência Financeira</p>
+    <p style="margin-top: 12px; font-size: 12px; color: var(--gray-400);">
+      Material didático — Versão 1.0 · Maio 2026<br>
+      Para dúvidas ou sugestões, entre em contato com o administrador do sistema.
+    </p>
+  </div>
+
+</body>
+</html>
