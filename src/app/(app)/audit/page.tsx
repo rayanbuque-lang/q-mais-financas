@@ -76,7 +76,7 @@ export default function AuditPage() {
     setLoading(false);
   }
 
-  useEffect(() => { carregarDados(); }, []);
+  useEffect(() => { carregarLogs(); }, []);
 
   function fmtData(iso: string) {
     const d = new Date(iso);
