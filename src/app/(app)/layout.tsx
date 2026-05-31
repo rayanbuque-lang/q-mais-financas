@@ -18,6 +18,8 @@ const menuItems = [
   { label: "Dashboard", href: "/dashboard", icon: "📊" },
   { label: "Movimentações", href: "/movimentacoes", icon: "💰" },
   { label: "Contas a Pagar", href: "/contas-pagar", icon: "📋" },
+  { label: "Máquinas e Contas", href: "/maquinas", icon: "🏦" },
+  { label: "Vendas Maquininha", href: "/vendas", icon: "💳" },
   { label: "Categorias", href: "/categorias", icon: "🏷️" },
   { label: "Fluxo de Caixa", href: "/fluxo-de-caixa", icon: "📈" },
   { label: "DRE", href: "/dre", icon: "📑" },
