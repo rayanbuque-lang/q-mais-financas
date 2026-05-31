@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { Logo } from "@/components/logo";
 import { createClient } from "@/lib/supabase/client";
+import NotificacoesBell from "@/components/notificacoes-bell";
 
 interface Profile {
   id: string;
@@ -51,10 +52,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     loadProfile();
   }, []);
 
-  // Fechar sidebar ao mudar de página no mobile
-  useEffect(() => {
-    setSidebarOpen(false);
-  }, [pathname]);
+  useEffect(() => { setSidebarOpen(false); }, [pathname]);
 
   async function handleLogout() {
     await supabase.auth.signOut();
@@ -77,45 +75,31 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     <>
       <style>{`
         @keyframes spin { to { transform: rotate(360deg); } }
-
-        /* Reset */
         * { box-sizing: border-box; }
 
-        /* Sidebar overlay */
         .sidebar-overlay {
-          position: fixed;
-          inset: 0;
+          position: fixed; inset: 0;
           background: rgba(0,0,0,0.4);
           backdrop-filter: blur(4px);
-          z-index: 40;
-          display: none;
+          z-index: 40; display: none;
         }
         .sidebar-overlay.active { display: block; }
 
-        /* Sidebar */
         .sidebar {
-          position: fixed;
-          top: 0;
-          left: 0;
-          bottom: 0;
-          width: 260px;
-          min-width: 260px;
+          position: fixed; top: 0; left: 0; bottom: 0;
+          width: 260px; min-width: 260px;
           background: #ffffff;
           border-right: 1px solid #e2e8e2;
-          display: flex;
-          flex-direction: column;
+          display: flex; flex-direction: column;
           z-index: 50;
           transform: translateX(-100%);
           transition: transform 0.3s ease;
         }
         .sidebar.open { transform: translateX(0); }
 
-        /* Topbar mobile */
         .topbar {
           display: none;
-          position: sticky;
-          top: 0;
-          z-index: 30;
+          position: sticky; top: 0; z-index: 30;
           padding: 12px 16px;
           background: #ffffff;
           border-bottom: 1px solid #e2e8e2;
@@ -123,97 +107,53 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           justify-content: space-between;
         }
 
-        /* Main */
-        .main-content {
-          flex: 1;
-          min-width: 0;
-          padding: 24px 16px;
-        }
+        .main-content { flex: 1; min-width: 0; padding: 24px 16px; }
 
-        /* Desktop */
         @media (min-width: 768px) {
-          .sidebar {
-            position: sticky;
-            top: 0;
-            transform: translateX(0);
-          }
+          .sidebar { position: sticky; top: 0; transform: translateX(0); }
           .sidebar-overlay.active { display: none; }
           .topbar { display: none !important; }
           .main-content { padding: 32px; }
         }
 
-        /* Mobile */
         @media (max-width: 767px) {
           .topbar { display: flex; }
+          .desktop-notif { display: none !important; }
         }
 
-        /* Nav links */
         .nav-link {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          padding: 10px 14px;
-          border-radius: 10px;
-          font-size: 13px;
-          font-weight: 500;
-          text-decoration: none;
-          margin-bottom: 2px;
-          transition: all 0.2s;
-          color: #6b7280;
+          display: flex; align-items: center; gap: 12px;
+          padding: 10px 14px; border-radius: 10px;
+          font-size: 13px; font-weight: 500;
+          text-decoration: none; margin-bottom: 2px;
+          transition: all 0.2s; color: #6b7280;
         }
-        .nav-link:hover {
-          background: #f3f4f6;
-          color: #374151;
-        }
-        .nav-link.active {
-          background: #dcfce7;
-          color: #166534;
-        }
+        .nav-link:hover { background: #f3f4f6; color: #374151; }
+        .nav-link.active { background: #dcfce7; color: #166534; }
 
-        /* User section */
         .user-btn {
-          width: 100%;
-          text-align: left;
-          padding: 10px 14px;
-          border-radius: 10px;
-          font-size: 13px;
-          color: #6b7280;
-          background: transparent;
-          border: none;
-          cursor: pointer;
-          font-weight: 500;
-          transition: all 0.2s;
+          width: 100%; text-align: left;
+          padding: 10px 14px; border-radius: 10px;
+          font-size: 13px; color: #6b7280;
+          background: transparent; border: none;
+          cursor: pointer; font-weight: 500; transition: all 0.2s;
         }
-        .user-btn:hover {
-          background: #fef2f2;
-          color: #dc2626;
-        }
+        .user-btn:hover { background: #fef2f2; color: #dc2626; }
 
-        /* Hamburger */
         .hamburger {
-          background: none;
-          border: none;
-          cursor: pointer;
-          padding: 8px;
-          border-radius: 8px;
-          transition: background 0.2s;
+          background: none; border: none;
+          cursor: pointer; padding: 8px;
+          border-radius: 8px; transition: background 0.2s;
         }
         .hamburger:hover { background: #f3f4f6; }
       `}</style>
 
       <div style={{ display: "flex", minHeight: "100vh" }}>
-        {/* Overlay */}
         <div className={`sidebar-overlay ${sidebarOpen ? "active" : ""}`} onClick={() => setSidebarOpen(false)} />
 
-        {/* Sidebar */}
         <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
           <div style={{ padding: "16px 20px", borderBottom: "1px solid #e2e8e2", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <Logo />
-            {/* Botão fechar no mobile */}
-            <button onClick={() => setSidebarOpen(false)} className="hamburger" style={{ display: "none" }}>
-              <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="M5 5l10 10M15 5l-10 10" strokeLinecap="round" /></svg>
-            </button>
-            <style>{`@media (max-width: 767px) { .sidebar > div > button { display: block !important; } }`}</style>
           </div>
 
           <nav style={{ flex: 1, padding: "10px 10px", overflowY: "auto" }}>
@@ -243,14 +183,23 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </div>
         </aside>
 
-        {/* Main */}
         <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
           {/* Topbar mobile */}
           <div className="topbar">
             <Logo />
-            <button onClick={() => setSidebarOpen(true)} className="hamburger">
-              <svg width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="M3 6h18M3 11h18M3 16h18" strokeLinecap="round" /></svg>
-            </button>
+            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <NotificacoesBell />
+              <button onClick={() => setSidebarOpen(true)} className="hamburger">
+                <svg width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2.2">
+                  <path d="M3 6h18M3 11h18M3 16h18" strokeLinecap="round" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          {/* Sino desktop */}
+          <div className="desktop-notif" style={{ padding: "12px 32px 0", display: "flex", justifyContent: "flex-end" }}>
+            <NotificacoesBell />
           </div>
 
           <main className="main-content">
