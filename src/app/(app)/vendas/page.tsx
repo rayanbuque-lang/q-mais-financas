@@ -110,14 +110,18 @@ export default function VendasPage() {
     const data = new Date(dataStr + "T12:00:00");
     if (tipo === "pix") return dataStr;
     if (tipo === "debito") {
+      // Débito: próximo dia útil (pula sábado, domingo e feriado)
       const next = new Date(data);
       next.setDate(next.getDate() + 1);
       return proximoDiaUtil(next).toISOString().split("T")[0];
     }
-    // Crédito: 30 dias
-    const next = new Date(data);
-    next.setDate(next.getDate() + 30);
-    return proximoDiaUtil(next).toISOString().split("T")[0];
+    if (tipo === "credito") {
+      // Crédito: 30 dias CORRIDOS, se cair em fim de semana ou feriado vai pro próximo dia útil
+      const next = new Date(data);
+      next.setDate(next.getDate() + 30);
+      return proximoDiaUtil(next).toISOString().split("T")[0];
+    }
+    return dataStr;
   }
 
   const maquinaAtual = maquinas.find((m) => m.id === maquinaId);
