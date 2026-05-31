@@ -21,6 +21,8 @@ const menuItems = [
   { label: "Categorias", href: "/categorias", icon: "🏷️" },
   { label: "Fluxo de Caixa", href: "/fluxo-de-caixa", icon: "📈" },
   { label: "DRE", href: "/dre", icon: "📑" },
+  { label: "Fechamento Mensal", href: "/fechamento", icon: "🔒" },
+
   { label: "Relatórios", href: "/relatorios", icon: "📄" },
   { label: "Análise Inteligente", href: "/analise", icon: "🧠" },
 ];
