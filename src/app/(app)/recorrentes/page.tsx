@@ -23,6 +23,9 @@ interface Recorrente {
 
 interface Categoria { id: string; nome: string; }
 
+const mesesNomes = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
+const freqLabels: Record<string, string> = { mensal: "Mensal", quinzenal: "Quinzenal", semanal: "Semanal" };
+
 export default function RecorrentesPage() {
   const [recorrentes, setRecorrentes] = useState<Recorrente[]>([]);
   const [categoriasEntrada, setCategoriasEntrada] = useState<Categoria[]>([]);
@@ -31,7 +34,6 @@ export default function RecorrentesPage() {
   const [editandoId, setEditandoId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [mensagem, setMensagem] = useState("");
-  const [gerando, setGerando] = useState(false);
 
   const [descricao, setDescricao] = useState("");
   const [valor, setValor] = useState("");
@@ -45,7 +47,6 @@ export default function RecorrentesPage() {
   const [observacao, setObservacao] = useState("");
   const [criarComo, setCriarComo] = useState<"movimentacao" | "conta_pagar">("movimentacao");
 
-  const mesesNomes = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
   const supabase = createClient();
   const categorias = tipo === "entrada" ? categoriasEntrada : categoriasSaida;
 
@@ -66,94 +67,7 @@ export default function RecorrentesPage() {
     }
   }
 
-  useEffect(() => {
-    carregarDados().then(() => {
-      gerarAutomatico();
-    });
-  }, []);
-
-  async function gerarAutomatico() {
-    const supabaseAuto = createClient();
-    const hoje = new Date();
-    const mesAtual = hoje.getMonth();
-    const anoAtual = hoje.getFullYear();
-    const mesesNomesAuto = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
-
-    const { data: ativos } = await supabaseAuto
-      .from("lancamentos_recorrentes")
-      .select("*")
-      .eq("ativo", true);
-
-    if (!ativos || ativos.length === 0) return;
-
-    const inicio = `${anoAtual}-${String(mesAtual + 1).padStart(2, "0")}-01`;
-    const ultimoDia = new Date(anoAtual, mesAtual + 1, 0).getDate();
-    const fim = `${anoAtual}-${String(mesAtual + 1).padStart(2, "0")}-${String(ultimoDia).padStart(2, "0")}`;
-
-    let geradas = 0;
-
-    for (const r of ativos) {
-      const ehContaPagar = r.observacao?.includes("[CONTA_PAGAR]");
-
-      // Verificar se já existe
-      if (ehContaPagar) {
-        const { data: existente } = await supabaseAuto
-          .from("contas_pagar").select("id")
-          .eq("fornecedor", r.descricao)
-          .eq("valor", r.valor)
-          .gte("data_vencimento", inicio)
-          .lte("data_vencimento", fim)
-          .limit(1);
-        if (existente && existente.length > 0) continue;
-      } else {
-        const { data: existente } = await supabaseAuto
-          .from("movimentacoes").select("id")
-          .eq("tipo", r.tipo).eq("valor", r.valor).eq("categoria_id", r.categoria_id)
-          .gte("data", inicio).lte("data", fim).limit(1);
-        if (existente && existente.length > 0) continue;
-      }
-
-      // Verificar período
-      const dataInicioR = new Date(r.data_inicio + "T12:00:00");
-      const dataVenc = new Date(anoAtual, mesAtual, r.dia_vencimento || 1);
-      if (dataVenc < dataInicioR) continue;
-      if (r.data_fim && dataVenc > new Date(r.data_fim + "T12:00:00")) continue;
-      if (r.total_parcelas && r.parcelas_geradas >= r.total_parcelas) continue;
-
-      const dia = Math.min(r.dia_vencimento || 1, ultimoDia);
-      const dataMov = `${anoAtual}-${String(mesAtual + 1).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
-      const obsLimpa = (r.observacao || "").replace("[CONTA_PAGAR] ", "").replace("[CONTA_PAGAR]", "");
-
-      if (ehContaPagar) {
-        const { error } = await supabaseAuto.from("contas_pagar").insert({
-          fornecedor: r.descricao,
-          descricao: obsLimpa || `Recorrente`,
-          valor: r.valor,
-          data_vencimento: dataMov,
-          status: "pendente",
-          categoria_id: r.categoria_id,
-          observacao: `Gerado automaticamente - Recorrente`,
-        });
-        if (!error) {
-          geradas++;
-          await supabaseAuto.from("lancamentos_recorrentes").update({ parcelas_geradas: (r.parcelas_geradas || 0) + 1 }).eq("id", r.id);
-        }
-      } else {
-        const { error } = await supabaseAuto.from("movimentacoes").insert({
-          tipo: r.tipo, data: dataMov, valor: r.valor, categoria_id: r.categoria_id,
-          observacao: `Recorrente: ${r.descricao}${obsLimpa ? ` · ${obsLimpa}` : ""}`, revisar: false,
-        });
-        if (!error) {
-          geradas++;
-          await supabaseAuto.from("lancamentos_recorrentes").update({ parcelas_geradas: (r.parcelas_geradas || 0) + 1 }).eq("id", r.id);
-        }
-      }
-    }
-
-    if (geradas > 0) {
-      carregarDados();
-    }
-  }
+  useEffect(() => { carregarDados(); }, []);
 
   useEffect(() => {
     const cats = tipo === "entrada" ? categoriasEntrada : categoriasSaida;
@@ -187,71 +101,145 @@ export default function RecorrentesPage() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
+  // Função principal: gera TODOS os meses
+  async function gerarTodasInstancias(recorrenteId: string, descricao: string, valor: number, tipo: string, categoriaId: string, diaVenc: number, freq: string, inicio: string, fim: string | null, parcelas: number | null, obs: string) {
+    const ehConta = obs?.includes("[CONTA_PAGAR]");
+    const obsLimpa = (obs || "").replace("[CONTA_PAGAR] ", "").replace("[CONTA_PAGAR]", "");
+    const dataInicioDate = new Date(inicio + "T12:00:00");
+    const dataFimDate = fim ? new Date(fim + "T12:00:00") : new Date(dataInicioDate.getFullYear() + 2, 11, 31); // 2 anos se sem fim
+
+    let geradas = 0;
+    let maxParcelas = parcelas || 999;
+
+    if (freq === "mensal") {
+      let current = new Date(dataInicioDate.getFullYear(), dataInicioDate.getMonth(), 1);
+      while (current <= dataFimDate && geradas < maxParcelas) {
+        const y = current.getFullYear();
+        const m = current.getMonth();
+        const ultimoDia = new Date(y, m + 1, 0).getDate();
+        const dia = Math.min(diaVenc, ultimoDia);
+        const dataVenc = `${y}-${String(m + 1).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
+
+        // Verificar se já existe
+        if (ehConta) {
+          const { data: ex } = await supabase.from("contas_pagar").select("id").eq("fornecedor", descricao).eq("valor", valor).gte("data_vencimento", `${y}-${String(m + 1).padStart(2, "0")}-01`).lte("data_vencimento", `${y}-${String(m + 1).padStart(2, "0")}-${String(ultimoDia).padStart(2, "0")}`).limit(1);
+          if (!ex || ex.length === 0) {
+            await supabase.from("contas_pagar").insert({ fornecedor: descricao, descricao: obsLimpa || "Recorrente mensal", valor, data_vencimento: dataVenc, status: "pendente", categoria_id: categoriaId, observacao: "Gerado automaticamente - Recorrente" });
+            geradas++;
+          }
+        } else {
+          const { data: ex } = await supabase.from("movimentacoes").select("id").eq("tipo", tipo).eq("valor", valor).eq("categoria_id", categoriaId).gte("data", `${y}-${String(m + 1).padStart(2, "0")}-01`).lte("data", `${y}-${String(m + 1).padStart(2, "0")}-${String(ultimoDia).padStart(2, "0")}`).limit(1);
+          if (!ex || ex.length === 0) {
+            await supabase.from("movimentacoes").insert({ tipo, data: dataVenc, valor, categoria_id: categoriaId, observacao: `Recorrente: ${descricao}${obsLimpa ? ` · ${obsLimpa}` : ""}`, revisar: false });
+            geradas++;
+          }
+        }
+        current = new Date(y, m + 1, 1);
+      }
+    } else if (freq === "quinzenal") {
+      let current = new Date(dataInicioDate);
+      while (current <= dataFimDate && geradas < maxParcelas) {
+        const dataVenc = current.toISOString().split("T")[0];
+        const y = current.getFullYear();
+        const m = current.getMonth();
+        const ultimoDia = new Date(y, m + 1, 0).getDate();
+
+        if (ehConta) {
+          const { data: ex } = await supabase.from("contas_pagar").select("id").eq("fornecedor", descricao).eq("valor", valor).eq("data_vencimento", dataVenc).limit(1);
+          if (!ex || ex.length === 0) {
+            await supabase.from("contas_pagar").insert({ fornecedor: descricao, descricao: obsLimpa || "Recorrente quinzenal", valor, data_vencimento: dataVenc, status: "pendente", categoria_id: categoriaId, observacao: "Gerado automaticamente - Recorrente" });
+            geradas++;
+          }
+        } else {
+          const { data: ex } = await supabase.from("movimentacoes").select("id").eq("tipo", tipo).eq("valor", valor).eq("categoria_id", categoriaId).eq("data", dataVenc).limit(1);
+          if (!ex || ex.length === 0) {
+            await supabase.from("movimentacoes").insert({ tipo, data: dataVenc, valor, categoria_id: categoriaId, observacao: `Recorrente: ${descricao}${obsLimpa ? ` · ${obsLimpa}` : ""}`, revisar: false });
+            geradas++;
+          }
+        }
+        current.setDate(current.getDate() + 15);
+      }
+    } else if (freq === "semanal") {
+      let current = new Date(dataInicioDate);
+      while (current <= dataFimDate && geradas < maxParcelas) {
+        const dataVenc = current.toISOString().split("T")[0];
+
+        if (ehConta) {
+          const { data: ex } = await supabase.from("contas_pagar").select("id").eq("fornecedor", descricao).eq("valor", valor).eq("data_vencimento", dataVenc).limit(1);
+          if (!ex || ex.length === 0) {
+            await supabase.from("contas_pagar").insert({ fornecedor: descricao, descricao: obsLimpa || "Recorrente semanal", valor, data_vencimento: dataVenc, status: "pendente", categoria_id: categoriaId, observacao: "Gerado automaticamente - Recorrente" });
+            geradas++;
+          }
+        } else {
+          const { data: ex } = await supabase.from("movimentacoes").select("id").eq("tipo", tipo).eq("valor", valor).eq("categoria_id", categoriaId).eq("data", dataVenc).limit(1);
+          if (!ex || ex.length === 0) {
+            await supabase.from("movimentacoes").insert({ tipo, data: dataVenc, valor, categoria_id: categoriaId, observacao: `Recorrente: ${descricao}${obsLimpa ? ` · ${obsLimpa}` : ""}`, revisar: false });
+            geradas++;
+          }
+        }
+        current.setDate(current.getDate() + 7);
+      }
+    }
+
+    // Atualizar parcelas geradas
+    await supabase.from("lancamentos_recorrentes").update({ parcelas_geradas: geradas }).eq("id", recorrenteId);
+
+    return geradas;
+  }
+
   async function handleSalvar(e: React.FormEvent) {
     e.preventDefault(); setLoading(true); setMensagem("");
+    const obsFinal = `${criarComo === "conta_pagar" ? "[CONTA_PAGAR] " : ""}${observacao}`;
+    const val = parseFloat(valor.replace(",", "."));
+
     const dados = {
-      descricao, valor: parseFloat(valor.replace(",", ".")), tipo, categoria_id: categoriaId,
-      dia_vencimento: parseInt(diaVencimento), frequencia, data_inicio: dataInicio,
-      data_fim: dataFim || null, total_parcelas: totalParcelas ? parseInt(totalParcelas) : null,
-      observacao: `${criarComo === "conta_pagar" ? "[CONTA_PAGAR] " : ""}${observacao}`, ativo: true,
+      descricao, valor: val, tipo: criarComo === "conta_pagar" ? "saida" : tipo,
+      categoria_id: categoriaId, dia_vencimento: parseInt(diaVencimento),
+      frequencia, data_inicio: dataInicio, data_fim: dataFim || null,
+      total_parcelas: totalParcelas ? parseInt(totalParcelas) : null,
+      observacao: obsFinal, ativo: true,
     };
 
+    let recId = editandoId;
     let error;
+
     if (editandoId) {
       const r = await supabase.from("lancamentos_recorrentes").update(dados).eq("id", editandoId);
       error = r.error;
     } else {
-      const r = await supabase.from("lancamentos_recorrentes").insert(dados);
+      const r = await supabase.from("lancamentos_recorrentes").insert(dados).select("id").single();
       error = r.error;
+      if (r.data) recId = r.data.id;
     }
 
-    if (error) setMensagem("Erro ao salvar.");
-    else {
-      setMensagem(editandoId ? "Atualizado!" : "Cadastrado!");
-      await registrarLog({ acao: editandoId ? "editou" : "criou", tabela: "lancamentos_recorrentes", detalhes: `${descricao} - R$ ${parseFloat(valor.replace(",", ".")).toFixed(2)} (${frequencia})` });
+    if (error) {
+      setMensagem("Erro ao salvar.");
+    } else {
+      // Se é novo, gerar todas as instâncias
+      if (!editandoId && recId) {
+        const geradas = await gerarTodasInstancias(
+          recId, descricao, val,
+          criarComo === "conta_pagar" ? "saida" : tipo,
+          categoriaId, parseInt(diaVencimento), frequencia,
+          dataInicio, dataFim || null,
+          totalParcelas ? parseInt(totalParcelas) : null,
+          obsFinal
+        );
 
-      // Se criou como conta a pagar e NÃO está editando, gerar agora
-      if (!editandoId && criarComo === "conta_pagar") {
-        const hoje = new Date();
-        const mesAtual = hoje.getMonth();
-        const anoAtual = hoje.getFullYear();
-        const ultimoDia = new Date(anoAtual, mesAtual + 1, 0).getDate();
-        const dia = Math.min(parseInt(diaVencimento), ultimoDia);
-        const dataVenc = `${anoAtual}-${String(mesAtual + 1).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
-        const val = parseFloat(valor.replace(",", "."));
+        setMensagem(`Recorrente criado! ${geradas} ${geradas === 1 ? "instância gerada" : "instâncias geradas"} automaticamente.`);
 
-        await supabase.from("contas_pagar").insert({
-          fornecedor: descricao,
-          descricao: observacao || `Recorrente ${freqLabels[frequencia]}`,
-          valor: val,
-          data_vencimento: dataVenc,
-          status: "pendente",
-          categoria_id: categoriaId,
-          observacao: `Gerado automaticamente - Recorrente ${freqLabels[frequencia]}`,
+        await registrarLog({
+          acao: "criou", tabela: "lancamentos_recorrentes", registroId: recId,
+          detalhes: `${descricao} - R$ ${val.toFixed(2)} (${freqLabels[frequencia]}) - ${geradas} instâncias`,
         });
-
-        setMensagem(`Conta a pagar criada! Vencimento: ${new Date(dataVenc + "T12:00:00").toLocaleDateString("pt-BR")}`);
-      } else if (!editandoId && criarComo === "movimentacao") {
-        // Gerar movimentação do mês atual
-        const hoje = new Date();
-        const mesAtual = hoje.getMonth();
-        const anoAtual = hoje.getFullYear();
-        const ultimoDia = new Date(anoAtual, mesAtual + 1, 0).getDate();
-        const dia = Math.min(parseInt(diaVencimento), ultimoDia);
-        const dataMov = `${anoAtual}-${String(mesAtual + 1).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
-        const val = parseFloat(valor.replace(",", "."));
-
-        await supabase.from("movimentacoes").insert({
-          tipo, data: dataMov, valor: val, categoria_id: categoriaId,
-          observacao: `Recorrente: ${descricao}${observacao ? ` · ${observacao}` : ""}`, revisar: false,
-        });
-
-        setMensagem(`Movimentação criada para ${mesesNomes[mesAtual]}/${anoAtual}!`);
+      } else {
+        setMensagem("Atualizado!");
+        await registrarLog({ acao: "editou", tabela: "lancamentos_recorrentes", registroId: recId || undefined, detalhes: `${descricao}` });
       }
 
       resetarForm(); setShowForm(false); carregarDados();
     }
-    setLoading(false); setTimeout(() => setMensagem(""), 3000);
+    setLoading(false); setTimeout(() => setMensagem(""), 5000);
   }
 
   async function toggleAtivo(r: Recorrente) {
@@ -267,96 +255,23 @@ export default function RecorrentesPage() {
     setMensagem("Excluído!"); carregarDados(); setTimeout(() => setMensagem(""), 3000);
   }
 
-  async function gerarMovimentacoes() {
-    setGerando(true); setMensagem("");
-    const hoje = new Date();
-    const mesAtual = hoje.getMonth();
-    const anoAtual = hoje.getFullYear();
-    const mesesNomes = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
-    let geradas = 0;
-
-    const ativos = recorrentes.filter((r) => r.ativo);
-
-    for (const r of ativos) {
-      const inicio = `${anoAtual}-${String(mesAtual + 1).padStart(2, "0")}-01`;
-      const ultimoDia = new Date(anoAtual, mesAtual + 1, 0).getDate();
-      const fim = `${anoAtual}-${String(mesAtual + 1).padStart(2, "0")}-${String(ultimoDia).padStart(2, "0")}`;
-
-      const ehContaPagar = r.observacao?.includes("[CONTA_PAGAR]");
-
-      // Verificar se já existe
-      if (ehContaPagar) {
-        const { data: existente } = await supabase
-          .from("contas_pagar").select("id")
-          .eq("fornecedor", r.descricao)
-          .eq("valor", r.valor)
-          .gte("data_vencimento", inicio)
-          .lte("data_vencimento", fim)
-          .limit(1);
-        if (existente && existente.length > 0) continue;
-      } else {
-        const { data: existente } = await supabase
-          .from("movimentacoes").select("id")
-          .eq("tipo", r.tipo).eq("valor", r.valor).eq("categoria_id", r.categoria_id)
-          .gte("data", inicio).lte("data", fim).limit(1);
-        if (existente && existente.length > 0) continue;
-      }
-
-      // Verificar período
-      const dataInicioR = new Date(r.data_inicio + "T12:00:00");
-      const dataVenc = new Date(anoAtual, mesAtual, r.dia_vencimento || 1);
-      if (dataVenc < dataInicioR) continue;
-      if (r.data_fim && dataVenc > new Date(r.data_fim + "T12:00:00")) continue;
-      if (r.total_parcelas && r.parcelas_geradas >= r.total_parcelas) continue;
-
-      const dia = Math.min(r.dia_vencimento || 1, ultimoDia);
-      const dataMov = `${anoAtual}-${String(mesAtual + 1).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
-      const obsLimpa = (r.observacao || "").replace("[CONTA_PAGAR] ", "").replace("[CONTA_PAGAR]", "");
-
-      if (ehContaPagar) {
-        // Gerar como conta a pagar
-        const { error } = await supabase.from("contas_pagar").insert({
-          fornecedor: r.descricao,
-          descricao: obsLimpa || `Recorrente ${freqLabels[r.frequencia]}`,
-          valor: r.valor,
-          data_vencimento: dataMov,
-          status: "pendente",
-          categoria_id: r.categoria_id,
-          observacao: `Gerado automaticamente - ${freqLabels[r.frequencia]}`,
-        });
-        if (!error) {
-          geradas++;
-          await supabase.from("lancamentos_recorrentes").update({ parcelas_geradas: (r.parcelas_geradas || 0) + 1 }).eq("id", r.id);
-          await registrarLog({ acao: "criou", tabela: "contas_pagar", detalhes: `Recorrente: ${r.descricao} - ${fmt(r.valor)} (${mesesNomes[mesAtual]})` });
-        }
-      } else {
-        // Gerar como movimentação
-        const { error } = await supabase.from("movimentacoes").insert({
-          tipo: r.tipo, data: dataMov, valor: r.valor, categoria_id: r.categoria_id,
-          observacao: `Recorrente: ${r.descricao}${obsLimpa ? ` · ${obsLimpa}` : ""}`, revisar: false,
-        });
-        if (!error) {
-          geradas++;
-          await supabase.from("lancamentos_recorrentes").update({ parcelas_geradas: (r.parcelas_geradas || 0) + 1 }).eq("id", r.id);
-          await registrarLog({ acao: "criou", tabela: "movimentacoes", detalhes: `Recorrente: ${r.descricao} - ${fmt(r.valor)}` });
-        }
-      }
-    }
-
-    if (geradas > 0) {
-      setMensagem(`${geradas} ${geradas === 1 ? "item gerado" : "itens gerados"} com sucesso!`);
-      carregarDados();
-    } else {
-      setMensagem("Nenhum item novo para gerar. Todos já existem ou estão fora do período.");
-    }
-    setGerando(false); setTimeout(() => setMensagem(""), 5000);
+  // Gerar instâncias faltantes (para quando adicionar mês novo)
+  async function gerarFaltantes(r: Recorrente) {
+    setLoading(true);
+    const ehConta = r.observacao?.includes("[CONTA_PAGAR]");
+    const geradas = await gerarTodasInstancias(
+      r.id, r.descricao, r.valor, r.tipo, r.categoria_id,
+      r.dia_vencimento || 1, r.frequencia, r.data_inicio,
+      r.data_fim || null, r.total_parcelas, r.observacao || ""
+    );
+    setMensagem(geradas > 0 ? `${geradas} instâncias novas geradas!` : "Nenhuma instância nova necessária.");
+    setLoading(false); carregarDados(); setTimeout(() => setMensagem(""), 4000);
   }
 
   function fmt(v: number) { return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }); }
-  const freqLabels: Record<string, string> = { mensal: "Mensal", quinzenal: "Quinzenal", semanal: "Semanal" };
 
-  const totalEntradas = recorrentes.filter((r) => r.ativo && r.tipo === "entrada").reduce((a, r) => a + r.valor, 0);
-  const totalSaidas = recorrentes.filter((r) => r.ativo && r.tipo === "saida").reduce((a, r) => a + r.valor, 0);
+  const totalEntradas = recorrentes.filter((r) => r.ativo && r.tipo === "entrada" && !r.observacao?.includes("[CONTA_PAGAR]")).reduce((a, r) => a + r.valor, 0);
+  const totalSaidas = recorrentes.filter((r) => r.ativo && r.tipo === "saida" && !r.observacao?.includes("[CONTA_PAGAR]")).reduce((a, r) => a + r.valor, 0);
   const ativos = recorrentes.filter((r) => r.ativo).length;
   const contasAPagar = recorrentes.filter((r) => r.ativo && r.observacao?.includes("[CONTA_PAGAR]")).length;
 
@@ -365,16 +280,11 @@ export default function RecorrentesPage() {
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Lançamentos Recorrentes</h1>
-          <p className="text-[var(--color-text-muted)] text-sm mt-1">Cadastre uma vez e gere automaticamente</p>
+          <p className="text-[var(--color-text-muted)] text-sm mt-1">Cadastre uma vez, gera em todos os meses automaticamente</p>
         </div>
-        <div className="flex gap-2 flex-wrap">
-          <button onClick={gerarMovimentacoes} disabled={gerando} className="px-4 py-3 bg-gradient-to-r from-purple-600 to-purple-500 text-white font-semibold rounded-xl hover:from-purple-700 hover:to-purple-600 transition-all text-sm shadow-md shadow-purple-200 disabled:opacity-50">
-            {gerando ? "Gerando..." : "⚡ Gerar Tudo do Mês"}
-          </button>
-          <button onClick={abrirNovo} className="px-5 py-3 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white font-semibold rounded-xl hover:from-emerald-700 hover:to-emerald-600 transition-all text-sm shadow-md shadow-emerald-200">
-            + Novo Recorrente
-          </button>
-        </div>
+        <button onClick={abrirNovo} className="px-5 py-3 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white font-semibold rounded-xl hover:from-emerald-700 hover:to-emerald-600 transition-all text-sm shadow-md shadow-emerald-200">
+          + Novo Recorrente
+        </button>
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -398,11 +308,12 @@ export default function RecorrentesPage() {
         <div>
           <p className="text-sm font-semibold text-purple-800">Como funciona</p>
           <p className="text-xs text-purple-700 mt-1">
-            Cadastre seus gastos e receitas fixas. Ao gerar, o sistema cria: <strong>Movimentações</strong> (entram direto no DRE) ou <strong>Contas a Pagar</strong> (ficam pendentes para você dar baixa). Se já existir no mês, não duplica. Você pode editar o valor a qualquer momento (exceto em meses fechados, onde apenas administradores podem alterar).
+            Ao criar um recorrente, o sistema gera <strong>todas as instâncias</strong> de uma vez — para todos os meses. Aparece direto em Movimentações, Contas a Pagar e DRE. Você pode editar o valor individual de cada mês. Se precisar gerar mais meses, clique no botão 🔄.
           </p>
         </div>
       </div>
 
+      {/* Formulário */}
       {showForm && (
         <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-6 shadow-sm">
           <div className="flex items-center justify-between mb-5">
@@ -417,16 +328,15 @@ export default function RecorrentesPage() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <button type="button" onClick={() => setCriarComo("movimentacao")} className={`p-4 rounded-xl border-2 text-left transition-all ${criarComo === "movimentacao" ? "border-blue-500 bg-blue-50" : "border-[var(--color-border)] bg-[var(--color-bg)]"}`}>
                   <div className="flex items-center gap-2 mb-1"><span>💰</span><span className="font-bold text-sm">Movimentação</span></div>
-                  <p className="text-xs text-[var(--color-text-muted)]">Entra direto no DRE como entrada ou saída do mês.</p>
+                  <p className="text-xs text-[var(--color-text-muted)]">Entra direto no DRE como entrada ou saída.</p>
                 </button>
                 <button type="button" onClick={() => { setCriarComo("conta_pagar"); setTipo("saida"); }} className={`p-4 rounded-xl border-2 text-left transition-all ${criarComo === "conta_pagar" ? "border-amber-500 bg-amber-50" : "border-[var(--color-border)] bg-[var(--color-bg)]"}`}>
                   <div className="flex items-center gap-2 mb-1"><span>📋</span><span className="font-bold text-sm">Conta a Pagar</span></div>
-                  <p className="text-xs text-[var(--color-text-muted)]">Cria como boleto pendente. Você dá baixa quando pagar.</p>
+                  <p className="text-xs text-[var(--color-text-muted)]">Cria como boleto pendente. Dá baixa quando pagar.</p>
                 </button>
               </div>
             </div>
 
-            {/* Tipo (só para movimentação) */}
             {criarComo === "movimentacao" && (
               <div className="flex gap-3">
                 <button type="button" onClick={() => setTipo("entrada")} className={`flex-1 py-3 rounded-xl font-semibold text-sm transition-all ${tipo === "entrada" ? "bg-emerald-600 text-white shadow-md" : "bg-[var(--color-bg)] text-[var(--color-text-muted)] border border-[var(--color-border)]"}`}>▲ Entrada</button>
@@ -437,7 +347,7 @@ export default function RecorrentesPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               <div>
                 <label className="block text-sm font-semibold mb-2 text-[var(--color-text-muted)]">{criarComo === "conta_pagar" ? "Fornecedor" : "Descrição"}</label>
-                <input type="text" value={descricao} onChange={(e) => setDescricao(e.target.value)} placeholder={criarComo === "conta_pagar" ? "Ex: Aluguel, Energia" : "Ex: Recebimento fixo"} required className="w-full px-4 py-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none" />
+                <input type="text" value={descricao} onChange={(e) => setDescricao(e.target.value)} placeholder={criarComo === "conta_pagar" ? "Ex: Energisa" : "Ex: Recebimento fixo"} required className="w-full px-4 py-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none" />
               </div>
               <div>
                 <label className="block text-sm font-semibold mb-2 text-[var(--color-text-muted)]">Valor (R$)</label>
@@ -477,6 +387,11 @@ export default function RecorrentesPage() {
             </div>
 
             <div>
+              <label className="block text-sm font-semibold mb-2 text-[var(--color-text-muted)]">Data fim (opcional)</label>
+              <input type="date" value={dataFim} onChange={(e) => setDataFim(e.target.value)} className="w-full sm:w-1/3 px-4 py-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none" />
+            </div>
+
+            <div>
               <label className="block text-sm font-semibold mb-2 text-[var(--color-text-muted)]">Observação</label>
               <input type="text" value={observacao} onChange={(e) => setObservacao(e.target.value)} placeholder="Informação adicional" className="w-full px-4 py-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none" />
             </div>
@@ -484,13 +399,14 @@ export default function RecorrentesPage() {
             <div className="flex gap-3 pt-2">
               <button type="button" onClick={() => { setShowForm(false); resetarForm(); }} className="flex-1 py-3 bg-[var(--color-bg)] text-[var(--color-text-muted)] font-semibold rounded-xl border border-[var(--color-border)] hover:bg-gray-100 transition text-sm">Cancelar</button>
               <button type="submit" disabled={loading} className="flex-1 py-3 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white font-semibold rounded-xl hover:from-emerald-700 hover:to-emerald-600 transition-all disabled:opacity-50 text-sm shadow-md shadow-emerald-200">
-                {loading ? "Salvando..." : editandoId ? "Atualizar" : "Salvar"}
+                {loading ? "Salvando e gerando..." : editandoId ? "Atualizar" : "Salvar e Gerar"}
               </button>
             </div>
           </form>
         </div>
       )}
 
+      {/* Lista */}
       {recorrentes.length === 0 ? (
         <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-12 text-center text-[var(--color-text-muted)] text-sm">
           Nenhum lançamento recorrente.
@@ -511,18 +427,20 @@ export default function RecorrentesPage() {
                         <p className="text-sm font-bold truncate">{r.descricao}</p>
                         {ehConta && <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full text-[10px] font-bold">CONTA A PAGAR</span>}
                         {!r.ativo && <span className="px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full text-[10px] font-bold">INATIVO</span>}
-                        {r.total_parcelas && <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-[10px] font-bold">{r.parcelas_geradas}/{r.total_parcelas}</span>}
+                        <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-[10px] font-bold">{r.parcelas_geradas} geradas</span>
                       </div>
                       <p className="text-xs text-[var(--color-text-muted)]">
                         {r.categoria_nome} · {freqLabels[r.frequencia]} · Dia {r.dia_vencimento}
+                        {r.total_parcelas ? ` · ${r.total_parcelas} parcelas` : ""}
                       </p>
                     </div>
                   </div>
                   <div className="flex items-center gap-3 shrink-0">
                     <span className={`font-bold text-sm ${ehConta ? "text-amber-600" : r.tipo === "entrada" ? "text-emerald-600" : "text-red-500"}`}>
-                      {ehConta ? "" : r.tipo === "entrada" ? "+" : "-"} {fmt(r.valor)}
+                      {fmt(r.valor)}
                     </span>
                     <div className="flex gap-1">
+                      <button onClick={() => gerarFaltantes(r)} title="Gerar meses faltantes" className="p-1.5 rounded-lg hover:bg-purple-50 text-[var(--color-text-muted)] hover:text-purple-600 transition text-sm">🔄</button>
                       <button onClick={() => abrirEditar(r)} className="p-1.5 rounded-lg hover:bg-blue-50 text-[var(--color-text-muted)] hover:text-blue-600 transition text-sm">✏️</button>
                       <button onClick={() => toggleAtivo(r)} className={`p-1.5 rounded-lg transition text-sm ${r.ativo ? "hover:bg-amber-50 text-[var(--color-text-muted)] hover:text-amber-600" : "hover:bg-emerald-50 text-[var(--color-text-muted)] hover:text-emerald-600"}`}>{r.ativo ? "⏸" : "▶"}</button>
                       <button onClick={() => handleExcluir(r.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-[var(--color-text-muted)] hover:text-red-500 transition text-sm">🗑️</button>
