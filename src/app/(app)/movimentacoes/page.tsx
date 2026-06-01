@@ -41,8 +41,8 @@ export default function MovimentacoesPage(){
     const inicio=`${ano}-${String(mes+1).padStart(2,"0")}-01`;
     const ultimoDia=new Date(ano,mes+1,0).getDate();
     const fim=`${ano}-${String(mes+1).padStart(2,"0")}-${String(ultimoDia).padStart(2,"0")}`;
-    const{data}=await supabase.from("movimentacoes").select("*").gte("data",inicio).lte("data",fim).order("data",{ascending:false});
-    if(data)setMovs(data as Movimentacao[]);
+    const{data:resultado}=await supabase.from("movimentacoes").select("*").gte("data",inicio).lte("data",fim).order("data",{ascending:false});
+    if(resultado)setMovs(resultado as Movimentacao[]);
   }
 
   useEffect(()=>{carregarMovimentacoes();carregarTodasCategorias();},[mes,ano]);
