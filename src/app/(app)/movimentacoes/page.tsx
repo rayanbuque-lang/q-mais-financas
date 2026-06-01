@@ -63,7 +63,7 @@ export default function MovimentacoesPage(){
   }
 
   function editarMov(m:Movimentacao){
-    setTipo(m.tipo);setData(m.data);setValor(m.valor.toString().replace(".",","));
+    setTipo(m.tipo as "entrada"|"saida");setData(m.data);setValor(m.valor.toString().replace(".",","));
     setCategoriaId(m.categoria_id);setObservacao(m.observacao||"");
     setFormaPagamento(m.forma_pagamento||"");
     setEditandoId(m.id);setShowForm(true);
