@@ -108,12 +108,16 @@ export default function FechamentoCaixaPage() {
       const comprasDoDia = compras.filter(c => c.data === dataStr);
       const totalComprasPrazo = comprasDoDia.reduce((a, c) => a + c.valor, 0);
 
+      const temMovs = movsDoDia.length > 0;
+      const temCP = comprasDoDia.length > 0;
+
       diasDoMes.push({
         data: dataStr, dia: d, semana: diasSemana[dow], semanaLong: diasSemanaLong[dow],
         ehDomingo: dow === 0, movs: movsDoDia, porFP, totalBruto,
-        valorInicial, comprasPrazo: comprasDoDia, totalComprasPrazo,
-        totalDescontos: valorInicial + totalComprasPrazo,
-        totalVendido: totalBruto - valorInicial - totalComprasPrazo,
+        valorInicial,
+        comprasPrazo: comprasDoDia, totalComprasPrazo,
+        totalDescontos: (temMovs || temCP) ? valorInicial + totalComprasPrazo : 0,
+        totalVendido: (temMovs || temCP) ? totalBruto - valorInicial - totalComprasPrazo : 0,
         fechado: fech?.fechado || false, fechamentoId: fech?.id || null,
       });
     }
@@ -228,11 +232,11 @@ export default function FechamentoCaixaPage() {
 
   function fmt(v: number) { return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }); }
 
-  const totalBrutoMes = dias.reduce((a, d) => a + d.totalBruto, 0);
-  const totalDescMes = dias.reduce((a, d) => a + d.totalDescontos, 0);
-  const totalVendidoMes = dias.reduce((a, d) => a + d.totalVendido, 0);
+  const diasComDados = dias.filter(d => d.movs.length > 0 || d.comprasPrazo.length > 0);
+  const totalBrutoMes = diasComDados.reduce((a, d) => a + d.totalBruto, 0);
+  const totalDescMes = diasComDados.reduce((a, d) => a + d.totalDescontos, 0);
+  const totalVendidoMes = diasComDados.reduce((a, d) => a + d.totalVendido, 0);
   const diasFechados = dias.filter(d => d.fechado).length;
-  const diasComDados = dias.filter(d => d.movs.length > 0 || d.comprasPrazo.length > 0).length;
 
   const totaisFP: Record<string, number> = {};
   dias.forEach(d => { Object.entries(d.porFP).forEach(([fp, v]) => { if (fp !== "outros") totaisFP[fp] = (totaisFP[fp] || 0) + v; }); });
@@ -246,23 +250,25 @@ export default function FechamentoCaixaPage() {
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Fechamento de Caixa</h1>
-          <p className="text-[var(--color-text-muted)] text-sm mt-1">Conferência diária — Valor inicial R$ 333 (seg-sáb) / R$ 435 (dom)</p>
+          <p className="text-[var(--color-text-muted)] text-sm mt-1">Conferência diária — R$ 333 (seg-sáb) / R$ 435 (dom)</p>
         </div>
         {loading && <div className="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />}
       </div>
 
+      {/* Navegação mês */}
       <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-4 flex items-center justify-between">
         <button onClick={mesAnterior} className="px-4 py-2 rounded-xl bg-[var(--color-bg)] text-sm font-medium hover:bg-[var(--color-border)] transition">← Anterior</button>
         <div className="text-center"><p className="font-bold text-lg capitalize">{mesesNomes[mes - 1]}</p><p className="text-sm text-[var(--color-text-muted)]">{ano}</p></div>
         <button onClick={mesProximo} className="px-4 py-2 rounded-xl bg-[var(--color-bg)] text-sm font-medium hover:bg-[var(--color-border)] transition">Próximo →</button>
       </div>
 
+      {/* Cards resumo */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
           { l: "Total Bruto", v: fmt(totalBrutoMes), c: "text-blue-600" },
           { l: "Descontos", v: fmt(totalDescMes), c: "text-red-500" },
-          { l: "Total Vendido", v: fmt(totalVendidoMes), c: "text-emerald-600" },
-          { l: "Conferidos", v: `${diasFechados}/${diasComDados}`, c: "text-emerald-600" },
+          { l: "Total Vendido", v: fmt(totalVendidoMes), c: totalVendidoMes >= 0 ? "text-emerald-600" : "text-red-500" },
+          { l: "Conferidos", v: `${diasFechados}/${diasComDados.length}`, c: "text-emerald-600" },
         ].map(c => (
           <div key={c.l} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl p-4 text-center">
             <p className="text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1">{c.l}</p>
@@ -271,6 +277,7 @@ export default function FechamentoCaixaPage() {
         ))}
       </div>
 
+      {/* Totais FP mês */}
       {Object.keys(totaisFP).length > 0 && (
         <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-4">
           <p className="text-sm font-bold mb-3">Totais do Mês por Forma de Pagamento</p>
@@ -289,38 +296,48 @@ export default function FechamentoCaixaPage() {
       {mensagem && <div className="p-3 rounded-xl text-sm font-medium text-center bg-emerald-50 text-emerald-700">{mensagem}</div>}
 
       {/* Grid de dias */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 10 }}>
+      <div className="grid grid-cols-3 sm:grid-cols-5 md:grid-cols-7 gap-2">
         {dias.map(d => {
-          const temDados = d.movs.length > 0 || d.comprasPrazo.length > 0;
+          const temDados = d.movs.length > 0 || d.comprasPrazo.length > 0 || d.fechado;
           const isAberto = diaAberto === d.data;
           return (
-            <div
+            <button
               key={d.data}
-              onClick={() => { if (temDados) setDiaAberto(isAberto ? null : d.data); }}
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setDiaAberto(prev => prev === d.data ? null : d.data);
+              }}
               style={{
-                borderRadius: 14, padding: 14,
+                display: "block", width: "100%", textAlign: "left",
+                borderRadius: 12, padding: "10px 12px",
                 border: `2px solid ${d.fechado ? "#16a34a" : isAberto ? "#3b82f6" : temDados ? "#e5e7eb" : "#f3f4f6"}`,
                 background: d.fechado ? "#f0fdf4" : isAberto ? "#eff6ff" : temDados ? "white" : "#f9fafb",
-                cursor: temDados ? "pointer" : "default",
-                transition: "all 0.2s", opacity: temDados ? 1 : 0.45,
+                cursor: "pointer", transition: "all 0.2s",
+                opacity: temDados ? 1 : 0.45,
               }}
             >
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: temDados ? 8 : 0 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
                 <div>
-                  <span style={{ fontWeight: 800, fontSize: 20 }}>{d.dia}</span>
-                  <span style={{ fontSize: 10, color: d.ehDomingo ? "#dc2626" : "#9ca3af", marginLeft: 4, fontWeight: d.ehDomingo ? 700 : 400 }}>{d.semana}</span>
+                  <span style={{ fontWeight: 800, fontSize: 18, lineHeight: 1 }}>{d.dia}</span>
+                  <span style={{ fontSize: 9, color: d.ehDomingo ? "#dc2626" : "#9ca3af", marginLeft: 3, fontWeight: d.ehDomingo ? 700 : 400 }}>{d.semana}</span>
                 </div>
-                {d.fechado && <span>✅</span>}
+                {d.fechado && <span style={{ fontSize: 12 }}>✅</span>}
               </div>
               {temDados ? (
                 <div>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: d.totalVendido >= 0 ? "#059669" : "#dc2626", marginBottom: 2 }}>{fmt(d.totalVendido)}</div>
-                  <div style={{ fontSize: 9, color: "#9ca3af" }}>{d.movs.length} mov · {d.comprasPrazo.length} compras</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: d.totalVendido >= 0 ? "#059669" : "#dc2626", lineHeight: 1.2 }}>
+                    {fmt(d.totalVendido)}
+                  </div>
+                  <div style={{ fontSize: 8, color: "#9ca3af", marginTop: 2 }}>
+                    {d.movs.length} mov · {d.comprasPrazo.length} cp
+                  </div>
                 </div>
               ) : (
-                <div style={{ textAlign: "center", fontSize: 10, color: "#d1d5db", padding: "8px 0" }}>Sem dados</div>
+                <div style={{ fontSize: 9, color: "#d1d5db", padding: "6px 0" }}>—</div>
               )}
-            </div>
+            </button>
           );
         })}
       </div>
@@ -333,7 +350,12 @@ export default function FechamentoCaixaPage() {
           <div className="p-5 border-b border-[var(--color-border)] flex items-center justify-between flex-wrap gap-3 bg-blue-50">
             <div>
               <h2 className="font-bold text-lg capitalize">{diaDetalhe.semanaLong}, {new Date(diaDetalhe.data + "T12:00:00").toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric" })}</h2>
-              <p className="text-sm text-[var(--color-text-muted)]">Total Vendido: <strong className={diaDetalhe.totalVendido >= 0 ? "text-emerald-600" : "text-red-500"}>{fmt(diaDetalhe.totalVendido)}</strong>{diaDetalhe.fechado && " · ✅ Conferido"}</p>
+              <p className="text-sm text-[var(--color-text-muted)]">
+                Bruto: <strong className="text-blue-600">{fmt(diaDetalhe.totalBruto)}</strong>
+                {" · "}Descontos: <strong className="text-red-500">{fmt(diaDetalhe.totalDescontos)}</strong>
+                {" · "}Vendido: <strong className={diaDetalhe.totalVendido >= 0 ? "text-emerald-600" : "text-red-500"}>{fmt(diaDetalhe.totalVendido)}</strong>
+                {diaDetalhe.fechado && " · ✅ Conferido"}
+              </p>
             </div>
             <div className="flex items-center gap-2">
               {diaDetalhe.fechado ? (
@@ -391,13 +413,15 @@ export default function FechamentoCaixaPage() {
                         </div>
                         <div className="flex items-center gap-2">
                           <span className="font-bold text-sm text-emerald-600">{fmt(m.valor)}</span>
-                          <button onClick={() => iniciarEdicaoMov(m)} className="p-1 rounded hover:bg-blue-50 text-[var(--color-text-muted)] hover:text-blue-600 text-xs opacity-0 group-hover:opacity-100 transition">✏️</button>
+                          <button onClick={(e) => { e.stopPropagation(); iniciarEdicaoMov(m); }} className="p-1 rounded hover:bg-blue-50 text-[var(--color-text-muted)] hover:text-blue-600 text-xs opacity-0 group-hover:opacity-100 transition">✏️</button>
                         </div>
                       </div>
                     );
                   })}
                 </div>
               )}
+
+              {/* Resumo por FP */}
               <div className="mt-4 pt-3 border-t border-[var(--color-border)]">
                 {Object.entries(diaDetalhe.porFP).filter(([fp]) => fp !== "outros").sort((a, b) => b[1] - a[1]).map(([fp, val]) => (
                   <div key={fp} className="flex items-center justify-between py-1">
