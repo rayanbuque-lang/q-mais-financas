@@ -15,7 +15,7 @@ interface CaixaDia {
   id: string; data: string; turnos: number;
   valor_total_vendas: number; cartao: number;
   pix_santander: number; pix_inter: number; rom_card: number;
-  app: number; prefeitura: number; voucher: number;
+  app: number; prefeitura: number;
   compras_prazo: number; dinheiro: number;
   valor_inicial_caixa: number; total: number;
   fechado: boolean; fechado_por: string | null; fechado_em: string | null;
@@ -24,12 +24,12 @@ interface CaixaDia {
 interface CaixaForm {
   valor_total_vendas: string; cartao: string;
   pix_santander: string; pix_inter: string; rom_card: string;
-  app: string; prefeitura: string; voucher: string; compras_prazo: string;
+  app: string; prefeitura: string; compras_prazo: string;
 }
 
 const formVazio: CaixaForm = {
   valor_total_vendas: "", cartao: "", pix_santander: "", pix_inter: "",
-  rom_card: "", app: "", prefeitura: "", voucher: "", compras_prazo: "",
+  rom_card: "", app: "", prefeitura: "", compras_prazo: "",
 };
 
 export default function FechamentoCaixaPage() {
@@ -61,6 +61,15 @@ export default function FechamentoCaixaPage() {
     check();
   }, []);
 
+  async function garantirCategoria(): Promise<string | null> {
+    const nome = "Dinheiro (Fechamento Caixa)";
+    const { data: existente } = await supabase.from("categorias_saida").select("id").eq("nome", nome).limit(1);
+    if (existente && existente.length > 0) return existente[0].id;
+
+    const { data: nova } = await supabase.from("categorias_saida").insert({ nome, ativo: true }).select("id").single();
+    return nova?.id || null;
+  }
+
   async function carregarDados() {
     setLoading(true);
     const inicio = `${ano}-${String(mes).padStart(2, "0")}-01`;
@@ -80,7 +89,7 @@ export default function FechamentoCaixaPage() {
 
   function calcDinheiroTotal(f: CaixaForm, vi: number) {
     const tv = pf(f.valor_total_vendas);
-    const sub = pf(f.cartao) + pf(f.pix_santander) + pf(f.pix_inter) + pf(f.rom_card) + pf(f.app) + pf(f.prefeitura) + pf(f.voucher) + pf(f.compras_prazo);
+    const sub = pf(f.cartao) + pf(f.pix_santander) + pf(f.pix_inter) + pf(f.rom_card) + pf(f.app) + pf(f.prefeitura) + pf(f.compras_prazo);
     const dinheiro = Math.max(tv - sub, 0);
     const total = dinheiro - vi;
     return { dinheiro, total };
@@ -99,7 +108,6 @@ export default function FechamentoCaixaPage() {
       rom_card: r.rom_card ? r.rom_card.toString().replace(".", ",") : "",
       app: r.app ? r.app.toString().replace(".", ",") : "",
       prefeitura: r.prefeitura ? r.prefeitura.toString().replace(".", ",") : "",
-      voucher: r.voucher ? r.voucher.toString().replace(".", ",") : "",
       compras_prazo: r.compras_prazo ? r.compras_prazo.toString().replace(".", ",") : "",
     });
     setTurnos(r.turnos);
@@ -113,7 +121,6 @@ export default function FechamentoCaixaPage() {
 
   function handleDayClick(data: string) {
     const rec = getRecord(data);
-
     if (rec) {
       setDetailData(data);
       setFormFromRecord(rec);
@@ -123,7 +130,6 @@ export default function FechamentoCaixaPage() {
       setDetailData(data);
       setForm({ ...formVazio });
       setDetailRecord(null);
-
       const dow = new Date(data + "T12:00:00").getDay();
       if (dow === 0) {
         setTurnos(1);
@@ -158,18 +164,18 @@ export default function FechamentoCaixaPage() {
       cartao: pf(form.cartao), pix_santander: pf(form.pix_santander),
       pix_inter: pf(form.pix_inter), rom_card: pf(form.rom_card),
       app: pf(form.app), prefeitura: pf(form.prefeitura),
-      voucher: pf(form.voucher), compras_prazo: pf(form.compras_prazo),
+      compras_prazo: pf(form.compras_prazo),
       dinheiro, valor_inicial_caixa: valorInicial, total,
     };
 
     if (detailRecord) {
       await supabase.from("fechamento_caixa").update(dados).eq("id", detailRecord.id);
       setMensagem("Atualizado!");
-      await registrarLog({ acao: "editou", tabela: "fechamento_caixa", registroId: detailRecord.id, dadosNovos: dados });
+      await registrarLog({ acao: "editou", tabela: "fechamento_caixa", registroId: detailRecord.id });
     } else {
       await supabase.from("fechamento_caixa").upsert(dados, { onConflict: "data" });
       setMensagem("Dia salvo!");
-      await registrarLog({ acao: "criou", tabela: "fechamento_caixa", dadosNovos: dados });
+      await registrarLog({ acao: "criou", tabela: "fechamento_caixa" });
     }
     await carregarDados();
     const atualizado = getRecord(detailData);
@@ -178,40 +184,70 @@ export default function FechamentoCaixaPage() {
   }
 
   async function fecharDia() {
-    if (!detailData || !detailRecord) return;
+    if (!detailData) return;
     setLoading(true);
+
     const { dinheiro, total } = calcDinheiroTotal(form, valorInicial);
 
-    await supabase.from("fechamento_caixa").update({
-      dinheiro, total, cartao: pf(form.cartao), pix_santander: pf(form.pix_santander),
-      pix_inter: pf(form.pix_inter), rom_card: pf(form.rom_card), app: pf(form.app),
-      prefeitura: pf(form.prefeitura), voucher: pf(form.voucher),
-      compras_prazo: pf(form.compras_prazo), valor_total_vendas: pf(form.valor_total_vendas),
+    // Salvar todos os valores primeiro
+    const dados = {
+      data: detailData, turnos, valor_total_vendas: pf(form.valor_total_vendas),
+      cartao: pf(form.cartao), pix_santander: pf(form.pix_santander),
+      pix_inter: pf(form.pix_inter), rom_card: pf(form.rom_card),
+      app: pf(form.app), prefeitura: pf(form.prefeitura),
+      compras_prazo: pf(form.compras_prazo),
+      dinheiro, valor_inicial_caixa: valorInicial, total,
       fechado: true, fechado_em: new Date().toISOString(),
-    }).eq("id", detailRecord.id);
+    };
 
-    if (total > 0) {
-      const { data: catDin } = await supabase.from("categorias_saida").select("id").eq("nome", "Dinheiro (Fechamento Caixa)").limit(1);
-      if (catDin && catDin.length > 0) {
-        const existente = await supabase.from("movimentacoes").select("id").eq("data", detailData).eq("categoria_id", catDin[0].id).ilike("observacao", "%Fechamento de Caixa%").limit(1);
-        if (!existente.data || existente.data.length === 0) {
-          await supabase.from("movimentacoes").insert({
-            tipo: "entrada", data: detailData, valor: total,
-            categoria_id: catDin[0].id,
-            observacao: `Fechamento de Caixa ${new Date(detailData + "T12:00:00").toLocaleDateString("pt-BR")}`,
-            forma_pagamento: "dinheiro", revisar: false,
-          });
-        } else {
-          await supabase.from("movimentacoes").update({ valor: total }).eq("id", existente.data[0].id);
-        }
+    await supabase.from("fechamento_caixa").upsert(dados, { onConflict: "data" });
+
+    // Garantir que a categoria existe
+    const catId = await garantirCategoria();
+
+    if (catId) {
+      // Verificar se já existe movimentação para este dia
+      const { data: existente } = await supabase.from("movimentacoes")
+        .select("id, valor")
+        .eq("data", detailData)
+        .eq("categoria_id", catId)
+        .limit(1);
+
+      const valorMov = total > 0 ? total : 0;
+
+      if (existente && existente.length > 0) {
+        // Atualizar existente
+        await supabase.from("movimentacoes").update({
+          valor: valorMov,
+          observacao: `Fechamento de Caixa - ${new Date(detailData + "T12:00:00").toLocaleDateString("pt-BR")}`,
+        }).eq("id", existente[0].id);
+      } else if (valorMov > 0) {
+        // Criar nova
+        await supabase.from("movimentacoes").insert({
+          tipo: "entrada",
+          data: detailData,
+          valor: valorMov,
+          categoria_id: catId,
+          observacao: `Fechamento de Caixa - ${new Date(detailData + "T12:00:00").toLocaleDateString("pt-BR")}`,
+          forma_pagamento: "dinheiro",
+          revisar: false,
+        });
       }
     }
 
-    await registrarLog({ acao: "fechou", tabela: "fechamento_caixa", registroId: detailRecord.id, detalhes: `Dia ${detailData} - Total: ${fmt(total)}` });
-    setMensagem(`Dia fechado! ${fmt(total)} lançado em Movimentações como Dinheiro.`);
+    await registrarLog({
+      acao: "fechou", tabela: "fechamento_caixa",
+      detalhes: `Dia ${detailData} - Bruto: ${fmt(pf(form.valor_total_vendas))} - Dinheiro: ${fmt(dinheiro)} - Total: ${fmt(total)}`,
+    });
+
+    const msg = total > 0
+      ? `Dia fechado! ${fmt(total)} lançado em Movimentações como Dinheiro.`
+      : `Dia fechado! Total ${fmt(total)} — sem valor para lançar em Movimentações.`;
+
     await carregarDados();
     const atualizado = getRecord(detailData);
     if (atualizado) setFormFromRecord(atualizado);
+    setMensagem(msg);
     setLoading(false); setTimeout(() => setMensagem(""), 5000);
   }
 
@@ -221,9 +257,11 @@ export default function FechamentoCaixaPage() {
     }
     setLoading(true);
 
-    const { data: catDin } = await supabase.from("categorias_saida").select("id").eq("nome", "Dinheiro (Fechamento Caixa)").limit(1);
-    if (catDin && catDin.length > 0) {
-      await supabase.from("movimentacoes").delete().eq("data", detailRecord.data).eq("categoria_id", catDin[0].id).ilike("observacao", "%Fechamento de Caixa%");
+    const catId = await garantirCategoria();
+    if (catId) {
+      await supabase.from("movimentacoes").delete()
+        .eq("data", detailRecord.data)
+        .eq("categoria_id", catId);
     }
 
     await supabase.from("fechamento_caixa").update({ fechado: false, fechado_por: null, fechado_em: null }).eq("id", detailRecord.id);
@@ -237,14 +275,14 @@ export default function FechamentoCaixaPage() {
 
   async function excluirDia() {
     if (!detailRecord) return;
-    if (!confirm("Excluir este dia?")) return;
+    if (!confirm("Excluir este dia e sua movimentação?")) return;
     setLoading(true);
 
-    if (detailRecord.fechado) {
-      const { data: catDin } = await supabase.from("categorias_saida").select("id").eq("nome", "Dinheiro (Fechamento Caixa)").limit(1);
-      if (catDin && catDin.length > 0) {
-        await supabase.from("movimentacoes").delete().eq("data", detailRecord.data).eq("categoria_id", catDin[0].id).ilike("observacao", "%Fechamento de Caixa%");
-      }
+    const catId = await garantirCategoria();
+    if (catId && detailRecord.fechado) {
+      await supabase.from("movimentacoes").delete()
+        .eq("data", detailRecord.data)
+        .eq("categoria_id", catId);
     }
     await supabase.from("fechamento_caixa").delete().eq("id", detailRecord.id);
     await registrarLog({ acao: "excluiu", tabela: "fechamento_caixa", registroId: detailRecord.id });
@@ -253,10 +291,8 @@ export default function FechamentoCaixaPage() {
   }
 
   function closeDetail() {
-    setShowDetail(false);
-    setShowShifts(false);
-    setDetailData(null);
-    setDetailRecord(null);
+    setShowDetail(false); setShowShifts(false);
+    setDetailData(null); setDetailRecord(null);
   }
 
   const diasNoMes = new Date(ano, mes, 0).getDate();
@@ -265,11 +301,9 @@ export default function FechamentoCaixaPage() {
   const totalBrutoMes = registros.reduce((a, c) => a + c.valor_total_vendas, 0);
   const diasConferidos = registros.length;
 
-  // Detalhe render
   const detailContent = showDetail && detailData ? (() => {
     const { dinheiro, total } = calcDinheiroTotal(form, valorInicial);
     const dow = new Date(detailData + "T12:00:00").getDay();
-    const ehDomingo = dow === 0;
 
     const campos = [
       { field: "cartao" as const, label: "💳 Cartão", bg: "#eff6ff", border: "#bfdbfe", color: "#1d4ed8" },
@@ -278,13 +312,11 @@ export default function FechamentoCaixaPage() {
       { field: "rom_card" as const, label: "💳 Rom Card", bg: "#f5f3ff", border: "#ddd6fe", color: "#7c3aed" },
       { field: "app" as const, label: "📲 App", bg: "#ecfdf5", border: "#a7f3d0", color: "#059669" },
       { field: "prefeitura" as const, label: "🏛️ Prefeitura", bg: "#ecfeff", border: "#a5f3fc", color: "#0891b2" },
-      { field: "voucher" as const, label: "🎫 Voucher", bg: "#fffbeb", border: "#fde68a", color: "#d97706" },
       { field: "compras_prazo" as const, label: "🛒 Compras à Prazo", bg: "#fef2f2", border: "#fecaca", color: "#dc2626" },
     ];
 
     return (
       <div style={{ animation: "fadeUp 0.3s ease", background: "var(--color-surface)", border: "2px solid #3b82f6", borderRadius: 20, overflow: "hidden" }}>
-
         <div style={{ padding: "16px 20px", background: "#eff6ff", borderBottom: "1px solid #bfdbfe", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
           <div>
             <h2 style={{ fontWeight: 700, fontSize: 16, margin: 0, textTransform: "capitalize" }}>
@@ -306,7 +338,7 @@ export default function FechamentoCaixaPage() {
               style={{ width: "100%", marginTop: 6, padding: "10px 12px", borderRadius: 8, border: "1px solid #7dd3fc", background: "white", fontSize: 18, fontWeight: 700, color: "#0369a1", outline: "none" }} />
           </div>
 
-          {/* Grid de campos */}
+          {/* Grid */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px, 1fr))", gap: 10 }}>
             {campos.map(item => (
               <div key={item.field} style={{ background: item.bg, border: `1px solid ${item.border}`, borderRadius: 12, padding: 12 }}>
@@ -316,22 +348,20 @@ export default function FechamentoCaixaPage() {
               </div>
             ))}
 
-            {/* Dinheiro auto */}
+            {/* Dinheiro */}
             <div style={{ background: "#f0fdf4", border: "2px solid #16a34a", borderRadius: 12, padding: 12 }}>
               <label style={{ fontSize: 10, fontWeight: 700, color: "#16a34a", textTransform: "uppercase" }}>💵 DINHEIRO (auto)</label>
               <div style={{ marginTop: 6, padding: "8px 10px", borderRadius: 8, background: "white", border: "1px solid #bbf7d0", fontSize: 16, fontWeight: 700, color: dinheiro >= 0 ? "#16a34a" : "#dc2626" }}>
                 {fmt(dinheiro)}
               </div>
-              <p style={{ fontSize: 9, color: "#6b7280", margin: "4px 0 0" }}>Vendas - métodos</p>
             </div>
 
-            {/* Valor Inicial */}
+            {/* Caixa Inicial */}
             <div style={{ background: "#fffbeb", border: "2px solid #d97706", borderRadius: 12, padding: 12 }}>
               <label style={{ fontSize: 10, fontWeight: 700, color: "#d97706", textTransform: "uppercase" }}>💰 CAIXA INICIAL</label>
               <div style={{ marginTop: 6, padding: "8px 10px", borderRadius: 8, background: "white", border: "1px solid #fde68a", fontSize: 16, fontWeight: 700, color: "#d97706" }}>
                 - {fmt(valorInicial)}
               </div>
-              <p style={{ fontSize: 9, color: "#6b7280", margin: "4px 0 0" }}>{turnos}T · {ehDomingo ? "Dom" : "Seg-Sáb"}</p>
             </div>
           </div>
 
@@ -386,14 +416,12 @@ export default function FechamentoCaixaPage() {
         {loading && <div className="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />}
       </div>
 
-      {/* Navegação mês */}
       <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-4 flex items-center justify-between">
         <button onClick={mesAnterior} className="px-4 py-2 rounded-xl bg-[var(--color-bg)] text-sm font-medium hover:bg-[var(--color-border)] transition">← Anterior</button>
         <div className="text-center"><p className="font-bold text-lg capitalize">{mesesNomes[mes - 1]}</p><p className="text-sm text-[var(--color-text-muted)]">{ano}</p></div>
         <button onClick={mesProximo} className="px-4 py-2 rounded-xl bg-[var(--color-bg)] text-sm font-medium hover:bg-[var(--color-border)] transition">Próximo →</button>
       </div>
 
-      {/* Resumo */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
           { l: "Total Bruto", v: fmt(totalBrutoMes), c: "text-blue-600" },
@@ -410,7 +438,6 @@ export default function FechamentoCaixaPage() {
 
       {mensagem && <div className="p-3 rounded-xl text-sm font-medium text-center bg-emerald-50 text-emerald-700">{mensagem}</div>}
 
-      {/* Grid de dias */}
       <div className="grid grid-cols-3 sm:grid-cols-5 md:grid-cols-7 gap-2">
         {Array.from({ length: diasNoMes }, (_, i) => i + 1).map(d => {
           const dataStr = `${ano}-${String(mes).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
@@ -447,7 +474,6 @@ export default function FechamentoCaixaPage() {
         })}
       </div>
 
-      {/* Dialog de turnos */}
       {showShifts && detailData && (
         <div style={{ background: "var(--color-surface)", border: "2px solid #d97706", borderRadius: 16, padding: 20, animation: "fadeUp 0.2s ease" }}>
           <p style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>
@@ -473,7 +499,6 @@ export default function FechamentoCaixaPage() {
         </div>
       )}
 
-      {/* Detalhe do dia */}
       {detailContent}
     </div>
   );
