@@ -4,244 +4,359 @@ import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { registrarLog } from "@/lib/audit";
 
-const fpLabels: Record<string, string> = {
-  cartao: "Cartão", pix_santander: "Pix Santander", pix_inter: "Pix Inter",
-  rom_card: "Rom Card", app: "App", prefeitura: "Prefeitura",
-  voucher: "Voucher", dinheiro: "Dinheiro",
-};
-
-const fpIcons: Record<string, string> = {
-  cartao: "💳", pix_santander: "📱", pix_inter: "📱",
-  rom_card: "💳", app: "📲", prefeitura: "🏛️",
-  voucher: "🎫", dinheiro: "💵",
-};
-
-const fpCores: Record<string, string> = {
-  cartao: "#2563eb", pix_santander: "#dc2626", pix_inter: "#f97316",
-  rom_card: "#7c3aed", app: "#059669", prefeitura: "#0891b2",
-  voucher: "#d97706", dinheiro: "#16a34a",
-};
-
 const mesesNomes = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
 const diasSemana = ["Dom","Seg","Ter","Qua","Qui","Sex","Sáb"];
 const diasSemanaLong = ["Domingo","Segunda-feira","Terça-feira","Quarta-feira","Quinta-feira","Sexta-feira","Sábado"];
-const VALOR_INICIAL_SEMANA = 333;
-const VALOR_INICIAL_DOMINGO = 435;
+const VALOR_1T_SEMANA = 333;
+const VALOR_2T_SEMANA = 666;
+const VALOR_1T_DOMINGO = 435;
 
-interface Movimentacao {
-  id: string; tipo: string; data: string; valor: number;
-  categoria_id: string; observacao: string; forma_pagamento: string | null; revisar: boolean;
+interface CaixaDia {
+  id: string; data: string; turnos: number;
+  valor_total_vendas: number; cartao: number;
+  pix_santander: number; pix_inter: number; rom_card: number;
+  app: number; prefeitura: number; voucher: number;
+  compras_prazo: number; dinheiro: number;
+  valor_inicial_caixa: number; total: number;
+  fechado: boolean; fechado_por: string | null; fechado_em: string | null;
 }
 
-interface CompraPrazo {
-  id: string; data: string; descricao: string; valor: number; observacao: string | null;
+interface CaixaForm {
+  valor_total_vendas: string; cartao: string;
+  pix_santander: string; pix_inter: string; rom_card: string;
+  app: string; prefeitura: string; voucher: string; compras_prazo: string;
 }
 
-interface FechamentoInfo {
-  id: string; data: string; fechado: boolean; valor_inicial_caixa: number | null;
-  fechado_por: string | null; fechado_em: string | null;
-}
-
-interface DiaInfo {
-  data: string; dia: number; semana: string; semanaLong: string; ehDomingo: boolean;
-  movs: Movimentacao[]; porFP: Record<string, number>; totalBruto: number;
-  valorInicial: number; comprasPrazo: CompraPrazo[]; totalComprasPrazo: number;
-  totalDescontos: number; totalVendido: number;
-  fechado: boolean; fechamentoId: string | null;
-}
+const formVazio: CaixaForm = {
+  valor_total_vendas: "", cartao: "", pix_santander: "", pix_inter: "",
+  rom_card: "", app: "", prefeitura: "", voucher: "", compras_prazo: "",
+};
 
 export default function FechamentoCaixaPage() {
   const [mes, setMes] = useState(new Date().getMonth() + 1);
   const [ano, setAno] = useState(new Date().getFullYear());
-  const [dias, setDias] = useState<DiaInfo[]>([]);
-  const [diaAberto, setDiaAberto] = useState<string | null>(null);
+  const [caixas, setCaixas] = useState<CaixaDia[]>([]);
   const [loading, setLoading] = useState(false);
   const [mensagem, setMensagem] = useState("");
+  const [isAdmin, setIsAdmin] = useState(false);
 
-  const [editMovId, setEditMovId] = useState<string | null>(null);
-  const [editMovValor, setEditMovValor] = useState("");
-  const [editMovFP, setEditMovFP] = useState("");
-  const [editMovObs, setEditMovObs] = useState("");
-
-  const [editandoInicial, setEditandoInicial] = useState<string | null>(null);
-  const [editInicialValor, setEditInicialValor] = useState("");
-
-  const [addCompraData, setAddCompraData] = useState<string | null>(null);
-  const [novaCompraDesc, setNovaCompraDesc] = useState("");
-  const [novaCompraValor, setNovaCompraValor] = useState("");
-  const [novaCompraObs, setNovaCompraObs] = useState("");
-  const [editCompraId, setEditCompraId] = useState<string | null>(null);
+  const [showShifts, setShowShifts] = useState(false);
+  const [shiftData, setShiftData] = useState<string | null>(null);
+  const [showDetail, setShowDetail] = useState(false);
+  const [detailData, setDetailData] = useState<string | null>(null);
+  const [detailRecord, setDetailRecord] = useState<CaixaDia | null>(null);
+  const [form, setForm] = useState<CaixaForm>({ ...formVazio });
+  const [turnos, setTurnos] = useState(1);
+  const [valorInicial, setValorInicial] = useState(0);
 
   const supabase = createClient();
+
+  useEffect(() => {
+    async function check() {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const { data: p } = await supabase.from("profiles").select("role").eq("id", user.id).single();
+        setIsAdmin(p?.role === "master");
+      }
+    }
+    check();
+  }, []);
 
   async function carregarDados() {
     setLoading(true);
     const inicio = `${ano}-${String(mes).padStart(2, "0")}-01`;
     const ultimoDia = new Date(ano, mes, 0).getDate();
     const fim = `${ano}-${String(mes).padStart(2, "0")}-${String(ultimoDia).padStart(2, "0")}`;
-
-    const [r1, r2, r3] = await Promise.all([
-      supabase.from("movimentacoes").select("*").eq("tipo", "entrada").gte("data", inicio).lte("data", fim).order("data"),
-      supabase.from("fechamento_dia").select("*").gte("data", inicio).lte("data", fim),
-      supabase.from("compras_prazo").select("*").gte("data", inicio).lte("data", fim).order("data"),
-    ]);
-
-    const movs = (r1.data || []) as Movimentacao[];
-    const fechamentos = (r2.data || []) as FechamentoInfo[];
-    const compras = (r3.data || []) as CompraPrazo[];
-
-    const diasDoMes: DiaInfo[] = [];
-    for (let d = 1; d <= ultimoDia; d++) {
-      const dataStr = `${ano}-${String(mes).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-      const dt = new Date(ano, mes - 1, d);
-      const dow = dt.getDay();
-      const movsDoDia = movs.filter(m => m.data === dataStr);
-      const porFP: Record<string, number> = {};
-      let totalBruto = 0;
-      movsDoDia.forEach(m => {
-        const fp = m.forma_pagamento || "outros";
-        porFP[fp] = (porFP[fp] || 0) + m.valor;
-        totalBruto += m.valor;
-      });
-      const fech = fechamentos.find(f => f.data === dataStr);
-      const valorInicial = fech?.valor_inicial_caixa ?? (dow === 0 ? VALOR_INICIAL_DOMINGO : VALOR_INICIAL_SEMANA);
-      const comprasDoDia = compras.filter(c => c.data === dataStr);
-      const totalComprasPrazo = comprasDoDia.reduce((a, c) => a + c.valor, 0);
-
-      const temMovs = movsDoDia.length > 0;
-      const temCP = comprasDoDia.length > 0;
-
-      diasDoMes.push({
-        data: dataStr, dia: d, semana: diasSemana[dow], semanaLong: diasSemanaLong[dow],
-        ehDomingo: dow === 0, movs: movsDoDia, porFP, totalBruto,
-        valorInicial,
-        comprasPrazo: comprasDoDia, totalComprasPrazo,
-        totalDescontos: (temMovs || temCP) ? valorInicial + totalComprasPrazo : 0,
-        totalVendido: (temMovs || temCP) ? totalBruto - valorInicial - totalComprasPrazo : 0,
-        fechado: fech?.fechado || false, fechamentoId: fech?.id || null,
-      });
-    }
-    setDias(diasDoMes);
+    const { data } = await supabase.from("fechamento_caixa").select("*").gte("data", inicio).lte("data", fim).order("data");
+    setCaixas((data || []) as CaixaDia[]);
     setLoading(false);
   }
 
-  useEffect(() => { carregarDados(); }, [mes, ano]);
+  useEffect(() => { carregarDados(); setShowDetail(false); setShowShifts(false); }, [mes, ano]);
 
-  function mesAnterior() { if (mes === 1) { setMes(12); setAno(ano - 1); } else setMes(mes - 1); setDiaAberto(null); }
-  function mesProximo() { if (mes === 12) { setMes(1); setAno(ano + 1); } else setMes(mes + 1); setDiaAberto(null); }
+  function mesAnterior() { if (mes === 1) { setMes(12); setAno(ano - 1); } else setMes(mes - 1); }
+  function mesProximo() { if (mes === 12) { setMes(1); setAno(ano + 1); } else setMes(mes + 1); }
+  function fmt(v: number) { return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }); }
+  function pf(s: string) { return s ? parseFloat(s.replace(",", ".")) : 0; }
 
-  async function garantirFechamento(data: string): Promise<string> {
-    const { data: results } = await supabase.from("fechamento_dia").select("id").eq("data", data).limit(1);
-    if (results && results.length > 0) return results[0].id;
-    const diaInfo = dias.find(d => d.data === data);
-    const { data: novo } = await supabase.from("fechamento_dia").insert({
-      data, fechado: false, valor_inicial_caixa: diaInfo?.valorInicial || VALOR_INICIAL_SEMANA,
-    }).select("id").single();
-    return novo?.id || "";
+  function calcDinheiroTotal(f: CaixaForm, vi: number) {
+    const tv = pf(f.valor_total_vendas);
+    const sub = pf(f.cartao) + pf(f.pix_santander) + pf(f.pix_inter) + pf(f.rom_card) + pf(f.app) + pf(f.prefeitura) + pf(f.voucher) + pf(f.compras_prazo);
+    const dinheiro = Math.max(tv - sub, 0);
+    const total = dinheiro - vi;
+    return { dinheiro, total };
   }
 
-  async function fecharDia(data: string) {
-    const id = await garantirFechamento(data);
-    await supabase.from("fechamento_dia").update({ fechado: true, fechado_em: new Date().toISOString() }).eq("id", id);
-    await registrarLog({ acao: "fechou", tabela: "fechamento_dia", detalhes: `Dia ${data} conferido` });
-    setMensagem("Dia conferido e fechado!");
-    carregarDados(); setTimeout(() => setMensagem(""), 3000);
+  function getRecord(data: string): CaixaDia | undefined {
+    return caixas.find(c => c.data === data);
   }
 
-  async function reabrirDia(data: string) {
-    await supabase.from("fechamento_dia").update({ fechado: false }).eq("data", data);
-    await registrarLog({ acao: "reabriu", tabela: "fechamento_dia", detalhes: `Dia ${data} reaberto` });
-    setMensagem("Dia reaberto!");
-    carregarDados(); setTimeout(() => setMensagem(""), 3000);
+  function setFormFromRecord(r: CaixaDia) {
+    setForm({
+      valor_total_vendas: r.valor_total_vendas ? r.valor_total_vendas.toString().replace(".", ",") : "",
+      cartao: r.cartao ? r.cartao.toString().replace(".", ",") : "",
+      pix_santander: r.pix_santander ? r.pix_santander.toString().replace(".", ",") : "",
+      pix_inter: r.pix_inter ? r.pix_inter.toString().replace(".", ",") : "",
+      rom_card: r.rom_card ? r.rom_card.toString().replace(".", ",") : "",
+      app: r.app ? r.app.toString().replace(".", ",") : "",
+      prefeitura: r.prefeitura ? r.prefeitura.toString().replace(".", ",") : "",
+      voucher: r.voucher ? r.voucher.toString().replace(".", ",") : "",
+      compras_prazo: r.compras_prazo ? r.compras_prazo.toString().replace(".", ",") : "",
+    });
+    setTurnos(r.turnos);
+    setValorInicial(r.valor_inicial_caixa);
+    setDetailRecord(r);
   }
 
-  function iniciarEdicaoMov(m: Movimentacao) {
-    setEditMovId(m.id); setEditMovValor(m.valor.toString().replace(".", ","));
-    setEditMovFP(m.forma_pagamento || ""); setEditMovObs(m.observacao || "");
+  function handleFormChange(field: keyof CaixaForm, value: string) {
+    setForm(prev => ({ ...prev, [field]: value }));
   }
 
-  async function salvarEdicaoMov(m: Movimentacao) {
-    const novoValor = parseFloat(editMovValor.replace(",", "."));
-    await supabase.from("movimentacoes").update({
-      valor: novoValor, forma_pagamento: editMovFP || null, observacao: editMovObs,
-    }).eq("id", m.id);
-    await registrarLog({ acao: "editou", tabela: "movimentacoes", registroId: m.id, dadosAnteriores: { valor: m.valor }, dadosNovos: { valor: novoValor }, detalhes: `R$ ${m.valor.toFixed(2)} → R$ ${novoValor.toFixed(2)}` });
-    setEditMovId(null); setMensagem("Movimentação atualizada!");
-    carregarDados(); setTimeout(() => setMensagem(""), 3000);
+  function getDia(data: string) {
+    return new Date(data + "T12:00:00").getDay();
   }
 
-  function iniciarEdicaoInicial(dia: DiaInfo) {
-    setEditandoInicial(dia.data); setEditInicialValor(dia.valorInicial.toString().replace(".", ","));
+  function getInitialTurnos(data: string) {
+    const dow = getDia(data);
+    if (dow === 0) return [{ label: "1 turno", valor: VALOR_1T_DOMINGO }];
+    return [
+      { label: "1 turno", valor: VALOR_1T_SEMANA },
+      { label: "2 turnos", valor: VALOR_2T_SEMANA },
+    ];
   }
 
-  async function salvarValorInicial(data: string) {
-    const novoValor = parseFloat(editInicialValor.replace(",", "."));
-    const id = await garantirFechamento(data);
-    await supabase.from("fechamento_dia").update({ valor_inicial_caixa: novoValor }).eq("id", id);
-    await registrarLog({ acao: "editou", tabela: "fechamento_dia", detalhes: `Valor inicial ${data}: R$ ${novoValor.toFixed(2)}` });
-    setEditandoInicial(null); setMensagem("Valor inicial atualizado!");
-    carregarDados(); setTimeout(() => setMensagem(""), 3000);
-  }
-
-  async function adicionarCompraPrazo(data: string) {
-    if (!novaCompraDesc || !novaCompraValor) return;
-    const valor = parseFloat(novaCompraValor.replace(",", "."));
-    await supabase.from("compras_prazo").insert({ data, descricao: novaCompraDesc, valor, observacao: novaCompraObs || null });
-    await registrarLog({ acao: "criou", tabela: "compras_prazo", detalhes: `${novaCompraDesc} - R$ ${valor.toFixed(2)} em ${data}` });
-    setAddCompraData(null); setNovaCompraDesc(""); setNovaCompraValor(""); setNovaCompraObs("");
-    setMensagem("Compra à prazo adicionada!");
-    carregarDados(); setTimeout(() => setMensagem(""), 3000);
-  }
-
-  function iniciarEdicaoCompra(c: CompraPrazo) {
-    setEditCompraId(c.id); setNovaCompraDesc(c.descricao);
-    setNovaCompraValor(c.valor.toString().replace(".", ",")); setNovaCompraObs(c.observacao || "");
-  }
-
-  async function salvarEdicaoCompra(c: CompraPrazo) {
-    const valor = parseFloat(novaCompraValor.replace(",", "."));
-    await supabase.from("compras_prazo").update({ descricao: novaCompraDesc, valor, observacao: novaCompraObs || null }).eq("id", c.id);
-    setEditCompraId(null); setMensagem("Compra à prazo atualizada!");
-    carregarDados(); setTimeout(() => setMensagem(""), 3000);
-  }
-
-  async function excluirCompraPrazo(id: string) {
-    if (!confirm("Excluir?")) return;
-    await supabase.from("compras_prazo").delete().eq("id", id);
-    setMensagem("Excluído!"); carregarDados(); setTimeout(() => setMensagem(""), 3000);
-  }
-
-  async function importarComprasPrazo(data: string) {
-    const { data: cat } = await supabase.from("categorias_saida").select("id").eq("nome", "Compras à Prazo").limit(1);
-    if (!cat || cat.length === 0) { setMensagem("Categoria 'Compras à Prazo' não encontrada."); setTimeout(() => setMensagem(""), 3000); return; }
-    const { data: movs } = await supabase.from("movimentacoes").select("*").eq("data", data).eq("categoria_id", cat[0].id);
-    if (!movs || movs.length === 0) { setMensagem("Nenhuma compra à prazo nas movimentações deste dia."); setTimeout(() => setMensagem(""), 3000); return; }
-    const { data: existentes } = await supabase.from("compras_prazo").select("descricao,valor").eq("data", data);
-    const existentesSet = new Set((existentes || []).map(e => `${e.descricao}|${e.valor}`));
-    let importadas = 0;
-    for (const m of movs) {
-      const key = `${m.observacao || "Compra"}|${m.valor}`;
-      if (!existentesSet.has(key)) {
-        await supabase.from("compras_prazo").insert({ data, descricao: m.observacao || "Compra à prazo", valor: m.valor, observacao: "Importado" });
-        importadas++;
+  function handleDayClick(data: string) {
+    const rec = getRecord(data);
+    if (rec) {
+      setDetailData(data);
+      setFormFromRecord(rec);
+      setShowDetail(true);
+    } else {
+      setDetailData(data);
+      setForm({ ...formVazio });
+      setDetailRecord(null);
+      const opcoes = getInitialTurnos(data);
+      if (opcoes.length === 1) {
+        setTurnos(1);
+        setValorInicial(opcoes[0].valor);
+        setShowDetail(true);
+        setShowShifts(false);
+      } else {
+        setShowShifts(true);
+        setShowDetail(false);
       }
     }
-    setMensagem(importadas > 0 ? `${importadas} compra(s) importada(s)!` : "Nenhuma nova para importar.");
-    carregarDados(); setTimeout(() => setMensagem(""), 3000);
+    window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
   }
 
-  function fmt(v: number) { return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }); }
+  function selectShift(t: number, v: number) {
+    setTurnos(t);
+    setValorInicial(v);
+    setShowShifts(false);
+    setShowDetail(true);
+  }
 
-  const diasComDados = dias.filter(d => d.movs.length > 0 || d.comprasPrazo.length > 0);
-  const totalBrutoMes = diasComDados.reduce((a, d) => a + d.totalBruto, 0);
-  const totalDescMes = diasComDados.reduce((a, d) => a + d.totalDescontos, 0);
-  const totalVendidoMes = diasComDados.reduce((a, d) => a + d.totalVendido, 0);
-  const diasFechados = dias.filter(d => d.fechado).length;
+  async function handleSalvar() {
+    if (!detailData) return;
+    setLoading(true);
+    const { dinheiro, total } = calcDinheiroTotal(form, valorInicial);
+    const dados = {
+      data: detailData, turnos, valor_total_vendas: pf(form.valor_total_vendas),
+      cartao: pf(form.cartao), pix_santander: pf(form.pix_santander),
+      pix_inter: pf(form.pix_inter), rom_card: pf(form.rom_card),
+      app: pf(form.app), prefeitura: pf(form.prefeitura),
+      voucher: pf(form.voucher), compras_prazo: pf(form.compras_prazo),
+      dinheiro, valor_inicial_caixa: valorInicial, total,
+    };
 
-  const totaisFP: Record<string, number> = {};
-  dias.forEach(d => { Object.entries(d.porFP).forEach(([fp, v]) => { if (fp !== "outros") totaisFP[fp] = (totaisFP[fp] || 0) + v; }); });
+    if (detailRecord) {
+      await supabase.from("fechamento_caixa").update(dados).eq("id", detailRecord.id);
+      setMensagem("Atualizado!");
+      await registrarLog({ acao: "editou", tabela: "fechamento_caixa", registroId: detailRecord.id, dadosNovos: dados });
+    } else {
+      await supabase.from("fechamento_caixa").upsert(dados, { onConflict: "data" });
+      setMensagem("Dia criado!");
+      await registrarLog({ acao: "criou", tabela: "fechamento_caixa", dadosNovos: dados });
+    }
+    carregarDados(); setLoading(false); setTimeout(() => setMensagem(""), 3000);
+  }
 
-  const diaDetalhe = diaAberto ? dias.find(d => d.data === diaAberto) : null;
+  async function fecharDia() {
+    if (!detailData || !detailRecord) return;
+    setLoading(true);
+    const { dinheiro, total } = calcDinheiroTotal(form, valorInicial);
+    const dataFormatada = new Date(detailData + "T12:00:00").toLocaleDateString("pt-BR");
+
+    const { data: catDinheiro } = await supabase.from("categorias_saida").select("id").eq("nome", "Dinheiro (Fechamento Caixa)").limit(1);
+    if (catDinheiro && catDinheiro.length > 0 && total > 0) {
+      await supabase.from("movimentacoes").insert({
+        tipo: "entrada", data: detailData, valor: total,
+        categoria_id: catDinheiro[0].id,
+        observacao: `Fechamento de Caixa ${dataFormatada} - Dinheiro`,
+        forma_pagamento: "dinheiro", revisar: false,
+      });
+    }
+
+    await supabase.from("fechamento_caixa").update({
+      dinheiro, total, fechado: true, fechado_em: new Date().toISOString(),
+    }).eq("id", detailRecord.id);
+
+    await registrarLog({ acao: "fechou", tabela: "fechamento_caixa", registroId: detailRecord.id, detalhes: `Dia ${dataFormatada} - Total: ${fmt(total)}` });
+    setMensagem(`Dia fechado! ${fmt(total)} lançado em Movimentações.`);
+    carregarDados(); setLoading(false); setTimeout(() => setMensagem(""), 5000);
+  }
+
+  async function reabrirDia() {
+    if (!detailData || !detailRecord || !isAdmin) {
+      setMensagem("Apenas administradores podem reabrir."); setTimeout(() => setMensagem(""), 3000); return;
+    }
+    setLoading(true);
+    const dataFormatada = new Date(detailData + "T12:00:00").toLocaleDateString("pt-BR");
+
+    const { data: catDinheiro } = await supabase.from("categorias_saida").select("id").eq("nome", "Dinheiro (Fechamento Caixa)").limit(1);
+    if (catDinheiro && catDinheiro.length > 0) {
+      await supabase.from("movimentacoes").delete().eq("data", detailData).eq("categoria_id", catDinheiro[0].id).ilike("observacao", "%Fechamento de Caixa%");
+    }
+
+    await supabase.from("fechamento_caixa").update({ fechado: false, fechado_por: null, fechado_em: null }).eq("id", detailRecord.id);
+    await registrarLog({ acao: "reabriu", tabela: "fechamento_caixa", registroId: detailRecord.id, detalhes: `Dia ${dataFormatada}` });
+    setMensagem("Dia reaberto e movimentação removida.");
+    carregarDados(); setLoading(false); setTimeout(() => setMensagem(""), 3000);
+  }
+
+  async function excluirDia() {
+    if (!detailRecord) return;
+    if (!confirm("Excluir este dia?")) return;
+    setLoading(true);
+    const dataFormatada = new Date(detailRecord.data + "T12:00:00").toLocaleDateString("pt-BR");
+
+    if (detailRecord.fechado) {
+      const { data: catDinheiro } = await supabase.from("categorias_saida").select("id").eq("nome", "Dinheiro (Fechamento Caixa)").limit(1);
+      if (catDinheiro && catDinheiro.length > 0) {
+        await supabase.from("movimentacoes").delete().eq("data", detailRecord.data).eq("categoria_id", catDinheiro[0].id).ilike("observacao", "%Fechamento de Caixa%");
+      }
+    }
+    await supabase.from("fechamento_caixa").delete().eq("id", detailRecord.id);
+    await registrarLog({ acao: "excluiu", tabela: "fechamento_caixa", registroId: detailRecord.id, detalhes: `Dia ${dataFormatada}` });
+    setShowDetail(false); setDetailRecord(null); setMensagem("Dia excluído!");
+    carregarDados(); setLoading(false); setTimeout(() => setMensagem(""), 3000);
+  }
+
+  const diasNoMes = new Date(ano, mes, 0).getDate();
+  const registros = caixas.filter(c => c.fechado);
+  const totalVendidoMes = registros.reduce((a, c) => a + c.total, 0);
+  const totalBrutoMes = registros.reduce((a, c) => a + c.valor_total_vendas, 0);
+  const diasConferidos = registros.length;
+
+  const detailForm = showDetail && detailData ? (() => {
+    const tv = pf(form.valor_total_vendas);
+    const { dinheiro, total } = calcDinheiroTotal(form, valorInicial);
+    const dow = getDia(detailData);
+    const ehDomingo = dow === 0;
+
+    return (
+      <div style={{ animation: "fadeUp 0.3s ease", background: "var(--color-surface)", border: "2px solid #3b82f6", borderRadius: 20, overflow: "hidden" }}>
+
+        {/* Header */}
+        <div style={{ padding: "16px 20px", background: "#eff6ff", borderBottom: "1px solid #bfdbfe", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+          <div>
+            <h2 style={{ fontWeight: 700, fontSize: 16, margin: 0, textTransform: "capitalize" }}>
+              {diasSemanaLong[dow]}, {new Date(detailData + "T12:00:00").toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric" })}
+            </h2>
+            <span style={{ fontSize: 11, color: "#6b7280" }}>
+              {turnos} {turnos === 1 ? "turno" : "turnos"} · Caixa inicial: {fmt(valorInicial)}
+              {detailRecord?.fechado && " · ✅ Conferido"}
+            </span>
+          </div>
+          <button onClick={() => { setShowDetail(false); setDetailRecord(null); }} style={{ width: 32, height: 32, borderRadius: 8, border: "none", background: "white", cursor: "pointer", fontSize: 14, color: "#6b7280" }}>✕</button>
+        </div>
+
+        {/* Grid */}
+        <div style={{ padding: 20 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 10 }}>
+
+            {/* TOTAL VENDAS */}
+            <div style={{ gridColumn: "1 / -1", background: "#f0f9ff", border: "2px solid #0ea5e9", borderRadius: 12, padding: 14 }}>
+              <label style={{ fontSize: 11, fontWeight: 700, color: "#0369a1", textTransform: "uppercase", letterSpacing: "0.05em" }}>💰 VALOR TOTAL DE VENDAS DO DIA</label>
+              <input type="text" value={form.valor_total_vendas} onChange={e => handleFormChange("valor_total_vendas", e.target.value)} placeholder="0,00"
+                style={{ width: "100%", marginTop: 6, padding: "10px 12px", borderRadius: 8, border: "1px solid #7dd3fc", background: "white", fontSize: 18, fontWeight: 700, color: "#0369a1", outline: "none" }} />
+            </div>
+
+            {/* Campos de pagamento */}
+            {([
+              { field: "cartao" as const, label: "💳 Cartão", bg: "#eff6ff", border: "#bfdbfe", color: "#1d4ed8" },
+              { field: "pix_santander" as const, label: "📱 Pix Santander", bg: "#fef2f2", border: "#fecaca", color: "#dc2626" },
+              { field: "pix_inter" as const, label: "📱 Pix Inter", bg: "#fff7ed", border: "#fed7aa", color: "#ea580c" },
+              { field: "rom_card" as const, label: "💳 Rom Card", bg: "#f5f3ff", border: "#ddd6fe", color: "#7c3aed" },
+              { field: "app" as const, label: "📲 App", bg: "#ecfdf5", border: "#a7f3d0", color: "#059669" },
+              { field: "prefeitura" as const, label: "🏛️ Prefeitura", bg: "#ecfeff", border: "#a5f3fc", color: "#0891b2" },
+              { field: "voucher" as const, label: "🎫 Voucher", bg: "#fffbeb", border: "#fde68a", color: "#d97706" },
+              { field: "compras_prazo" as const, label: "🛒 Compras à Prazo", bg: "#fef2f2", border: "#fecaca", color: "#dc2626" },
+            ]).map(item => (
+              <div key={item.field} style={{ background: item.bg, border: `1px solid ${item.border}`, borderRadius: 12, padding: 12 }}>
+                <label style={{ fontSize: 10, fontWeight: 700, color: item.color, textTransform: "uppercase", letterSpacing: "0.05em" }}>{item.label}</label>
+                <input type="text" value={form[item.field]} onChange={e => handleFormChange(item.field, e.target.value)} placeholder="0,00"
+                  style={{ width: "100%", marginTop: 4, padding: "8px 10px", borderRadius: 8, border: `1px solid ${item.border}`, background: "white", fontSize: 14, fontWeight: 600, color: item.color, outline: "none" }} />
+              </div>
+            ))}
+
+            {/* DINHEIRO (calculado) */}
+            <div style={{ background: "#f0fdf4", border: "2px solid #16a34a", borderRadius: 12, padding: 12 }}>
+              <label style={{ fontSize: 10, fontWeight: 700, color: "#16a34a", textTransform: "uppercase", letterSpacing: "0.05em" }}>💵 DINHEIRO (auto)</label>
+              <div style={{ marginTop: 6, padding: "8px 10px", borderRadius: 8, background: "white", border: "1px solid #bbf7d0", fontSize: 16, fontWeight: 700, color: dinheiro >= 0 ? "#16a34a" : "#dc2626" }}>
+                {fmt(dinheiro)}
+              </div>
+              <p style={{ fontSize: 9, color: "#6b7280", margin: "4px 0 0" }}>Vendas - métodos - compras</p>
+            </div>
+
+            {/* VALOR INICIAL */}
+            <div style={{ background: "#fffbeb", border: "2px solid #d97706", borderRadius: 12, padding: 12 }}>
+              <label style={{ fontSize: 10, fontWeight: 700, color: "#d97706", textTransform: "uppercase", letterSpacing: "0.05em" }}>💰 VALOR INICIAL DE CAIXA</label>
+              <div style={{ marginTop: 6, padding: "8px 10px", borderRadius: 8, background: "white", border: "1px solid #fde68a", fontSize: 16, fontWeight: 700, color: "#d97706" }}>
+                - {fmt(valorInicial)}
+              </div>
+              <p style={{ fontSize: 9, color: "#6b7280", margin: "4px 0 0" }}>{turnos} turno{turnos > 1 ? "s" : ""} · {ehDomingo ? "Domingo" : "Seg-Sáb"}</p>
+            </div>
+
+            {/* TOTAL */}
+            <div style={{ gridColumn: "1 / -1", background: total >= 0 ? "#ecfdf5" : "#fef2f2", border: `2px solid ${total >= 0 ? "#16a34a" : "#dc2626"}`, borderRadius: 12, padding: 16, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 700, color: total >= 0 ? "#16a34a" : "#dc2626", textTransform: "uppercase", letterSpacing: "0.05em" }}>📊 TOTAL DO DIA</label>
+                <p style={{ fontSize: 9, color: "#6b7280", margin: "2px 0 0" }}>Dinheiro - Caixa Inicial</p>
+              </div>
+              <span style={{ fontSize: 24, fontWeight: 800, color: total >= 0 ? "#16a34a" : "#dc2626" }}>{fmt(total)}</span>
+            </div>
+          </div>
+
+          {/* Botões */}
+          <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
+            <button onClick={handleSalvar} disabled={loading}
+              style={{ flex: 1, minWidth: 120, padding: "12px 20px", borderRadius: 12, border: "none", background: "linear-gradient(135deg, #059669, #10b981)", color: "white", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>
+              {loading ? "Salvando..." : detailRecord ? "💾 Salvar" : "💾 Salvar Dia"}
+            </button>
+            {detailRecord && !detailRecord.fechado && (
+              <button onClick={fecharDia} disabled={loading}
+                style={{ padding: "12px 20px", borderRadius: 12, border: "none", background: "#16a34a", color: "white", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>
+                ✓ Conferir e Fechar
+              </button>
+            )}
+            {detailRecord && detailRecord.fechado && (
+              <button onClick={reabrirDia}
+                style={{ padding: "12px 20px", borderRadius: 12, border: "1px solid #d1d5db", background: "white", color: "#6b7280", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>
+                ↩️ Reabrir {isAdmin ? "" : "(Admin)"}
+              </button>
+            )}
+            {detailRecord && (
+              <button onClick={excluirDia}
+                style={{ padding: "12px 20px", borderRadius: 12, border: "1px solid #fecaca", background: "#fef2f2", color: "#dc2626", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>
+                🗑️ Excluir
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  })() : null;
 
   return (
     <div className="space-y-6">
@@ -250,25 +365,24 @@ export default function FechamentoCaixaPage() {
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Fechamento de Caixa</h1>
-          <p className="text-[var(--color-text-muted)] text-sm mt-1">Conferência diária — R$ 333 (seg-sáb) / R$ 435 (dom)</p>
+          <p className="text-[var(--color-text-muted)] text-sm mt-1">Preencha manualmente cada dia · Dinheiro é calculado automaticamente</p>
         </div>
         {loading && <div className="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />}
       </div>
 
-      {/* Navegação mês */}
       <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-4 flex items-center justify-between">
         <button onClick={mesAnterior} className="px-4 py-2 rounded-xl bg-[var(--color-bg)] text-sm font-medium hover:bg-[var(--color-border)] transition">← Anterior</button>
         <div className="text-center"><p className="font-bold text-lg capitalize">{mesesNomes[mes - 1]}</p><p className="text-sm text-[var(--color-text-muted)]">{ano}</p></div>
         <button onClick={mesProximo} className="px-4 py-2 rounded-xl bg-[var(--color-bg)] text-sm font-medium hover:bg-[var(--color-border)] transition">Próximo →</button>
       </div>
 
-      {/* Cards resumo */}
+      {/* Resumo */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
           { l: "Total Bruto", v: fmt(totalBrutoMes), c: "text-blue-600" },
-          { l: "Descontos", v: fmt(totalDescMes), c: "text-red-500" },
           { l: "Total Vendido", v: fmt(totalVendidoMes), c: totalVendidoMes >= 0 ? "text-emerald-600" : "text-red-500" },
-          { l: "Conferidos", v: `${diasFechados}/${diasComDados.length}`, c: "text-emerald-600" },
+          { l: "Dias Conferidos", v: `${diasConferidos}`, c: "text-emerald-600" },
+          { l: "Dias no Mês", v: `${diasNoMes}`, c: "text-[var(--color-text)]" },
         ].map(c => (
           <div key={c.l} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl p-4 text-center">
             <p className="text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1">{c.l}</p>
@@ -277,288 +391,72 @@ export default function FechamentoCaixaPage() {
         ))}
       </div>
 
-      {/* Totais FP mês */}
-      {Object.keys(totaisFP).length > 0 && (
-        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-4">
-          <p className="text-sm font-bold mb-3">Totais do Mês por Forma de Pagamento</p>
-          <div className="flex flex-wrap gap-3">
-            {Object.entries(totaisFP).sort((a, b) => b[1] - a[1]).map(([fp, val]) => (
-              <div key={fp} className="flex items-center gap-2 px-3 py-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)]">
-                <span>{fpIcons[fp] || "💰"}</span>
-                <span className="text-xs font-medium">{fpLabels[fp] || fp}</span>
-                <span className="text-xs font-bold" style={{ color: fpCores[fp] || "#374151" }}>{fmt(val)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       {mensagem && <div className="p-3 rounded-xl text-sm font-medium text-center bg-emerald-50 text-emerald-700">{mensagem}</div>}
 
       {/* Grid de dias */}
       <div className="grid grid-cols-3 sm:grid-cols-5 md:grid-cols-7 gap-2">
-        {dias.map(d => {
-          const temDados = d.movs.length > 0 || d.comprasPrazo.length > 0 || d.fechado;
-          const isAberto = diaAberto === d.data;
+        {Array.from({ length: diasNoMes }, (_, i) => i + 1).map(d => {
+          const dataStr = `${ano}-${String(mes).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+          const dt = new Date(ano, mes - 1, d);
+          const dow = dt.getDay();
+          const rec = getRecord(dataStr);
+          const isDetail = detailData === dataStr && showDetail;
           return (
-            <button
-              key={d.data}
-              type="button"
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                setDiaAberto(prev => prev === d.data ? null : d.data);
-              }}
+            <button key={d} type="button" onClick={() => handleDayClick(dataStr)}
               style={{
                 display: "block", width: "100%", textAlign: "left",
                 borderRadius: 12, padding: "10px 12px",
-                border: `2px solid ${d.fechado ? "#16a34a" : isAberto ? "#3b82f6" : temDados ? "#e5e7eb" : "#f3f4f6"}`,
-                background: d.fechado ? "#f0fdf4" : isAberto ? "#eff6ff" : temDados ? "white" : "#f9fafb",
+                border: `2px solid ${rec?.fechado ? "#16a34a" : rec ? "#3b82f6" : isDetail ? "#3b82f6" : "#e5e7eb"}`,
+                background: rec?.fechado ? "#f0fdf4" : rec ? "#eff6ff" : isDetail ? "#eff6ff" : "white",
                 cursor: "pointer", transition: "all 0.2s",
-                opacity: temDados ? 1 : 0.45,
-              }}
-            >
+              }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
                 <div>
-                  <span style={{ fontWeight: 800, fontSize: 18, lineHeight: 1 }}>{d.dia}</span>
-                  <span style={{ fontSize: 9, color: d.ehDomingo ? "#dc2626" : "#9ca3af", marginLeft: 3, fontWeight: d.ehDomingo ? 700 : 400 }}>{d.semana}</span>
+                  <span style={{ fontWeight: 800, fontSize: 18, lineHeight: 1 }}>{d}</span>
+                  <span style={{ fontSize: 9, color: dow === 0 ? "#dc2626" : "#9ca3af", marginLeft: 3, fontWeight: dow === 0 ? 700 : 400 }}>{diasSemana[dow]}</span>
                 </div>
-                {d.fechado && <span style={{ fontSize: 12 }}>✅</span>}
+                {rec?.fechado && <span style={{ fontSize: 12 }}>✅</span>}
               </div>
-              {temDados ? (
+              {rec ? (
                 <div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: d.totalVendido >= 0 ? "#059669" : "#dc2626", lineHeight: 1.2 }}>
-                    {fmt(d.totalVendido)}
-                  </div>
-                  <div style={{ fontSize: 8, color: "#9ca3af", marginTop: 2 }}>
-                    {d.movs.length} mov · {d.comprasPrazo.length} cp
-                  </div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: rec.total >= 0 ? "#059669" : "#dc2626", lineHeight: 1.2 }}>{fmt(rec.total)}</div>
+                  <div style={{ fontSize: 8, color: "#9ca3af", marginTop: 2 }}>{rec.turnos}T · {fmt(rec.dinheiro)}</div>
                 </div>
               ) : (
-                <div style={{ fontSize: 9, color: "#d1d5db", padding: "6px 0" }}>—</div>
+                <div style={{ fontSize: 9, color: "#0ea5e9", padding: "6px 0", fontWeight: 600 }}>+ Abrir</div>
               )}
             </button>
           );
         })}
       </div>
 
-      {/* Painel de detalhes */}
-      {diaDetalhe && (
-        <div className="bg-[var(--color-surface)] border-2 border-blue-200 rounded-2xl overflow-hidden" style={{ animation: "fadeUp 0.3s ease" }}>
-
-          {/* Header */}
-          <div className="p-5 border-b border-[var(--color-border)] flex items-center justify-between flex-wrap gap-3 bg-blue-50">
-            <div>
-              <h2 className="font-bold text-lg capitalize">{diaDetalhe.semanaLong}, {new Date(diaDetalhe.data + "T12:00:00").toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric" })}</h2>
-              <p className="text-sm text-[var(--color-text-muted)]">
-                Bruto: <strong className="text-blue-600">{fmt(diaDetalhe.totalBruto)}</strong>
-                {" · "}Descontos: <strong className="text-red-500">{fmt(diaDetalhe.totalDescontos)}</strong>
-                {" · "}Vendido: <strong className={diaDetalhe.totalVendido >= 0 ? "text-emerald-600" : "text-red-500"}>{fmt(diaDetalhe.totalVendido)}</strong>
-                {diaDetalhe.fechado && " · ✅ Conferido"}
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              {diaDetalhe.fechado ? (
-                <button onClick={() => reabrirDia(diaDetalhe.data)} className="px-4 py-2 rounded-lg border border-gray-300 text-sm font-medium hover:bg-gray-50 transition">↩️ Reabrir</button>
-              ) : (
-                <button onClick={() => fecharDia(diaDetalhe.data)} className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 transition">✓ Conferir e Fechar</button>
-              )}
-              <button onClick={() => setDiaAberto(null)} className="w-8 h-8 rounded-lg hover:bg-white flex items-center justify-center text-[var(--color-text-muted)]">✕</button>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-[var(--color-border)]">
-            {/* ENTRADAS */}
-            <div className="p-5">
-              <h3 className="font-bold text-sm mb-3 text-emerald-700">📥 ENTRADAS ({diaDetalhe.movs.length})</h3>
-              {diaDetalhe.movs.length === 0 ? (
-                <p className="text-sm text-[var(--color-text-muted)] py-4 text-center">Nenhuma entrada neste dia.</p>
-              ) : (
-                <div className="space-y-1">
-                  {diaDetalhe.movs.map(m => {
-                    const isEdit = editMovId === m.id;
-                    if (isEdit) return (
-                      <div key={m.id} className="bg-[var(--color-bg)] rounded-xl p-3 border border-blue-200">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <div className="flex-1 min-w-[80px]">
-                            <label className="block text-[10px] font-semibold text-[var(--color-text-muted)] mb-1">VALOR</label>
-                            <input type="text" value={editMovValor} onChange={e => setEditMovValor(e.target.value)} className="w-full px-2 py-1.5 rounded-lg border border-[var(--color-border)] bg-white text-sm focus:outline-none" />
-                          </div>
-                          <div className="flex-1 min-w-[100px]">
-                            <label className="block text-[10px] font-semibold text-[var(--color-text-muted)] mb-1">FORMA</label>
-                            <select value={editMovFP} onChange={e => setEditMovFP(e.target.value)} className="w-full px-2 py-1.5 rounded-lg border border-[var(--color-border)] bg-white text-sm focus:outline-none">
-                              <option value="">Selecione</option>
-                              {Object.entries(fpLabels).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                            </select>
-                          </div>
-                          <div className="flex-1 min-w-[80px]">
-                            <label className="block text-[10px] font-semibold text-[var(--color-text-muted)] mb-1">OBS</label>
-                            <input type="text" value={editMovObs} onChange={e => setEditMovObs(e.target.value)} className="w-full px-2 py-1.5 rounded-lg border border-[var(--color-border)] bg-white text-sm focus:outline-none" />
-                          </div>
-                          <div className="flex gap-1 items-end">
-                            <button onClick={() => salvarEdicaoMov(m)} className="px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-semibold hover:bg-emerald-700">OK</button>
-                            <button onClick={() => setEditMovId(null)} className="px-3 py-1.5 bg-gray-100 text-gray-500 rounded-lg text-xs">✕</button>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                    return (
-                      <div key={m.id} className="flex items-center justify-between py-2 px-3 rounded-xl hover:bg-[var(--color-bg)] transition group">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span>{fpIcons[m.forma_pagamento || ""] || "💰"}</span>
-                          <div className="min-w-0">
-                            <p className="text-sm font-medium">{fpLabels[m.forma_pagamento || ""] || "Sem forma"}</p>
-                            <p className="text-xs text-[var(--color-text-muted)] truncate">{m.observacao || "—"}</p>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-bold text-sm text-emerald-600">{fmt(m.valor)}</span>
-                          <button onClick={(e) => { e.stopPropagation(); iniciarEdicaoMov(m); }} className="p-1 rounded hover:bg-blue-50 text-[var(--color-text-muted)] hover:text-blue-600 text-xs opacity-0 group-hover:opacity-100 transition">✏️</button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              {/* Resumo por FP */}
-              <div className="mt-4 pt-3 border-t border-[var(--color-border)]">
-                {Object.entries(diaDetalhe.porFP).filter(([fp]) => fp !== "outros").sort((a, b) => b[1] - a[1]).map(([fp, val]) => (
-                  <div key={fp} className="flex items-center justify-between py-1">
-                    <span className="text-xs font-medium" style={{ color: fpCores[fp] }}>{fpIcons[fp]} {fpLabels[fp]}</span>
-                    <span className="text-xs font-bold" style={{ color: fpCores[fp] }}>{fmt(val)}</span>
-                  </div>
-                ))}
-                <div className="flex items-center justify-between pt-2 mt-2 border-t border-[var(--color-border)]">
-                  <span className="text-sm font-bold">TOTAL BRUTO</span>
-                  <span className="text-sm font-bold text-blue-600">{fmt(diaDetalhe.totalBruto)}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* DESCONTOS */}
-            <div className="p-5">
-              <h3 className="font-bold text-sm mb-3 text-red-600">📤 DESCONTOS</h3>
-
-              {/* Valor Inicial */}
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-3">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs font-bold text-amber-800">💰 Valor Inicial de Caixa</span>
-                  <span className="text-[10px] text-amber-600 font-medium">{diaDetalhe.ehDomingo ? "Domingo" : "Seg-Sáb"}</span>
-                </div>
-                {editandoInicial === diaDetalhe.data ? (
-                  <div className="flex items-center gap-2">
-                    <input type="text" value={editInicialValor} onChange={e => setEditInicialValor(e.target.value)} className="flex-1 px-3 py-2 rounded-lg border border-amber-300 bg-white text-sm focus:outline-none" />
-                    <button onClick={() => salvarValorInicial(diaDetalhe.data)} className="px-3 py-2 bg-amber-600 text-white rounded-lg text-xs font-semibold">Salvar</button>
-                    <button onClick={() => setEditandoInicial(null)} className="px-3 py-2 bg-white text-gray-500 rounded-lg text-xs border border-gray-300">✕</button>
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-amber-700 text-lg">- {fmt(diaDetalhe.valorInicial)}</span>
-                    <button onClick={() => iniciarEdicaoInicial(diaDetalhe)} className="p-1 rounded hover:bg-amber-100 text-amber-600 text-xs">✏️</button>
-                  </div>
-                )}
-              </div>
-
-              {/* Compras à Prazo */}
-              <div className="bg-red-50 border border-red-200 rounded-xl p-3">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-bold text-red-800">🛒 Compras à Prazo</span>
-                  <div className="flex gap-1">
-                    <button onClick={() => { setAddCompraData(diaDetalhe.data); setNovaCompraDesc(""); setNovaCompraValor(""); setNovaCompraObs(""); }} className="px-2 py-1 bg-red-600 text-white rounded-lg text-[10px] font-semibold hover:bg-red-700">+ Adicionar</button>
-                    <button onClick={() => importarComprasPrazo(diaDetalhe.data)} className="px-2 py-1 bg-white text-red-600 rounded-lg text-[10px] font-semibold border border-red-300 hover:bg-red-50">📥 Importar</button>
-                  </div>
-                </div>
-
-                {diaDetalhe.comprasPrazo.length === 0 && addCompraData !== diaDetalhe.data && (
-                  <p className="text-xs text-red-400 text-center py-3">Nenhuma compra à prazo</p>
-                )}
-
-                <div className="space-y-1">
-                  {diaDetalhe.comprasPrazo.map(c => {
-                    if (editCompraId === c.id) return (
-                      <div key={c.id} className="bg-white rounded-lg p-2 border border-red-200">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <input type="text" value={novaCompraDesc} onChange={e => setNovaCompraDesc(e.target.value)} placeholder="Descrição" className="flex-1 min-w-[80px] px-2 py-1.5 rounded-lg border border-[var(--color-border)] text-xs focus:outline-none" />
-                          <input type="text" value={novaCompraValor} onChange={e => setNovaCompraValor(e.target.value)} placeholder="Valor" className="w-24 px-2 py-1.5 rounded-lg border border-[var(--color-border)] text-xs focus:outline-none" />
-                          <button onClick={() => salvarEdicaoCompra(c)} className="px-2 py-1.5 bg-emerald-600 text-white rounded-lg text-[10px] font-semibold">OK</button>
-                          <button onClick={() => setEditCompraId(null)} className="px-2 py-1.5 bg-gray-100 text-gray-500 rounded-lg text-[10px]">✕</button>
-                        </div>
-                      </div>
-                    );
-                    return (
-                      <div key={c.id} className="flex items-center justify-between py-1.5 px-2 bg-white rounded-lg group">
-                        <div className="min-w-0">
-                          <p className="text-xs font-medium truncate">{c.descricao}</p>
-                          {c.observacao && <p className="text-[10px] text-[var(--color-text-muted)]">{c.observacao}</p>}
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <span className="text-xs font-bold text-red-600">- {fmt(c.valor)}</span>
-                          <button onClick={() => iniciarEdicaoCompra(c)} className="p-1 rounded hover:bg-red-100 text-[var(--color-text-muted)] text-[10px] opacity-0 group-hover:opacity-100 transition">✏️</button>
-                          <button onClick={() => excluirCompraPrazo(c.id)} className="p-1 rounded hover:bg-red-100 text-[var(--color-text-muted)] text-[10px] opacity-0 group-hover:opacity-100 transition">🗑️</button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {addCompraData === diaDetalhe.data && (
-                  <div className="mt-2 bg-white rounded-lg p-3 border border-red-200">
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                      <input type="text" value={novaCompraDesc} onChange={e => setNovaCompraDesc(e.target.value)} placeholder="Descrição" className="px-2 py-1.5 rounded-lg border border-[var(--color-border)] text-xs focus:outline-none" />
-                      <input type="text" value={novaCompraValor} onChange={e => setNovaCompraValor(e.target.value)} placeholder="Valor R$" className="px-2 py-1.5 rounded-lg border border-[var(--color-border)] text-xs focus:outline-none" />
-                      <input type="text" value={novaCompraObs} onChange={e => setNovaCompraObs(e.target.value)} placeholder="Obs (opcional)" className="px-2 py-1.5 rounded-lg border border-[var(--color-border)] text-xs focus:outline-none" />
-                    </div>
-                    <div className="flex gap-2 mt-2">
-                      <button onClick={() => adicionarCompraPrazo(diaDetalhe.data)} className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-[10px] font-semibold hover:bg-red-700">Adicionar</button>
-                      <button onClick={() => setAddCompraData(null)} className="px-3 py-1.5 bg-gray-100 text-gray-500 rounded-lg text-[10px]">Cancelar</button>
-                    </div>
-                  </div>
-                )}
-
-                {diaDetalhe.totalComprasPrazo > 0 && (
-                  <div className="flex items-center justify-between pt-2 mt-2 border-t border-red-200">
-                    <span className="text-xs font-bold text-red-700">Total Compras</span>
-                    <span className="text-xs font-bold text-red-700">- {fmt(diaDetalhe.totalComprasPrazo)}</span>
-                  </div>
-                )}
-              </div>
-
-              <div className="flex items-center justify-between pt-3 mt-3 border-t border-[var(--color-border)]">
-                <span className="text-sm font-bold">TOTAL DESCONTOS</span>
-                <span className="text-sm font-bold text-red-500">- {fmt(diaDetalhe.totalDescontos)}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* RESUMO */}
-          <div className="p-5 border-t-2 border-blue-200 bg-gradient-to-r from-blue-50 to-emerald-50">
-            <div className="flex items-center justify-between flex-wrap gap-4">
-              <div className="flex items-center gap-4 flex-wrap">
-                <div className="text-center">
-                  <p className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase">Bruto</p>
-                  <p className="font-bold text-blue-600">{fmt(diaDetalhe.totalBruto)}</p>
-                </div>
-                <span className="text-xl text-gray-300">-</span>
-                <div className="text-center">
-                  <p className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase">Descontos</p>
-                  <p className="font-bold text-red-500">{fmt(diaDetalhe.totalDescontos)}</p>
-                </div>
-                <span className="text-xl text-gray-300">=</span>
-                <div className="text-center">
-                  <p className="text-[10px] font-semibold uppercase">Total Vendido</p>
-                  <p className={`text-xl font-bold ${diaDetalhe.totalVendido >= 0 ? "text-emerald-600" : "text-red-500"}`}>{fmt(diaDetalhe.totalVendido)}</p>
-                </div>
-              </div>
-              {diaDetalhe.fechado ? (
-                <button onClick={() => reabrirDia(diaDetalhe.data)} className="px-6 py-3 rounded-xl border border-gray-300 text-sm font-medium hover:bg-gray-50 transition">↩️ Reabrir Dia</button>
-              ) : (
-                <button onClick={() => fecharDia(diaDetalhe.data)} className="px-6 py-3 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 transition shadow-md shadow-emerald-200">✓ Conferir e Fechar Dia</button>
-              )}
-            </div>
+      {/* Dialog turnos */}
+      {showShifts && shiftData && (
+        <div style={{ background: "var(--color-surface)", border: "2px solid #d97706", borderRadius: 16, padding: 20, animation: "fadeUp 0.2s ease" }}>
+          <p style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>
+            {new Date(shiftData + "T12:00:00").toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" })} — Quantos turnos de caixa?
+          </p>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button onClick={() => selectShift(1, VALOR_1T_SEMANA)}
+              style={{ flex: 1, minWidth: 140, padding: "14px 16px", borderRadius: 12, border: "2px solid #d97706", background: "#fffbeb", cursor: "pointer", textAlign: "center" }}>
+              <span style={{ fontSize: 20 }}>💰</span>
+              <p style={{ fontWeight: 700, fontSize: 13, margin: "4px 0 0", color: "#92400e" }}>1 Turno</p>
+              <p style={{ fontSize: 11, color: "#d97706" }}>R$ {VALOR_1T_SEMANA.toFixed(2)}</p>
+            </button>
+            <button onClick={() => selectShift(2, VALOR_2T_SEMANA)}
+              style={{ flex: 1, minWidth: 140, padding: "14px 16px", borderRadius: 12, border: "2px solid #d97706", background: "#fffbeb", cursor: "pointer", textAlign: "center" }}>
+              <span style={{ fontSize: 20 }}>💰💰</span>
+              <p style={{ fontWeight: 700, fontSize: 13, margin: "4px 0 0", color: "#92400e" }}>2 Turnos</p>
+              <p style={{ fontSize: 11, color: "#d97706" }}>R$ {VALOR_2T_SEMANA.toFixed(2)}</p>
+            </button>
+            <button onClick={() => { setShowShifts(false); setDetailData(null); }}
+              style={{ padding: "14px 16px", borderRadius: 12, border: "1px solid #d1d5db", background: "white", cursor: "pointer", fontSize: 12, color: "#6b7280" }}>Cancelar</button>
           </div>
         </div>
       )}
+
+      {/* Detalhe do dia */}
+      {detailForm}
     </div>
   );
 }
