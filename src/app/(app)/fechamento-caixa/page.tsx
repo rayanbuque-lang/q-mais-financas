@@ -299,8 +299,8 @@ export default function FechamentoCaixaPage() {
               onClick={() => { if (temDados) setDiaAberto(isAberto ? null : d.data); }}
               style={{
                 borderRadius: 14, padding: 14,
-                border: `2px solid ${d.fehado ? "#16a34a" : isAberto ? "#3b82f6" : temDados ? "#e5e7eb" : "#f3f4f6"}`,
-                background: d.fehado ? "#f0fdf4" : isAberto ? "#eff6ff" : temDados ? "white" : "#f9fafb",
+                border: `2px solid ${d.fechado ? "#16a34a" : isAberto ? "#3b82f6" : temDados ? "#e5e7eb" : "#f3f4f6"}`,
+                background: d.fechado ? "#f0fdf4" : isAberto ? "#eff6ff" : temDados ? "white" : "#f9fafb",
                 cursor: temDados ? "pointer" : "default",
                 transition: "all 0.2s", opacity: temDados ? 1 : 0.45,
               }}
@@ -310,7 +310,7 @@ export default function FechamentoCaixaPage() {
                   <span style={{ fontWeight: 800, fontSize: 20 }}>{d.dia}</span>
                   <span style={{ fontSize: 10, color: d.ehDomingo ? "#dc2626" : "#9ca3af", marginLeft: 4, fontWeight: d.ehDomingo ? 700 : 400 }}>{d.semana}</span>
                 </div>
-                {d.fehado && <span>✅</span>}
+                {d.fechado && <span>✅</span>}
               </div>
               {temDados ? (
                 <div>
