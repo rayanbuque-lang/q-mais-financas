@@ -66,7 +66,94 @@ export default function RecorrentesPage() {
     }
   }
 
-  useEffect(() => { carregarDados(); }, []);
+  useEffect(() => {
+    carregarDados().then(() => {
+      gerarAutomatico();
+    });
+  }, []);
+
+  async function gerarAutomatico() {
+    const supabaseAuto = createClient();
+    const hoje = new Date();
+    const mesAtual = hoje.getMonth();
+    const anoAtual = hoje.getFullYear();
+    const mesesNomesAuto = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
+
+    const { data: ativos } = await supabaseAuto
+      .from("lancamentos_recorrentes")
+      .select("*")
+      .eq("ativo", true);
+
+    if (!ativos || ativos.length === 0) return;
+
+    const inicio = `${anoAtual}-${String(mesAtual + 1).padStart(2, "0")}-01`;
+    const ultimoDia = new Date(anoAtual, mesAtual + 1, 0).getDate();
+    const fim = `${anoAtual}-${String(mesAtual + 1).padStart(2, "0")}-${String(ultimoDia).padStart(2, "0")}`;
+
+    let geradas = 0;
+
+    for (const r of ativos) {
+      const ehContaPagar = r.observacao?.includes("[CONTA_PAGAR]");
+
+      // Verificar se já existe
+      if (ehContaPagar) {
+        const { data: existente } = await supabaseAuto
+          .from("contas_pagar").select("id")
+          .eq("fornecedor", r.descricao)
+          .eq("valor", r.valor)
+          .gte("data_vencimento", inicio)
+          .lte("data_vencimento", fim)
+          .limit(1);
+        if (existente && existente.length > 0) continue;
+      } else {
+        const { data: existente } = await supabaseAuto
+          .from("movimentacoes").select("id")
+          .eq("tipo", r.tipo).eq("valor", r.valor).eq("categoria_id", r.categoria_id)
+          .gte("data", inicio).lte("data", fim).limit(1);
+        if (existente && existente.length > 0) continue;
+      }
+
+      // Verificar período
+      const dataInicioR = new Date(r.data_inicio + "T12:00:00");
+      const dataVenc = new Date(anoAtual, mesAtual, r.dia_vencimento || 1);
+      if (dataVenc < dataInicioR) continue;
+      if (r.data_fim && dataVenc > new Date(r.data_fim + "T12:00:00")) continue;
+      if (r.total_parcelas && r.parcelas_geradas >= r.total_parcelas) continue;
+
+      const dia = Math.min(r.dia_vencimento || 1, ultimoDia);
+      const dataMov = `${anoAtual}-${String(mesAtual + 1).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
+      const obsLimpa = (r.observacao || "").replace("[CONTA_PAGAR] ", "").replace("[CONTA_PAGAR]", "");
+
+      if (ehContaPagar) {
+        const { error } = await supabaseAuto.from("contas_pagar").insert({
+          fornecedor: r.descricao,
+          descricao: obsLimpa || `Recorrente`,
+          valor: r.valor,
+          data_vencimento: dataMov,
+          status: "pendente",
+          categoria_id: r.categoria_id,
+          observacao: `Gerado automaticamente - Recorrente`,
+        });
+        if (!error) {
+          geradas++;
+          await supabaseAuto.from("lancamentos_recorrentes").update({ parcelas_geradas: (r.parcelas_geradas || 0) + 1 }).eq("id", r.id);
+        }
+      } else {
+        const { error } = await supabaseAuto.from("movimentacoes").insert({
+          tipo: r.tipo, data: dataMov, valor: r.valor, categoria_id: r.categoria_id,
+          observacao: `Recorrente: ${r.descricao}${obsLimpa ? ` · ${obsLimpa}` : ""}`, revisar: false,
+        });
+        if (!error) {
+          geradas++;
+          await supabaseAuto.from("lancamentos_recorrentes").update({ parcelas_geradas: (r.parcelas_geradas || 0) + 1 }).eq("id", r.id);
+        }
+      }
+    }
+
+    if (geradas > 0) {
+      carregarDados();
+    }
+  }
 
   useEffect(() => {
     const cats = tipo === "entrada" ? categoriasEntrada : categoriasSaida;
