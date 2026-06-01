@@ -77,7 +77,64 @@ export default function ContasPagarPage() {
     if (r2.data) setCategorias(r2.data);
   }
 
-  useEffect(() => { carregarDados(); }, [mes, ano]);
+  useEffect(() => { carregarDados(); gerarRecorrentes(); }, [mes, ano]);
+
+  async function gerarRecorrentes() {
+    const inicio = `${ano}-${String(mes).padStart(2, "0")}-01`;
+    const ultimoDia = new Date(ano, mes, 0).getDate();
+    const fim = `${ano}-${String(mes).padStart(2, "0")}-${String(ultimoDia).padStart(2, "0")}`;
+
+    // Buscar recorrentes ativos que são contas a pagar
+    const { data: recorrentes } = await supabase
+      .from("lancamentos_recorrentes")
+      .select("*")
+      .eq("ativo", true)
+      .ilike("observacao", "%CONTA_PAGAR%");
+
+    if (!recorrentes || recorrentes.length === 0) return;
+
+    for (const r of recorrentes) {
+      // Verificar se já existe
+      const { data: existente } = await supabase
+        .from("contas_pagar")
+        .select("id")
+        .eq("fornecedor", r.descricao)
+        .eq("valor", r.valor)
+        .gte("data_vencimento", inicio)
+        .lte("data_vencimento", fim)
+        .limit(1);
+
+      if (existente && existente.length > 0) continue;
+
+      // Verificar período
+      const dataInicioR = new Date(r.data_inicio + "T12:00:00");
+      const dataVenc = new Date(ano, mes - 1, r.dia_vencimento || 1);
+      if (dataVenc < dataInicioR) continue;
+      if (r.data_fim && dataVenc > new Date(r.data_fim + "T12:00:00")) continue;
+      if (r.total_parcelas && r.parcelas_geradas >= r.total_parcelas) continue;
+
+      const dia = Math.min(r.dia_vencimento || 1, ultimoDia);
+      const dataVencimento = `${ano}-${String(mes).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
+
+      // Criar conta a pagar
+      await supabase.from("contas_pagar").insert({
+        fornecedor: r.descricao,
+        descricao: "Recorrente mensal",
+        valor: r.valor,
+        data_vencimento: dataVencimento,
+        status: "pendente",
+        categoria_id: r.categoria_id,
+        observacao: "Gerado automaticamente - Recorrente",
+      });
+
+      // Atualizar parcelas
+      await supabase
+        .from("lancamentos_recorrentes")
+        .update({ parcelas_geradas: (r.parcelas_geradas || 0) + 1 })
+        .eq("id", r.id);
+    }
+  }
+
 
   function resetarFormulario() {
     setFornecedor(""); setDescricao(""); setValor(""); setDataVencimento(""); setCategoriaId(""); setObservacao(""); setStatusInicial("pendente"); setDataPagamento(""); setEditandoId(null);

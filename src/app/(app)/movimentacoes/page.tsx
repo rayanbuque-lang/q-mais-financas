@@ -102,7 +102,61 @@ export default function MovimentacoesPage() {
   }
 
   useEffect(()=>{carregarCategorias();},[tipo]);
-  useEffect(()=>{carregarMovimentacoes();carregarTodasCategorias();},[mes,ano]);
+  useEffect(()=>{carregarMovimentacoes();carregarTodasCategorias();gerarRecorrentesMov();},[mes,ano]);
+
+  async function gerarRecorrentesMov() {
+    const supabaseAuto = createClient();
+    const inicio = `${ano}-${String(mes+1).padStart(2,"0")}-01`;
+    const ultimoDia = new Date(ano,mes+1,0).getDate();
+    const fim = `${ano}-${String(mes+1).padStart(2,"0")}-${String(ultimoDia).padStart(2,"0")}`;
+
+    const { data: recorrentes } = await supabaseAuto
+      .from("lancamentos_recorrentes")
+      .select("*")
+      .eq("ativo", true);
+
+    if (!recorrentes || recorrentes.length === 0) return;
+
+    for (const r of recorrentes) {
+      const ehContaPagar = r.observacao?.includes("[CONTA_PAGAR]");
+      if (ehContaPagar) continue;
+
+      const { data: existente } = await supabaseAuto
+        .from("movimentacoes")
+        .select("id")
+        .eq("tipo", r.tipo)
+        .eq("valor", r.valor)
+        .eq("categoria_id", r.categoria_id)
+        .gte("data", inicio)
+        .lte("data", fim)
+        .limit(1);
+
+      if (existente && existente.length > 0) continue;
+
+      const dataInicioR = new Date(r.data_inicio + "T12:00:00");
+      const dataVenc = new Date(ano, mes, r.dia_vencimento || 1);
+      if (dataVenc < dataInicioR) continue;
+      if (r.data_fim && dataVenc > new Date(r.data_fim + "T12:00:00")) continue;
+      if (r.total_parcelas && r.parcelas_geradas >= r.total_parcelas) continue;
+
+      const dia = Math.min(r.dia_vencimento || 1, ultimoDia);
+      const dataMov = `${ano}-${String(mes+1).padStart(2,"0")}-${String(dia).padStart(2,"0")}`;
+
+      await supabaseAuto.from("movimentacoes").insert({
+        tipo: r.tipo,
+        data: dataMov,
+        valor: r.valor,
+        categoria_id: r.categoria_id,
+        observacao: `Recorrente: ${r.descricao}`,
+        revisar: false,
+      });
+
+      await supabaseAuto
+        .from("lancamentos_recorrentes")
+        .update({ parcelas_geradas: (r.parcelas_geradas || 0) + 1 })
+        .eq("id", r.id);
+    }
+  }
 
   // ===== UPLOAD =====
   function parsearValorMonetario(str: string): number {
