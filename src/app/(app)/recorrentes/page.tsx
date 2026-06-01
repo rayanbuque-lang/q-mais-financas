@@ -101,12 +101,12 @@ export default function RecorrentesPage() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  // Função principal: gera TODOS os meses
-  async function gerarTodasInstancias(recorrenteId: string, descricao: string, valor: number, tipo: string, categoriaId: string, diaVenc: number, freq: string, inicio: string, fim: string | null, parcelas: number | null, obs: string) {
-    const ehConta = obs?.includes("[CONTA_PAGAR]");
-    const obsLimpa = (obs || "").replace("[CONTA_PAGAR] ", "").replace("[CONTA_PAGAR]", "");
+  // Gerar todas as instâncias
+  async function gerarTodasInstancias(recorrenteId: string, descricao: string, valor: number, tipo: string, categoriaId: string, diaVenc: number, freq: string, inicio: string, fim: string | null, parcelas: number | null) {
+    const ehConta = criarComo === "conta_pagar";
+    const tag = `[REC:${recorrenteId}]`;
     const dataInicioDate = new Date(inicio + "T12:00:00");
-    const dataFimDate = fim ? new Date(fim + "T12:00:00") : new Date(dataInicioDate.getFullYear() + 2, 11, 31); // 2 anos se sem fim
+    const dataFimDate = fim ? new Date(fim + "T12:00:00") : new Date(dataInicioDate.getFullYear() + 2, 11, 31);
 
     let geradas = 0;
     let maxParcelas = parcelas || 999;
@@ -119,18 +119,19 @@ export default function RecorrentesPage() {
         const ultimoDia = new Date(y, m + 1, 0).getDate();
         const dia = Math.min(diaVenc, ultimoDia);
         const dataVenc = `${y}-${String(m + 1).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
+        const inicioMes = `${y}-${String(m + 1).padStart(2, "0")}-01`;
+        const fimMes = `${y}-${String(m + 1).padStart(2, "0")}-${String(ultimoDia).padStart(2, "0")}`;
 
-        // Verificar se já existe
         if (ehConta) {
-          const { data: ex } = await supabase.from("contas_pagar").select("id").eq("fornecedor", descricao).eq("valor", valor).gte("data_vencimento", `${y}-${String(m + 1).padStart(2, "0")}-01`).lte("data_vencimento", `${y}-${String(m + 1).padStart(2, "0")}-${String(ultimoDia).padStart(2, "0")}`).limit(1);
+          const { data: ex } = await supabase.from("contas_pagar").select("id").ilike("observacao", `%${tag}%`).gte("data_vencimento", inicioMes).lte("data_vencimento", fimMes).limit(1);
           if (!ex || ex.length === 0) {
-            await supabase.from("contas_pagar").insert({ fornecedor: descricao, descricao: obsLimpa || "Recorrente mensal", valor, data_vencimento: dataVenc, status: "pendente", categoria_id: categoriaId, observacao: "Gerado automaticamente - Recorrente" });
+            await supabase.from("contas_pagar").insert({ fornecedor: descricao, descricao: "Recorrente mensal", valor, data_vencimento: dataVenc, status: "pendente", categoria_id: categoriaId, observacao: `Gerado automaticamente ${tag}` });
             geradas++;
           }
         } else {
-          const { data: ex } = await supabase.from("movimentacoes").select("id").eq("tipo", tipo).eq("valor", valor).eq("categoria_id", categoriaId).gte("data", `${y}-${String(m + 1).padStart(2, "0")}-01`).lte("data", `${y}-${String(m + 1).padStart(2, "0")}-${String(ultimoDia).padStart(2, "0")}`).limit(1);
+          const { data: ex } = await supabase.from("movimentacoes").select("id").ilike("observacao", `%${tag}%`).gte("data", inicioMes).lte("data", fimMes).limit(1);
           if (!ex || ex.length === 0) {
-            await supabase.from("movimentacoes").insert({ tipo, data: dataVenc, valor, categoria_id: categoriaId, observacao: `Recorrente: ${descricao}${obsLimpa ? ` · ${obsLimpa}` : ""}`, revisar: false });
+            await supabase.from("movimentacoes").insert({ tipo, data: dataVenc, valor, categoria_id: categoriaId, observacao: `Recorrente: ${descricao} ${tag}`, revisar: false });
             geradas++;
           }
         }
@@ -140,20 +141,16 @@ export default function RecorrentesPage() {
       let current = new Date(dataInicioDate);
       while (current <= dataFimDate && geradas < maxParcelas) {
         const dataVenc = current.toISOString().split("T")[0];
-        const y = current.getFullYear();
-        const m = current.getMonth();
-        const ultimoDia = new Date(y, m + 1, 0).getDate();
-
         if (ehConta) {
-          const { data: ex } = await supabase.from("contas_pagar").select("id").eq("fornecedor", descricao).eq("valor", valor).eq("data_vencimento", dataVenc).limit(1);
+          const { data: ex } = await supabase.from("contas_pagar").select("id").ilike("observacao", `%${tag}%`).eq("data_vencimento", dataVenc).limit(1);
           if (!ex || ex.length === 0) {
-            await supabase.from("contas_pagar").insert({ fornecedor: descricao, descricao: obsLimpa || "Recorrente quinzenal", valor, data_vencimento: dataVenc, status: "pendente", categoria_id: categoriaId, observacao: "Gerado automaticamente - Recorrente" });
+            await supabase.from("contas_pagar").insert({ fornecedor: descricao, descricao: "Recorrente quinzenal", valor, data_vencimento: dataVenc, status: "pendente", categoria_id: categoriaId, observacao: `Gerado automaticamente ${tag}` });
             geradas++;
           }
         } else {
-          const { data: ex } = await supabase.from("movimentacoes").select("id").eq("tipo", tipo).eq("valor", valor).eq("categoria_id", categoriaId).eq("data", dataVenc).limit(1);
+          const { data: ex } = await supabase.from("movimentacoes").select("id").ilike("observacao", `%${tag}%`).eq("data", dataVenc).limit(1);
           if (!ex || ex.length === 0) {
-            await supabase.from("movimentacoes").insert({ tipo, data: dataVenc, valor, categoria_id: categoriaId, observacao: `Recorrente: ${descricao}${obsLimpa ? ` · ${obsLimpa}` : ""}`, revisar: false });
+            await supabase.from("movimentacoes").insert({ tipo, data: dataVenc, valor, categoria_id: categoriaId, observacao: `Recorrente: ${descricao} ${tag}`, revisar: false });
             geradas++;
           }
         }
@@ -163,17 +160,16 @@ export default function RecorrentesPage() {
       let current = new Date(dataInicioDate);
       while (current <= dataFimDate && geradas < maxParcelas) {
         const dataVenc = current.toISOString().split("T")[0];
-
         if (ehConta) {
-          const { data: ex } = await supabase.from("contas_pagar").select("id").eq("fornecedor", descricao).eq("valor", valor).eq("data_vencimento", dataVenc).limit(1);
+          const { data: ex } = await supabase.from("contas_pagar").select("id").ilike("observacao", `%${tag}%`).eq("data_vencimento", dataVenc).limit(1);
           if (!ex || ex.length === 0) {
-            await supabase.from("contas_pagar").insert({ fornecedor: descricao, descricao: obsLimpa || "Recorrente semanal", valor, data_vencimento: dataVenc, status: "pendente", categoria_id: categoriaId, observacao: "Gerado automaticamente - Recorrente" });
+            await supabase.from("contas_pagar").insert({ fornecedor: descricao, descricao: "Recorrente semanal", valor, data_vencimento: dataVenc, status: "pendente", categoria_id: categoriaId, observacao: `Gerado automaticamente ${tag}` });
             geradas++;
           }
         } else {
-          const { data: ex } = await supabase.from("movimentacoes").select("id").eq("tipo", tipo).eq("valor", valor).eq("categoria_id", categoriaId).eq("data", dataVenc).limit(1);
+          const { data: ex } = await supabase.from("movimentacoes").select("id").ilike("observacao", `%${tag}%`).eq("data", dataVenc).limit(1);
           if (!ex || ex.length === 0) {
-            await supabase.from("movimentacoes").insert({ tipo, data: dataVenc, valor, categoria_id: categoriaId, observacao: `Recorrente: ${descricao}${obsLimpa ? ` · ${obsLimpa}` : ""}`, revisar: false });
+            await supabase.from("movimentacoes").insert({ tipo, data: dataVenc, valor, categoria_id: categoriaId, observacao: `Recorrente: ${descricao} ${tag}`, revisar: false });
             geradas++;
           }
         }
@@ -181,15 +177,34 @@ export default function RecorrentesPage() {
       }
     }
 
-    // Atualizar parcelas geradas
     await supabase.from("lancamentos_recorrentes").update({ parcelas_geradas: geradas }).eq("id", recorrenteId);
-
     return geradas;
+  }
+
+  // Deletar recorrente + todas as instâncias
+  async function deletarRecorrenteEInstancias(recorrenteId: string) {
+    const tag = `[REC:${recorrenteId}]`;
+
+    // Deletar contas a pagar geradas
+    const { data: contas } = await supabase.from("contas_pagar").select("id").ilike("observacao", `%${tag}%`);
+    if (contas && contas.length > 0) {
+      await supabase.from("contas_pagar").delete().ilike("observacao", `%${tag}%`);
+    }
+
+    // Deletar movimentações geradas
+    const { data: movs } = await supabase.from("movimentacoes").select("id").ilike("observacao", `%${tag}%`);
+    if (movs && movs.length > 0) {
+      await supabase.from("movimentacoes").delete().ilike("observacao", `%${tag}%`);
+    }
+
+    // Deletar o recorrente
+    await supabase.from("lancamentos_recorrentes").delete().eq("id", recorrenteId);
+
+    return (contas?.length || 0) + (movs?.length || 0);
   }
 
   async function handleSalvar(e: React.FormEvent) {
     e.preventDefault(); setLoading(true); setMensagem("");
-    const obsFinal = `${criarComo === "conta_pagar" ? "[CONTA_PAGAR] " : ""}${observacao}`;
     const val = parseFloat(valor.replace(",", "."));
 
     const dados = {
@@ -197,7 +212,7 @@ export default function RecorrentesPage() {
       categoria_id: categoriaId, dia_vencimento: parseInt(diaVencimento),
       frequencia, data_inicio: dataInicio, data_fim: dataFim || null,
       total_parcelas: totalParcelas ? parseInt(totalParcelas) : null,
-      observacao: obsFinal, ativo: true,
+      observacao: observacao, ativo: true,
     };
 
     let recId = editandoId;
@@ -215,31 +230,35 @@ export default function RecorrentesPage() {
     if (error) {
       setMensagem("Erro ao salvar.");
     } else {
-      // Se é novo, gerar todas as instâncias
       if (!editandoId && recId) {
         const geradas = await gerarTodasInstancias(
           recId, descricao, val,
           criarComo === "conta_pagar" ? "saida" : tipo,
           categoriaId, parseInt(diaVencimento), frequencia,
           dataInicio, dataFim || null,
-          totalParcelas ? parseInt(totalParcelas) : null,
-          obsFinal
+          totalParcelas ? parseInt(totalParcelas) : null
         );
-
-        setMensagem(`Recorrente criado! ${geradas} ${geradas === 1 ? "instância gerada" : "instâncias geradas"} automaticamente.`);
-
-        await registrarLog({
-          acao: "criou", tabela: "lancamentos_recorrentes", registroId: recId,
-          detalhes: `${descricao} - R$ ${val.toFixed(2)} (${freqLabels[frequencia]}) - ${geradas} instâncias`,
-        });
+        setMensagem(`Recorrente criado! ${geradas} ${geradas === 1 ? "instância gerada" : "instâncias geradas"}.`);
+        await registrarLog({ acao: "criou", tabela: "lancamentos_recorrentes", registroId: recId, detalhes: `${descricao} - R$ ${val.toFixed(2)} (${freqLabels[frequencia]}) - ${geradas} instâncias` });
       } else {
         setMensagem("Atualizado!");
         await registrarLog({ acao: "editou", tabela: "lancamentos_recorrentes", registroId: recId || undefined, detalhes: `${descricao}` });
       }
-
       resetarForm(); setShowForm(false); carregarDados();
     }
     setLoading(false); setTimeout(() => setMensagem(""), 5000);
+  }
+
+  async function handleExcluir(r: Recorrente) {
+    const nome = r.descricao;
+    if (!confirm(`Excluir "${nome}" e TODAS as instâncias geradas (Contas a Pagar, Movimentações)?`)) return;
+
+    setLoading(true);
+    const deletadas = await deletarRecorrenteEInstancias(r.id);
+    await registrarLog({ acao: "excluiu", tabela: "lancamentos_recorrentes", registroId: r.id, detalhes: `${nome} + ${deletadas} instâncias` });
+    setMensagem(`"${nome}" e ${deletadas} instâncias excluídos!`);
+    carregarDados();
+    setLoading(false); setTimeout(() => setMensagem(""), 4000);
   }
 
   async function toggleAtivo(r: Recorrente) {
@@ -248,23 +267,14 @@ export default function RecorrentesPage() {
     carregarDados(); setTimeout(() => setMensagem(""), 3000);
   }
 
-  async function handleExcluir(id: string) {
-    if (!confirm("Excluir?")) return;
-    await registrarLog({ acao: "excluiu", tabela: "lancamentos_recorrentes", registroId: id });
-    await supabase.from("lancamentos_recorrentes").delete().eq("id", id);
-    setMensagem("Excluído!"); carregarDados(); setTimeout(() => setMensagem(""), 3000);
-  }
-
-  // Gerar instâncias faltantes (para quando adicionar mês novo)
   async function gerarFaltantes(r: Recorrente) {
     setLoading(true);
-    const ehConta = r.observacao?.includes("[CONTA_PAGAR]");
     const geradas = await gerarTodasInstancias(
       r.id, r.descricao, r.valor, r.tipo, r.categoria_id,
       r.dia_vencimento || 1, r.frequencia, r.data_inicio,
-      r.data_fim || null, r.total_parcelas, r.observacao || ""
+      r.data_fim || null, r.total_parcelas
     );
-    setMensagem(geradas > 0 ? `${geradas} instâncias novas geradas!` : "Nenhuma instância nova necessária.");
+    setMensagem(geradas > 0 ? `${geradas} instâncias novas geradas!` : "Nenhuma nova necessária.");
     setLoading(false); carregarDados(); setTimeout(() => setMensagem(""), 4000);
   }
 
@@ -273,7 +283,7 @@ export default function RecorrentesPage() {
   const totalEntradas = recorrentes.filter((r) => r.ativo && r.tipo === "entrada" && !r.observacao?.includes("[CONTA_PAGAR]")).reduce((a, r) => a + r.valor, 0);
   const totalSaidas = recorrentes.filter((r) => r.ativo && r.tipo === "saida" && !r.observacao?.includes("[CONTA_PAGAR]")).reduce((a, r) => a + r.valor, 0);
   const ativos = recorrentes.filter((r) => r.ativo).length;
-  const contasAPagar = recorrentes.filter((r) => r.ativo && r.observacao?.includes("[CONTA_PAGAR]")).length;
+  const contasAPagar = recorrentes.filter((r) => r.ativo && criarComo === "conta_pagar").length;
 
   return (
     <div className="space-y-6">
@@ -292,7 +302,7 @@ export default function RecorrentesPage() {
           { l: "Entradas Fixas", v: fmt(totalEntradas), c: "text-emerald-600" },
           { l: "Saídas Fixas", v: fmt(totalSaidas), c: "text-red-500" },
           { l: "Ativos", v: `${ativos}`, c: "text-blue-600" },
-          { l: "Contas a Pagar", v: `${contasAPagar}`, c: "text-amber-600" },
+          { l: "Instâncias", v: `${recorrentes.reduce((a, r) => a + r.parcelas_geradas, 0)}`, c: "text-purple-600" },
         ].map((c) => (
           <div key={c.l} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl p-3 text-center">
             <p className="text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1">{c.l}</p>
@@ -308,7 +318,7 @@ export default function RecorrentesPage() {
         <div>
           <p className="text-sm font-semibold text-purple-800">Como funciona</p>
           <p className="text-xs text-purple-700 mt-1">
-            Ao criar um recorrente, o sistema gera <strong>todas as instâncias</strong> de uma vez — para todos os meses. Aparece direto em Movimentações, Contas a Pagar e DRE. Você pode editar o valor individual de cada mês. Se precisar gerar mais meses, clique no botão 🔄.
+            Ao criar, gera <strong>todas as instâncias</strong> de uma vez para todos os meses. Cada instância é independente — você pode editar valores mês a mês. Ao <strong>excluir</strong> o recorrente, <strong>todas as instâncias</strong> são apagadas automaticamente de Contas a Pagar, Movimentações e DRE.
           </p>
         </div>
       </div>
@@ -322,17 +332,16 @@ export default function RecorrentesPage() {
           </div>
 
           <form onSubmit={handleSalvar} className="space-y-4">
-            {/* Criar como */}
             <div>
               <label className="block text-sm font-semibold mb-2 text-[var(--color-text-muted)]">Tipo de lançamento</label>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <button type="button" onClick={() => setCriarComo("movimentacao")} className={`p-4 rounded-xl border-2 text-left transition-all ${criarComo === "movimentacao" ? "border-blue-500 bg-blue-50" : "border-[var(--color-border)] bg-[var(--color-bg)]"}`}>
                   <div className="flex items-center gap-2 mb-1"><span>💰</span><span className="font-bold text-sm">Movimentação</span></div>
-                  <p className="text-xs text-[var(--color-text-muted)]">Entra direto no DRE como entrada ou saída.</p>
+                  <p className="text-xs text-[var(--color-text-muted)]">Entra direto no DRE.</p>
                 </button>
                 <button type="button" onClick={() => { setCriarComo("conta_pagar"); setTipo("saida"); }} className={`p-4 rounded-xl border-2 text-left transition-all ${criarComo === "conta_pagar" ? "border-amber-500 bg-amber-50" : "border-[var(--color-border)] bg-[var(--color-bg)]"}`}>
                   <div className="flex items-center gap-2 mb-1"><span>📋</span><span className="font-bold text-sm">Conta a Pagar</span></div>
-                  <p className="text-xs text-[var(--color-text-muted)]">Cria como boleto pendente. Dá baixa quando pagar.</p>
+                  <p className="text-xs text-[var(--color-text-muted)]">Cria como boleto pendente.</p>
                 </button>
               </div>
             </div>
@@ -386,14 +395,15 @@ export default function RecorrentesPage() {
               </div>
             </div>
 
-            <div>
-              <label className="block text-sm font-semibold mb-2 text-[var(--color-text-muted)]">Data fim (opcional)</label>
-              <input type="date" value={dataFim} onChange={(e) => setDataFim(e.target.value)} className="w-full sm:w-1/3 px-4 py-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none" />
-            </div>
-
-            <div>
-              <label className="block text-sm font-semibold mb-2 text-[var(--color-text-muted)]">Observação</label>
-              <input type="text" value={observacao} onChange={(e) => setObservacao(e.target.value)} placeholder="Informação adicional" className="w-full px-4 py-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none" />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-semibold mb-2 text-[var(--color-text-muted)]">Data fim (opcional)</label>
+                <input type="date" value={dataFim} onChange={(e) => setDataFim(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none" />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold mb-2 text-[var(--color-text-muted)]">Observação</label>
+                <input type="text" value={observacao} onChange={(e) => setObservacao(e.target.value)} placeholder="Informação adicional" className="w-full px-4 py-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none" />
+              </div>
             </div>
 
             <div className="flex gap-3 pt-2">
@@ -414,7 +424,7 @@ export default function RecorrentesPage() {
       ) : (
         <div className="space-y-3">
           {recorrentes.map((r) => {
-            const ehConta = r.observacao?.includes("[CONTA_PAGAR]");
+            const ehConta = r.observacao?.includes("[CONTA_PAGAR]") || criarComo === "conta_pagar";
             return (
               <div key={r.id} className={`bg-[var(--color-surface)] border rounded-2xl p-4 ${r.ativo ? "border-[var(--color-border)]" : "border-gray-200 opacity-50"}`}>
                 <div className="flex items-center justify-between flex-wrap gap-3">
@@ -427,7 +437,7 @@ export default function RecorrentesPage() {
                         <p className="text-sm font-bold truncate">{r.descricao}</p>
                         {ehConta && <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full text-[10px] font-bold">CONTA A PAGAR</span>}
                         {!r.ativo && <span className="px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full text-[10px] font-bold">INATIVO</span>}
-                        <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-[10px] font-bold">{r.parcelas_geradas} geradas</span>
+                        <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-[10px] font-bold">{r.parcelas_geradas} instâncias</span>
                       </div>
                       <p className="text-xs text-[var(--color-text-muted)]">
                         {r.categoria_nome} · {freqLabels[r.frequencia]} · Dia {r.dia_vencimento}
@@ -443,7 +453,7 @@ export default function RecorrentesPage() {
                       <button onClick={() => gerarFaltantes(r)} title="Gerar meses faltantes" className="p-1.5 rounded-lg hover:bg-purple-50 text-[var(--color-text-muted)] hover:text-purple-600 transition text-sm">🔄</button>
                       <button onClick={() => abrirEditar(r)} className="p-1.5 rounded-lg hover:bg-blue-50 text-[var(--color-text-muted)] hover:text-blue-600 transition text-sm">✏️</button>
                       <button onClick={() => toggleAtivo(r)} className={`p-1.5 rounded-lg transition text-sm ${r.ativo ? "hover:bg-amber-50 text-[var(--color-text-muted)] hover:text-amber-600" : "hover:bg-emerald-50 text-[var(--color-text-muted)] hover:text-emerald-600"}`}>{r.ativo ? "⏸" : "▶"}</button>
-                      <button onClick={() => handleExcluir(r.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-[var(--color-text-muted)] hover:text-red-500 transition text-sm">🗑️</button>
+                      <button onClick={() => handleExcluir(r)} className="p-1.5 rounded-lg hover:bg-red-50 text-[var(--color-text-muted)] hover:text-red-500 transition text-sm">🗑️</button>
                     </div>
                   </div>
                 </div>
