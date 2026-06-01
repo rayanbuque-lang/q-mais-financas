@@ -24,6 +24,7 @@ const menuItems = [
   { label: "Máquinas e Contas", href: "/maquinas", icon: "🏦" },
   { label: "Vendas Maquininha", href: "/vendas", icon: "💳" },
   { label: "Categorias", href: "/categorias", icon: "🏷️" },
+  { label: "Fechamento de Caixa", href: "/fechamento-caixa", icon: "🧮" },
   { label: "Fluxo de Caixa", href: "/fluxo-de-caixa", icon: "📈" },
   { label: "DRE", href: "/dre", icon: "📑" },
   { label: "Fechamento Mensal", href: "/fechamento", icon: "🔒" },
