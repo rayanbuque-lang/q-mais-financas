@@ -3,16 +3,10 @@ import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { registrarLog } from "@/lib/audit";
 
-interface Movimentacao { id: string; tipo: string; data: string; valor: number; categoria_id: string; observacao: string; revisar: boolean; forma_pagamento: string | null; }
+interface Movimentacao { id: string; tipo: string; data: string; valor: number; categoria_id: string; observacao: string; revisar: boolean; }
 interface Cat { id: string; nome: string; }
 interface Item { id: string; movimentacao_id: string; valor: number; }
 const mesesNomes = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
-
-const catIcons: Record<string, string> = {
-  cartao: "💳", pix_santander: "📱", pix_inter: "📱",
-  rom_card: "💳", app: "📲", prefeitura: "🏛️",
-  dinheiro: "💵", voucher: "🎫",
-};
 
 export default function MovimentacoesPage() {
   const [movs, setMovs] = useState<Movimentacao[]>([]);
@@ -33,18 +27,16 @@ export default function MovimentacoesPage() {
   const [observacao, setObservacao] = useState("");
   const [editandoId, setEditandoId] = useState<string | null>(null);
 
-  // Somatória
   const [showSomatoria, setShowSomatoria] = useState(false);
   const [itensTemp, setItensTemp] = useState<number[]>([]);
   const [itemInput, setItemInput] = useState("");
 
-  // Detalhe expandido
   const [detalheId, setDetalheId] = useState<string | null>(null);
 
   const supabase = createClient();
   const cats = tipo === "entrada" ? catEntrada : catSaida;
 
-  async function carregarTodasCategorias() {
+  async function carregarCategorias() {
     const [r1, r2] = await Promise.all([
       supabase.from("categorias_entrada").select("id,nome").eq("ativo", true).order("nome"),
       supabase.from("categorias_saida").select("id,nome").eq("ativo", true).order("nome"),
@@ -61,7 +53,6 @@ export default function MovimentacoesPage() {
     if (!resultado) return;
     setMovs(resultado as Movimentacao[]);
 
-    // Carregar itens de todas as movimentações
     const ids = resultado.map((m: Movimentacao) => m.id);
     if (ids.length > 0) {
       const { data: itens } = await supabase.from("movimentacao_itens").select("*").in("movimentacao_id", ids);
@@ -78,7 +69,7 @@ export default function MovimentacoesPage() {
     }
   }
 
-  useEffect(() => { carregarMovimentacoes(); carregarTodasCategorias(); }, [mes, ano]);
+  useEffect(() => { carregarMovimentacoes(); carregarCategorias(); }, [mes, ano]);
 
   useEffect(() => {
     const c = tipo === "entrada" ? catEntrada : catSaida;
@@ -103,90 +94,111 @@ export default function MovimentacoesPage() {
     setTipo(m.tipo as "entrada" | "saida"); setData(m.data);
     setCategoriaId(m.categoria_id); setObservacao(m.observacao || "");
     setEditandoId(m.id);
-    // Se tem itens, usar somatória
     const itens = itensPorMov[m.id];
     if (itens && itens.length > 0) {
       setShowSomatoria(true);
       setItensTemp(itens.map(i => i.valor));
-      setValor(itens.reduce((a, i) => a + i.valor, 0).toString().replace(".", ","));
+      setValor(itens.reduce((a, i) => a + i.valor, 0).toFixed(2).replace(".", ","));
     } else {
       setShowSomatoria(false);
       setItensTemp([]);
-      setValor(m.valor.toString().replace(".", ","));
+      setValor(m.valor.toFixed(2).replace(".", ","));
     }
     setShowForm(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
+  // Aceita "15+30+15" ou "15" ou "15,50+22+10"
   function addItem() {
-    const v = parseFloat(itemInput.replace(",", "."));
-    if (isNaN(v) || v <= 0) return;
-    setItensTemp(prev => [...prev, v]);
+    const limpo = itemInput.replace(/\s/g, "");
+    if (!limpo) return;
+
+    const novos: number[] = [];
+
+    // Se tem + ou -, é uma expressão
+    if (limpo.includes("+") || (limpo.includes("-") && limpo.indexOf("-") > 0)) {
+      const partes = limpo.split("+").filter(Boolean);
+      for (const p of partes) {
+        const subPartes = p.split("-").filter(Boolean);
+        // Simplificação: tratar tudo como positivo
+        for (const sp of subPartes) {
+          const v = parseFloat(sp.replace(",", "."));
+          if (!isNaN(v) && v > 0) novos.push(v);
+        }
+      }
+    } else {
+      const v = parseFloat(limpo.replace(",", "."));
+      if (!isNaN(v) && v > 0) novos.push(v);
+    }
+
+    if (novos.length === 0) return;
+
+    const atualizados = [...itensTemp, ...novos];
+    setItensTemp(atualizados);
+    setValor(atualizados.reduce((a, b) => a + b, 0).toFixed(2).replace(".", ","));
     setItemInput("");
-    // Atualizar total
-    const novoTotal = [...itensTemp, v].reduce((a, b) => a + b, 0);
-    setValor(novoTotal.toFixed(2).replace(".", ","));
   }
 
   function removeItem(index: number) {
     const novos = itensTemp.filter((_, i) => i !== index);
     setItensTemp(novos);
-    const novoTotal = novos.reduce((a, b) => a + b, 0);
-    setValor(novoTotal > 0 ? novoTotal.toFixed(2).replace(".", ",") : "");
-  }
-
-  function toggleSomatoria() {
-    if (!showSomatoria) {
-      setShowSomatoria(true);
-      if (itensTemp.length === 0 && valor) {
-        const v = parseFloat(valor.replace(",", "."));
-        if (!isNaN(v) && v > 0) setItensTemp([v]);
-      }
-    } else {
-      setShowSomatoria(false);
-      if (itensTemp.length > 0) {
-        const total = itensTemp.reduce((a, b) => a + b, 0);
-        setValor(total.toFixed(2).replace(".", ","));
-      }
-    }
+    setValor(novos.length > 0 ? novos.reduce((a, b) => a + b, 0).toFixed(2).replace(".", ",") : "");
   }
 
   async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault(); setLoading(true); setMensagem("");
-    const valorNum = parseFloat(valor.replace(",", "."));
-    const dados = { tipo, data, valor: valorNum, categoria_id: categoriaId, observacao, forma_pagamento: null, revisar: false };
+    e.preventDefault();
+    setLoading(true);
+    setMensagem("");
 
+    const valorNum = itensTemp.length > 0
+      ? itensTemp.reduce((a, b) => a + b, 0)
+      : parseFloat(valor.replace(",", "."));
+
+    if (isNaN(valorNum) || valorNum <= 0) {
+      setMensagem("Informe um valor válido.");
+      setLoading(false);
+      setTimeout(() => setMensagem(""), 3000);
+      return;
+    }
+
+    const dados = { tipo, data, valor: valorNum, categoria_id: categoriaId, observacao, forma_pagamento: null, revisar: false };
     let movId = editandoId;
     let error;
 
     if (editandoId) {
       const r = await supabase.from("movimentacoes").update(dados).eq("id", editandoId);
       error = r.error;
-      if (!error) await registrarLog({ acao: "editou", tabela: "movimentacoes", registroId: editandoId, detalhes: `R$ ${valorNum.toFixed(2)}` });
     } else {
       const r = await supabase.from("movimentacoes").insert(dados).select("id").single();
       error = r.error;
       if (r.data) movId = r.data.id;
-      if (!error) await registrarLog({ acao: "criou", tabela: "movimentacoes", detalhes: `R$ ${valorNum.toFixed(2)}` });
     }
 
-    // Salvar itens da somatória
-    if (!error && movId && showSomatoria && itensTemp.length > 0) {
-      // Deletar itens antigos se editando
+    // Salvar itens individuais
+    if (!error && movId && itensTemp.length > 0) {
       if (editandoId) {
         await supabase.from("movimentacao_itens").delete().eq("movimentacao_id", editandoId);
       }
-      // Inserir novos itens
       const novosItens = itensTemp.map(v => ({ movimentacao_id: movId, valor: v }));
-      await supabase.from("movimentacao_itens").insert(novosItens);
+      const { error: errItens } = await supabase.from("movimentacao_itens").insert(novosItens);
+      if (errItens) console.error("Erro ao salvar itens:", errItens);
     }
 
-    if (error) setMensagem("Erro ao salvar.");
-    else {
-      setMensagem(editandoId ? "Atualizado!" : "Salvo!");
-      resetForm(); setShowForm(false); carregarMovimentacoes();
+    if (!error && editandoId && itensTemp.length === 0) {
+      await supabase.from("movimentacao_itens").delete().eq("movimentacao_id", editandoId);
     }
-    setLoading(false); setTimeout(() => setMensagem(""), 3000);
+
+    if (error) {
+      setMensagem("Erro ao salvar.");
+    } else {
+      setMensagem(editandoId ? "Atualizado!" : "Salvo!");
+      await registrarLog({ acao: editandoId ? "editou" : "criou", tabela: "movimentacoes", registroId: movId || undefined, detalhes: `R$ ${valorNum.toFixed(2)}${itensTemp.length > 0 ? ` (${itensTemp.length} valores)` : ""}` });
+      resetForm();
+      setShowForm(false);
+      carregarMovimentacoes();
+    }
+    setLoading(false);
+    setTimeout(() => setMensagem(""), 3000);
   }
 
   async function excluirMov(id: string) {
@@ -194,7 +206,9 @@ export default function MovimentacoesPage() {
     await supabase.from("movimentacao_itens").delete().eq("movimentacao_id", id);
     await supabase.from("movimentacoes").delete().eq("id", id);
     await registrarLog({ acao: "excluiu", tabela: "movimentacoes", registroId: id });
-    setMensagem("Excluído!"); carregarMovimentacoes(); setTimeout(() => setMensagem(""), 3000);
+    setMensagem("Excluído!");
+    carregarMovimentacoes();
+    setTimeout(() => setMensagem(""), 3000);
   }
 
   function fmt(v: number) { return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }); }
@@ -202,36 +216,33 @@ export default function MovimentacoesPage() {
   function mesProximo() { if (mes === 11) { setMes(0); setAno(ano + 1); } else setMes(mes + 1); }
 
   function getCategoriaNome(id: string) {
-    const allCats = [...catEntrada, ...catSaida];
-    return allCats.find(c => c.id === id)?.nome || "Sem categoria";
+    return [...catEntrada, ...catSaida].find(c => c.id === id)?.nome || "Sem categoria";
   }
 
   function getCatIcon(nome: string): string {
-    const lower = nome.toLowerCase();
-    for (const [key, icon] of Object.entries(catIcons)) {
-      if (lower.includes(key.replace("_", " ")) || lower.includes(key.replace("_", ""))) return icon;
-    }
-    if (lower.includes("pix")) return "📱";
-    if (lower.includes("cart")) return "💳";
-    if (lower.includes("dinh")) return "💵";
-    if (lower.includes("app")) return "📲";
-    if (lower.includes("pref")) return "🏛️";
-    if (lower.includes("rom")) return "💳";
-    if (lower.includes("vend")) return "🛒";
-    if (lower.includes("serv")) return "🔧";
-    if (lower.includes("dinheiro (fechamento")) return "💵";
-    return tipo === "entrada" ? "▲" : "▼";
+    const n = nome.toLowerCase();
+    if (n.includes("pix") && n.includes("santander")) return "📱";
+    if (n.includes("pix") && n.includes("inter")) return "📱";
+    if (n.includes("pix")) return "📱";
+    if (n.includes("cart")) return "💳";
+    if (n.includes("rom")) return "💳";
+    if (n.includes("dinh")) return "💵";
+    if (n.includes("app")) return "📲";
+    if (n.includes("pref")) return "🏛️";
+    if (n.includes("vouch")) return "🎫";
+    if (n.includes("vend")) return "🛒";
+    if (n.includes("serv")) return "🔧";
+    return "💰";
   }
 
-  // Filtro de busca
   const movsFiltrados = movs.filter(m => {
     if (!busca) return true;
     const termo = busca.toLowerCase();
-    const nomeCategoria = getCategoriaNome(m.categoria_id).toLowerCase();
+    const nome = getCategoriaNome(m.categoria_id).toLowerCase();
     const valorStr = m.valor.toFixed(2);
     const dataFmt = new Date(m.data + "T12:00:00").toLocaleDateString("pt-BR");
     const obs = (m.observacao || "").toLowerCase();
-    return nomeCategoria.includes(termo) || valorStr.includes(termo) || dataFmt.includes(termo) || obs.includes(termo) || m.data.includes(termo);
+    return nome.includes(termo) || valorStr.includes(termo) || dataFmt.includes(termo) || obs.includes(termo) || m.data.includes(termo);
   });
 
   const entradas = movsFiltrados.filter(m => m.tipo === "entrada");
@@ -239,6 +250,8 @@ export default function MovimentacoesPage() {
   const totalEntradas = entradas.reduce((a, m) => a + m.valor, 0);
   const totalSaidas = saidas.reduce((a, m) => a + m.valor, 0);
   const saldo = totalEntradas - totalSaidas;
+
+  const totalSomatoria = itensTemp.reduce((a, b) => a + b, 0);
 
   return (
     <div className="space-y-6">
@@ -252,7 +265,7 @@ export default function MovimentacoesPage() {
         </button>
       </div>
 
-      {/* Navegação mês */}
+      {/* Mês */}
       <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-4 flex items-center justify-between">
         <button onClick={mesAnterior} className="px-4 py-2 rounded-xl bg-[var(--color-bg)] text-sm font-medium hover:bg-[var(--color-border)] transition">← Anterior</button>
         <div className="text-center"><p className="font-bold capitalize">{mesesNomes[mes]}</p><p className="text-sm text-[var(--color-text-muted)]">{ano}</p></div>
@@ -270,7 +283,7 @@ export default function MovimentacoesPage() {
         {busca && <p className="text-xs text-[var(--color-text-muted)] mt-2">{movsFiltrados.length} resultado{movsFiltrados.length !== 1 ? "s" : ""}</p>}
       </div>
 
-      {/* Cards resumo */}
+      {/* Cards */}
       <div className="grid grid-cols-3 gap-3">
         {[{ l: "Entradas", v: fmt(totalEntradas), c: "text-emerald-600" }, { l: "Saídas", v: fmt(totalSaidas), c: "text-red-500" }, { l: "Saldo", v: fmt(saldo), c: saldo >= 0 ? "text-emerald-600" : "text-red-500" }].map(c => (
           <div key={c.l} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl p-4 text-center">
@@ -280,20 +293,17 @@ export default function MovimentacoesPage() {
         ))}
       </div>
 
-      {/* Totais por Forma de Pagamento */}
+      {/* Totais por categoria */}
       {entradas.length > 0 && (() => {
         const fpTotals: Record<string, number> = {};
-        entradas.forEach(m => {
-          const nome = getCategoriaNome(m.categoria_id);
-          fpTotals[nome] = (fpTotals[nome] || 0) + m.valor;
-        });
-        const fpAtivos = Object.entries(fpTotals).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
-        if (fpAtivos.length === 0) return null;
+        entradas.forEach(m => { const n = getCategoriaNome(m.categoria_id); fpTotals[n] = (fpTotals[n] || 0) + m.valor; });
+        const ativos = Object.entries(fpTotals).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+        if (ativos.length === 0) return null;
         return (
           <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-4">
             <p className="text-sm font-bold mb-3">Entradas por Categoria</p>
             <div className="flex flex-wrap gap-3">
-              {fpAtivos.map(([nome, val]) => (
+              {ativos.map(([nome, val]) => (
                 <div key={nome} className="flex items-center gap-2 px-3 py-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)]">
                   <span>{getCatIcon(nome)}</span>
                   <span className="text-xs font-medium">{nome}</span>
@@ -315,7 +325,6 @@ export default function MovimentacoesPage() {
             <button onClick={() => { setShowForm(false); resetForm(); }} className="w-8 h-8 rounded-lg hover:bg-[var(--color-bg)] flex items-center justify-center text-[var(--color-text-muted)]">✕</button>
           </div>
           <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Tipo */}
             <div className="flex gap-3">
               <button type="button" onClick={() => { setTipo("entrada"); const c = catEntrada; if (c.length > 0) setCategoriaId(c[0].id); }}
                 className={`flex-1 py-3 rounded-xl font-semibold text-sm transition-all ${tipo === "entrada" ? "bg-emerald-600 text-white shadow-md" : "bg-[var(--color-bg)] text-[var(--color-text-muted)] border border-[var(--color-border)]"}`}>▲ Entrada</button>
@@ -323,24 +332,20 @@ export default function MovimentacoesPage() {
                 className={`flex-1 py-3 rounded-xl font-semibold text-sm transition-all ${tipo === "saida" ? "bg-red-500 text-white shadow-md" : "bg-[var(--color-bg)] text-[var(--color-text-muted)] border border-[var(--color-border)]"}`}>▼ Saída</button>
             </div>
 
-            {/* Data + Categoria */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-semibold mb-1 text-[var(--color-text-muted)]">Data</label>
-                <input type="date" value={data} onChange={e => setData(e.target.value)} required className="w-full px-3 py-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm" />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold mb-1 text-[var(--color-text-muted)]">Categoria</label>
-                <div className="flex flex-wrap gap-2 p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] min-h-[44px]">
-                  {cats.map(c => (
-                    <button key={c.id} type="button" onClick={() => setCategoriaId(c.id)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 ${categoriaId === c.id ? "bg-emerald-100 text-emerald-700 border border-emerald-300 shadow-sm" : "bg-[var(--color-bg)] text-[var(--color-text-muted)] border border-transparent hover:border-[var(--color-border)]"}`}>
-                      <span>{getCatIcon(c.nome)}</span>
-                      {c.nome}
-                    </button>
-                  ))}
-                </div>
-              </div>
+            {/* Data */}
+            <div>
+              <label className="block text-xs font-semibold mb-1 text-[var(--color-text-muted)]">Data</label>
+              <input type="date" value={data} onChange={e => setData(e.target.value)} required
+                className="w-full px-3 py-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm" />
+            </div>
+
+            {/* Categoria - SELECT */}
+            <div>
+              <label className="block text-xs font-semibold mb-1 text-[var(--color-text-muted)]">Categoria</label>
+              <select value={categoriaId} onChange={e => setCategoriaId(e.target.value)} required
+                className="w-full px-3 py-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm">
+                {cats.map(c => <option key={c.id} value={c.id}>{getCatIcon(c.nome)} {c.nome}</option>)}
+              </select>
             </div>
 
             {/* Valor */}
@@ -351,10 +356,10 @@ export default function MovimentacoesPage() {
             </div>
 
             {/* Somatória */}
-            <div className="border border-dashed border-[var(--color-border)] rounded-xl p-4">
+            <div style={{ border: "1px dashed #d1d5db", borderRadius: 12, padding: 16 }}>
               <div className="flex items-center justify-between mb-3">
-                <span className="text-xs font-semibold text-[var(--color-text-muted)]">📐 Adicionar somatória de valores</span>
-                <button type="button" onClick={toggleSomatoria}
+                <span className="text-xs font-semibold text-[var(--color-text-muted)]">📐 Somatória de valores (opcional)</span>
+                <button type="button" onClick={() => setShowSomatoria(!showSomatoria)}
                   className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${showSomatoria ? "bg-blue-100 text-blue-700 border border-blue-300" : "bg-[var(--color-bg)] text-[var(--color-text-muted)] border border-[var(--color-border)]"}`}>
                   {showSomatoria ? "✕ Fechar" : "+ Abrir"}
                 </button>
@@ -362,28 +367,28 @@ export default function MovimentacoesPage() {
 
               {showSomatoria && (
                 <div>
-                  <div className="flex gap-2 mb-3">
+                  <div className="flex gap-2 mb-2">
                     <input type="text" value={itemInput} onChange={e => setItemInput(e.target.value)}
                       onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addItem(); } }}
-                      placeholder="Valor individual (ex: 13,50)"
+                      placeholder="Ex: 15+30+22 ou 13,50"
                       className="flex-1 px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none" />
                     <button type="button" onClick={addItem}
                       className="px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700 transition">+ Add</button>
                   </div>
 
                   {itensTemp.length > 0 && (
-                    <div className="space-y-1 mb-3">
-                      <div className="flex flex-wrap gap-2">
+                    <div>
+                      <div className="flex flex-wrap gap-2 mb-3">
                         {itensTemp.map((v, i) => (
                           <span key={i} className="inline-flex items-center gap-1 px-2.5 py-1 bg-blue-50 border border-blue-200 rounded-lg text-xs font-medium text-blue-700">
-                            {fmt(v)}
-                            <button type="button" onClick={() => removeItem(i)} className="text-blue-400 hover:text-red-500 ml-1">✕</button>
+                            {v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+                            <button type="button" onClick={() => removeItem(i)} className="ml-1 text-blue-400 hover:text-red-500 font-bold">✕</button>
                           </span>
                         ))}
                       </div>
-                      <div className="flex items-center justify-between pt-2 border-t border-dashed border-[var(--color-border)] mt-2">
+                      <div className="flex items-center justify-between pt-2 border-t border-dashed border-[var(--color-border)]">
                         <span className="text-xs font-bold text-[var(--color-text-muted)]">{itensTemp.length} valores</span>
-                        <span className="text-sm font-bold text-emerald-600">Total: {fmt(itensTemp.reduce((a, b) => a + b, 0))}</span>
+                        <span className="text-sm font-bold text-emerald-600">Total: {totalSomatoria.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</span>
                       </div>
                     </div>
                   )}
@@ -394,10 +399,12 @@ export default function MovimentacoesPage() {
             {/* Observação */}
             <div>
               <label className="block text-xs font-semibold mb-1 text-[var(--color-text-muted)]">Observação</label>
-              <input value={observacao} onChange={e => setObservacao(e.target.value)} placeholder="Ex: Venda balcão" className="w-full px-3 py-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm" />
+              <input value={observacao} onChange={e => setObservacao(e.target.value)} placeholder="Ex: Venda balcão"
+                className="w-full px-3 py-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm" />
             </div>
 
-            <button type="submit" disabled={loading} className="w-full py-3 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white font-semibold rounded-xl hover:from-emerald-700 hover:to-emerald-600 transition-all disabled:opacity-50 text-sm shadow-md shadow-emerald-200">
+            <button type="submit" disabled={loading}
+              className="w-full py-3 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white font-semibold rounded-xl hover:from-emerald-700 hover:to-emerald-600 transition-all disabled:opacity-50 text-sm shadow-md shadow-emerald-200">
               {loading ? "Salvando..." : editandoId ? "Atualizar" : "Salvar"}
             </button>
           </form>
@@ -412,25 +419,24 @@ export default function MovimentacoesPage() {
       ) : (
         <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
           {movsFiltrados.map(m => {
-            const nomeCategoria = getCategoriaNome(m.categoria_id);
-            const icon = getCatIcon(nomeCategoria);
+            const nome = getCategoriaNome(m.categoria_id);
+            const icon = getCatIcon(nome);
             const itens = itensPorMov[m.id];
             const temItens = itens && itens.length > 0;
             const isDetalhe = detalheId === m.id;
             return (
               <div key={m.id}>
-                <div className="p-4 flex items-center justify-between hover:bg-[var(--color-bg)] transition-colors border-b border-[var(--color-border)] cursor-pointer"
-                  onClick={() => { if (temItens) setDetalheId(isDetalhe ? null : m.id); }}>
-                  <div className="flex items-center gap-3 min-w-0">
+                <div className="p-4 flex items-center justify-between hover:bg-[var(--color-bg)] transition-colors border-b border-[var(--color-border)]">
+                  <div className="flex items-center gap-3 min-w-0 cursor-pointer" onClick={() => { if (temItens) setDetalheId(isDetalhe ? null : m.id); }}>
                     <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-sm shrink-0 ${m.tipo === "entrada" ? "bg-emerald-50 text-emerald-600" : "bg-red-50 text-red-500"}`}>
                       {icon}
                     </div>
                     <div className="min-w-0">
-                      <p className="text-sm font-semibold truncate">{nomeCategoria}</p>
+                      <p className="text-sm font-semibold truncate">{nome}</p>
                       <p className="text-xs text-[var(--color-text-muted)]">
                         {new Date(m.data + "T12:00:00").toLocaleDateString("pt-BR")}
                         {m.observacao && ` · ${m.observacao}`}
-                        {temItens && ` · 📐 ${itens.length} valores`}
+                        {temItens && <span className="ml-1 text-blue-500 font-medium">📐 {itens!.length} valores {isDetalhe ? "▲" : "▼"}</span>}
                       </p>
                     </div>
                   </div>
@@ -438,28 +444,25 @@ export default function MovimentacoesPage() {
                     <span className={`font-bold text-sm ${m.tipo === "entrada" ? "text-emerald-600" : "text-red-500"}`}>
                       {m.tipo === "entrada" ? "+" : "-"} {fmt(m.valor)}
                     </span>
-                    {temItens && <span className="text-xs text-[var(--color-text-muted)]">{isDetalhe ? "▲" : "▼"}</span>}
-                    <button onClick={(e) => { e.stopPropagation(); editarMov(m); }} className="p-1.5 rounded-lg hover:bg-blue-50 text-[var(--color-text-muted)] hover:text-blue-600 transition text-sm">✏️</button>
-                    <button onClick={(e) => { e.stopPropagation(); excluirMov(m.id); }} className="p-1.5 rounded-lg hover:bg-red-50 text-[var(--color-text-muted)] hover:text-red-500 transition text-sm">🗑️</button>
+                    <button onClick={() => editarMov(m)} className="p-1.5 rounded-lg hover:bg-blue-50 text-[var(--color-text-muted)] hover:text-blue-600 transition text-sm">✏️</button>
+                    <button onClick={() => excluirMov(m.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-[var(--color-text-muted)] hover:text-red-500 transition text-sm">🗑️</button>
                   </div>
                 </div>
 
-                {/* Detalhe dos itens */}
                 {isDetalhe && temItens && (
                   <div className="bg-blue-50 border-b border-blue-200 px-4 py-3" style={{ animation: "fadeUp 0.2s ease" }}>
-                    <style>{`@keyframes fadeUp{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}`}</style>
+                    <style>{`@keyframes fadeUp{from{opacity:0}to{opacity:1}}`}</style>
                     <p className="text-xs font-bold text-blue-700 mb-2">📐 Valores individuais:</p>
                     <div className="flex flex-wrap gap-2">
-                      {itens.map((item, i) => (
+                      {itens!.map((item, i) => (
                         <span key={item.id} className="inline-flex items-center px-2.5 py-1 bg-white border border-blue-200 rounded-lg text-xs font-medium text-blue-700">
                           {i + 1}ª: {fmt(item.valor)}
                         </span>
                       ))}
                     </div>
                     <div className="flex items-center justify-between pt-2 mt-2 border-t border-blue-200">
-                      <span className="text-xs font-bold text-blue-800">{itens.length} valores</span>
-                      <span className="text-sm font-bold text-blue-800">Total: {fmt(itens.reduce((a, b) => a + b.valor, 0))}
-</span>
+                      <span className="text-xs font-bold text-blue-800">{itens!.length} valores</span>
+                      <span className="text-sm font-bold text-blue-800">Total: {fmt(itens!.reduce((a, b) => a + b.valor, 0))}</span>
                     </div>
                   </div>
                 )}
