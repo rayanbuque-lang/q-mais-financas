@@ -17,6 +17,7 @@ interface Profile {
 
 const menuItems = [
   { label: "Dashboard", href: "/dashboard", icon: "📊" },
+  { label: "Painel do CEO", href: "/painel-ceo", icon: "👔" },
   { label: "Movimentações", href: "/movimentacoes", icon: "💰" },
   { label: "Captura por Foto", href: "/captura", icon: "📸" },
   { label: "Recorrentes", href: "/recorrentes", icon: "🔁" },
