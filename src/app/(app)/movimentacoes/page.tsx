@@ -186,8 +186,9 @@ export default function MovimentacoesPage() {
       await supabase.from("movimentacao_itens").delete().eq("movimentacao_id", movId);
 
       // Inserir todos de uma vez
-      const novosItens = itensTemp.map(v => ({
+      const novosItens = itensTemp.map((v, i) => ({
         movimentacao_id: movId,
+        descricao: `Valor ${i + 1}`,
         valor: parseFloat(v.toFixed(2)),
       }));
 
