@@ -12,6 +12,7 @@ interface Profile {
   nome: string;
   email: string;
   role: string;
+  permissoes: string[];
 }
 
 const menuItems = [
@@ -47,8 +48,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     async function loadProfile() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { router.push("/login"); return; }
-      const { data } = await supabase.from("profiles").select("id, nome, email, role").eq("id", user.id).single();
-      if (data) setProfile(data as Profile);
+      const { data } = await supabase.from("profiles").select("*").eq("id", user.id).single();
+      if (data) setProfile(data);
       setLoading(false);
     }
     loadProfile();
@@ -78,20 +79,75 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       <style>{`
         @keyframes spin { to { transform: rotate(360deg); } }
         * { box-sizing: border-box; }
-        .sidebar-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); backdrop-filter: blur(4px); z-index: 40; display: none; }
+
+        .sidebar-overlay {
+          position: fixed; inset: 0;
+          background: rgba(0,0,0,0.4);
+          backdrop-filter: blur(4px);
+          z-index: 40; display: none;
+        }
         .sidebar-overlay.active { display: block; }
-        .sidebar { position: fixed; top: 0; left: 0; bottom: 0; width: 260px; min-width: 260px; background: #ffffff; border-right: 1px solid #e2e8e2; display: flex; flex-direction: column; z-index: 50; transform: translateX(-100%); transition: transform 0.3s ease; }
+
+        .sidebar {
+          position: fixed; top: 0; left: 0; bottom: 0;
+          width: 260px; min-width: 260px;
+          background: #ffffff;
+          border-right: 1px solid #e2e8e2;
+          display: flex; flex-direction: column;
+          z-index: 50;
+          transform: translateX(-100%);
+          transition: transform 0.3s ease;
+        }
         .sidebar.open { transform: translateX(0); }
-        .topbar { display: none; position: sticky; top: 0; z-index: 30; padding: 12px 16px; background: #ffffff; border-bottom: 1px solid #e2e8e2; align-items: center; justify-content: space-between; }
+
+        .topbar {
+          display: none;
+          position: sticky; top: 0; z-index: 30;
+          padding: 12px 16px;
+          background: #ffffff;
+          border-bottom: 1px solid #e2e8e2;
+          align-items: center;
+          justify-content: space-between;
+        }
+
         .main-content { flex: 1; min-width: 0; padding: 24px 16px; }
-        @media (min-width: 768px) { .sidebar { position: sticky; top: 0; transform: translateX(0); } .sidebar-overlay.active { display: none; } .topbar { display: none !important; } .main-content { padding: 32px; } }
-        @media (max-width: 767px) { .topbar { display: flex; } .desktop-notif { display: none !important; } }
-        .nav-link { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 10px; font-size: 13px; font-weight: 500; text-decoration: none; margin-bottom: 2px; transition: all 0.2s; color: #6b7280; }
+
+        @media (min-width: 768px) {
+          .sidebar { position: sticky; top: 0; transform: translateX(0); }
+          .sidebar-overlay.active { display: none; }
+          .topbar { display: none !important; }
+          .main-content { padding: 32px; }
+        }
+
+        @media (max-width: 767px) {
+          .topbar { display: flex; }
+          .desktop-notif { display: none !important; }
+        }
+
+        .nav-link {
+          display: flex; align-items: center; gap: 12px;
+          padding: 10px 14px; border-radius: 10px;
+          font-size: 13px; font-weight: 500;
+          text-decoration: none; margin-bottom: 2px;
+          transition: all 0.2s; color: #6b7280;
+        }
         .nav-link:hover { background: #f3f4f6; color: #374151; }
         .nav-link.active { background: #dcfce7; color: #166534; }
-        .user-btn { width: 100%; text-align: left; padding: 10px 14px; border-radius: 10px; font-size: 13px; color: #6b7280; background: transparent; border: none; cursor: pointer; font-weight: 500; transition: all 0.2s; }
+
+        .user-btn {
+          width: 100%; text-align: left;
+          padding: 10px 14px; border-radius: 10px;
+          font-size: 13px; color: #6b7280;
+          background: transparent; border: none;
+          cursor: pointer; font-weight: 500; transition: all 0.2s;
+        }
         .user-btn:hover { background: #fef2f2; color: #dc2626; }
-        .hamburger { background: none; border: none; cursor: pointer; padding: 8px; border-radius: 8px; transition: background 0.2s; }
+
+        .hamburger {
+          background: none; border: none;
+          cursor: pointer; padding: 8px;
+          border-radius: 8px; transition: background 0.2s;
+        }
         .hamburger:hover { background: #f3f4f6; }
       `}</style>
 
@@ -131,6 +187,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         </aside>
 
         <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+          {/* Topbar mobile */}
           <div className="topbar">
             <Logo />
             <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -143,6 +200,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             </div>
           </div>
 
+          {/* Sino desktop */}
           <div className="desktop-notif" style={{ padding: "12px 32px 0", display: "flex", justifyContent: "flex-end" }}>
             <NotificacoesBell />
           </div>
