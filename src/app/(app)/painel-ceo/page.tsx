@@ -1,20 +1,22 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
 const mesesNomes = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
 const diasSemana = ["Dom","Seg","Ter","Qua","Qui","Sex","Sáb"];
-const fpLabels: Record<string, string> = { cartao: "Cartão", pix_santander: "Pix Santander", pix_inter: "Pix Inter", rom_card: "Rom Card", app: "App", prefeitura: "Prefeitura", dinheiro: "Dinheiro" };
-const fpIcons: Record<string, string> = { cartao: "💳", pix_santander: "📱", pix_inter: "📱", rom_card: "💳", app: "📲", prefeitura: "🏛️", dinheiro: "💵" };
-const fpCores: Record<string, string> = { cartao: "#2563eb", pix_santander: "#dc2626", pix_inter: "#f97316", rom_card: "#7c3aed", app: "#059669", prefeitura: "#0891b2", dinheiro: "#16a34a" };
 
 interface DiaResumo { data: string; dia: number; semana: string; totalVendas: number; dinheiro: number; cartao: number; pix: number; outros: number; }
 interface Meta { meta_mensal: number; meta_diaria: number; }
-interface MovResumo { tipo: string; valor: number; categoria_id: string; data: string; forma_pagamento: string | null; }
+interface MovResumo { tipo: string; valor: number; categoria_id: string; data: string; }
 interface CatInfo { id: string; nome: string; }
 
 export default function PainelCeoPage() {
+  const router = useRouter();
+  const [acessoPermitido, setAcessoPermitido] = useState<boolean | null>(null);
+  const verificouRef = useRef(false);
+
   const [mes, setMes] = useState(new Date().getMonth() + 1);
   const [ano, setAno] = useState(new Date().getFullYear());
   const [loading, setLoading] = useState(false);
@@ -34,6 +36,23 @@ export default function PainelCeoPage() {
   const [totalDiasComDados, setTotalDiasComDados] = useState(0);
 
   const supabase = createClient();
+
+  // Verificar acesso
+  useEffect(() => {
+    if (verificouRef.current) return;
+    verificouRef.current = true;
+    async function verificar() {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) { router.push("/login"); return; }
+      const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).single();
+      if (!profile || profile.role !== "master") {
+        setAcessoPermitido(false);
+      } else {
+        setAcessoPermitido(true);
+      }
+    }
+    verificar();
+  }, []);
 
   async function carregarDados() {
     setLoading(true);
@@ -85,7 +104,7 @@ export default function PainelCeoPage() {
     setLoading(false);
   }
 
-  useEffect(() => { carregarDados(); setAnaliseIA(""); }, [mes, ano]);
+  useEffect(() => { if (acessoPermitido) carregarDados(); setAnaliseIA(""); }, [mes, ano, acessoPermitido]);
 
   async function salvarMeta() {
     const mm = parseFloat(metaMensal.replace(",", "."));
@@ -169,9 +188,6 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
             .kpi { display: inline-block; width: 15%; text-align: center; padding: 12px; margin: 4px; border: 1px solid #e5e7eb; border-radius: 8px; vertical-align: top; }
             .kpi-label { font-size: 10px; color: #6b7280; text-transform: uppercase; }
             .kpi-value { font-size: 16px; font-weight: 700; margin-top: 4px; }
-            .bar { height: 8px; background: #e5e7eb; border-radius: 4px; margin: 4px 0; }
-            .bar-fill { height: 8px; border-radius: 4px; }
-            .alert { padding: 8px 12px; border-radius: 8px; margin: 4px 0; font-size: 12px; }
             @media print { body { padding: 20px; } }
           </style>
         </head>
@@ -198,8 +214,8 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
           <h2>Ranking de Dias</h2>
           <table>
             <tr><th></th><th>Dia</th><th>Valor</th></tr>
-            ${melhorDia ? `<tr><td>🏆 Melhor</td><td>${melhorDia.dia} (${melhorDia.semana})</td><td>${fmt(melhorDia.totalVendas)}</td></tr>` : ""}
-            ${piorDia ? `<tr><td>📉 Pior</td><td>${piorDia.dia} (${piorDia.semana})</td><td>${fmt(piorDia.totalVendas)}</td></tr>` : ""}
+            ${melhorDia ? `<tr><td>Melhor</td><td>${melhorDia.dia} (${melhorDia.semana})</td><td>${fmt(melhorDia.totalVendas)}</td></tr>` : ""}
+            ${piorDia ? `<tr><td>Pior</td><td>${piorDia.dia} (${piorDia.semana})</td><td>${fmt(piorDia.totalVendas)}</td></tr>` : ""}
           </table>
 
           <h2>Média por Dia da Semana</h2>
@@ -209,7 +225,7 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
           </table>
 
           <h2>Alertas</h2>
-          <div class="alert" style="background: ${contasVencidas > 0 ? "#fef2f2" : "#ecfdf5"}; color: ${contasVencidas > 0 ? "#dc2626" : "#059669"};">
+          <div style="padding: 8px 12px; border-radius: 8px; background: ${contasVencidas > 0 ? "#fef2f2" : "#ecfdf5"}; color: ${contasVencidas > 0 ? "#dc2626" : "#059669"}; font-size: 12px;">
             Contas Vencidas: ${contasVencidas} | Pendentes: ${contasPendentes} | Dias Conferidos: ${diasFechados}/${totalDiasComDados}
           </div>
 
@@ -220,7 +236,7 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
 
           <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0 12px;">
           <p style="font-size: 10px; color: #9ca3af; text-align: center;">
-            Gerado em ${new Date().toLocaleDateString("pt-BR")} às ${new Date().toLocaleTimeString("pt-BR")} · +Q Finanças
+            Gerado em ${new Date().toLocaleDateString("pt-BR")} as ${new Date().toLocaleTimeString("pt-BR")} · +Q Financas
           </p>
 
           <script>window.print();</script>
@@ -233,6 +249,20 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
   function mesAnterior() { if (mes === 1) { setMes(12); setAno(ano - 1); } else setMes(mes - 1); }
   function mesProximo() { if (mes === 12) { setMes(1); setAno(ano + 1); } else setMes(mes + 1); }
   function fmt(v: number) { return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }); }
+
+  // Tela de acesso negado
+  if (acessoPermitido === null) {
+    return <div className="text-center py-12"><div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto" /></div>;
+  }
+  if (acessoPermitido === false) {
+    return (
+      <div className="text-center py-12">
+        <p className="text-4xl mb-3">🔒</p>
+        <p className="font-bold text-lg">Acesso restrito</p>
+        <p className="text-sm text-[var(--color-text-muted)] mt-1">O Painel do CEO e exclusivo para administradores.</p>
+      </div>
+    );
+  }
 
   const totalVendido = caixas.reduce((a, c) => a + c.totalVendas, 0);
   const mediaDiaria = caixas.length > 0 ? totalVendido / caixas.length : 0;
@@ -258,7 +288,7 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
   const fpTotal = totalDinheiro + totalCartao + totalPix + totalOutros;
   const fpDados = [
     { nome: "Dinheiro", valor: totalDinheiro, pct: fpTotal > 0 ? (totalDinheiro / fpTotal * 100) : 0, cor: "#16a34a" },
-    { nome: "Cartão", valor: totalCartao, pct: fpTotal > 0 ? (totalCartao / fpTotal * 100) : 0, cor: "#2563eb" },
+    { nome: "Cartao", valor: totalCartao, pct: fpTotal > 0 ? (totalCartao / fpTotal * 100) : 0, cor: "#2563eb" },
     { nome: "Pix", valor: totalPix, pct: fpTotal > 0 ? (totalPix / fpTotal * 100) : 0, cor: "#f97316" },
     { nome: "Outros", valor: totalOutros, pct: fpTotal > 0 ? (totalOutros / fpTotal * 100) : 0, cor: "#7c3aed" },
   ].filter(f => f.valor > 0);
@@ -268,12 +298,12 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Painel do CEO</h1>
-          <p className="text-[var(--color-text-muted)] text-sm mt-1">Visão estratégica completa do negócio</p>
+          <p className="text-[var(--color-text-muted)] text-sm mt-1">Visao estrategica completa do negocio</p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          <button onClick={exportarPDF} className="px-4 py-3 bg-gradient-to-r from-gray-700 to-gray-600 text-white font-semibold rounded-xl hover:from-gray-800 hover:to-gray-700 transition-all text-sm shadow-md">🖨️ Imprimir / PDF</button>
+          <button onClick={exportarPDF} className="px-4 py-3 bg-gradient-to-r from-gray-700 to-gray-600 text-white font-semibold rounded-xl hover:from-gray-800 hover:to-gray-700 transition-all text-sm shadow-md">Imprimir / PDF</button>
           <button onClick={gerarAnalise} disabled={carregandoIA} className="px-4 py-3 bg-gradient-to-r from-purple-600 to-purple-500 text-white font-semibold rounded-xl hover:from-purple-700 hover:to-purple-600 transition-all text-sm shadow-md disabled:opacity-50">
-            {carregandoIA ? "Analisando..." : "🧠 Análise IA"}
+            {carregandoIA ? "Analisando..." : "Analise IA"}
           </button>
         </div>
       </div>
@@ -281,7 +311,7 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
       <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-4 flex items-center justify-between">
         <button onClick={mesAnterior} className="px-4 py-2 rounded-xl bg-[var(--color-bg)] text-sm font-medium hover:bg-[var(--color-border)] transition">← Anterior</button>
         <div className="text-center"><p className="font-bold text-lg capitalize">{mesesNomes[mes - 1]}</p><p className="text-sm text-[var(--color-text-muted)]">{ano}</p></div>
-        <button onClick={mesProximo} className="px-4 py-2 rounded-xl bg-[var(--color-bg)] text-sm font-medium hover:bg-[var(--color-border)] transition">Próximo →</button>
+        <button onClick={mesProximo} className="px-4 py-2 rounded-xl bg-[var(--color-bg)] text-sm font-medium hover:bg-[var(--color-border)] transition">Proximo →</button>
       </div>
 
       {loading && <div className="text-center"><div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto" /></div>}
@@ -290,12 +320,12 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
         {/* KPIs */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
           {[
-            { l: "Total Vendido", v: fmt(totalVendido), c: "text-emerald-600", bg: "#ecfdf5" },
-            { l: "Média Diária", v: fmt(mediaDiaria), c: "text-blue-600", bg: "#eff6ff" },
-            { l: "Meta Mensal", v: meta.meta_mensal > 0 ? fmt(meta.meta_mensal) : "—", c: "text-amber-600", bg: "#fffbeb" },
-            { l: "% Meta", v: meta.meta_mensal > 0 ? `${pctMeta.toFixed(1)}%` : "—", c: pctMeta >= 100 ? "text-emerald-600" : "text-amber-600", bg: pctMeta >= 100 ? "#ecfdf5" : "#fffbeb" },
-            { l: "Despesas", v: fmt(totalSaidasMov), c: "text-red-500", bg: "#fef2f2" },
-            { l: "Resultado", v: fmt(resultado), c: resultado >= 0 ? "text-emerald-600" : "text-red-500", bg: resultado >= 0 ? "#ecfdf5" : "#fef2f2" },
+            { l: "Total Vendido", v: fmt(totalVendido), c: "text-emerald-600" },
+            { l: "Media Diaria", v: fmt(mediaDiaria), c: "text-blue-600" },
+            { l: "Meta Mensal", v: meta.meta_mensal > 0 ? fmt(meta.meta_mensal) : "—", c: "text-amber-600" },
+            { l: "% Meta", v: meta.meta_mensal > 0 ? `${pctMeta.toFixed(1)}%` : "—", c: pctMeta >= 100 ? "text-emerald-600" : "text-amber-600" },
+            { l: "Despesas", v: fmt(totalSaidasMov), c: "text-red-500" },
+            { l: "Resultado", v: fmt(resultado), c: resultado >= 0 ? "text-emerald-600" : "text-red-500" },
           ].map(c => (
             <div key={c.l} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl p-3 text-center">
               <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1">{c.l}</p>
@@ -315,7 +345,7 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
             {metaEditando ? (
               <div className="space-y-3">
                 <div><label className="block text-[10px] font-semibold text-[var(--color-text-muted)] mb-1">META MENSAL</label><input type="text" value={metaMensal} onChange={e => setMetaMensal(e.target.value)} placeholder="0,00" className="w-full px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-sm" /></div>
-                <div><label className="block text-[10px] font-semibold text-[var(--color-text-muted)] mb-1">META DIÁRIA</label><input type="text" value={metaDiaria} onChange={e => setMetaDiaria(e.target.value)} placeholder="0,00" className="w-full px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-sm" /></div>
+                <div><label className="block text-[10px] font-semibold text-[var(--color-text-muted)] mb-1">META DIARIA</label><input type="text" value={metaDiaria} onChange={e => setMetaDiaria(e.target.value)} placeholder="0,00" className="w-full px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-sm" /></div>
                 <button onClick={salvarMeta} className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-xs font-semibold hover:bg-emerald-700">Salvar Meta</button>
               </div>
             ) : (
@@ -328,18 +358,10 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
                   <div className="h-4 rounded-full transition-all duration-500" style={{ width: `${Math.min(pctMeta, 100)}%`, background: pctMeta >= 100 ? "linear-gradient(90deg, #059669, #10b981)" : pctMeta >= 70 ? "linear-gradient(90deg, #d97706, #f59e0b)" : "linear-gradient(90deg, #dc2626, #f87171)" }} />
                 </div>
                 <div className="grid grid-cols-2 gap-3">
-                  <div className="text-center p-2 bg-[var(--color-bg)] rounded-lg">
-                    <p className="text-[10px] text-[var(--color-text-muted)]">Vendido</p>
-                    <p className="font-bold text-sm text-emerald-600">{fmt(totalVendido)}</p>
-                  </div>
-                  <div className="text-center p-2 bg-[var(--color-bg)] rounded-lg">
-                    <p className="text-[10px] text-[var(--color-text-muted)]">Meta</p>
-                    <p className="font-bold text-sm text-amber-600">{meta.meta_mensal > 0 ? fmt(meta.meta_mensal) : "Não definida"}</p>
-                  </div>
+                  <div className="text-center p-2 bg-[var(--color-bg)] rounded-lg"><p className="text-[10px] text-[var(--color-text-muted)]">Vendido</p><p className="font-bold text-sm text-emerald-600">{fmt(totalVendido)}</p></div>
+                  <div className="text-center p-2 bg-[var(--color-bg)] rounded-lg"><p className="text-[10px] text-[var(--color-text-muted)]">Meta</p><p className="font-bold text-sm text-amber-600">{meta.meta_mensal > 0 ? fmt(meta.meta_mensal) : "Nao definida"}</p></div>
                 </div>
-                {meta.meta_diaria > 0 && (
-                  <p className="text-xs text-[var(--color-text-muted)] mt-2 text-center">Meta diária: {fmt(meta.meta_diaria)} · Média atual: {fmt(mediaDiaria)}</p>
-                )}
+                {meta.meta_diaria > 0 && <p className="text-xs text-[var(--color-text-muted)] mt-2 text-center">Meta diaria: {fmt(meta.meta_diaria)} · Media atual: {fmt(mediaDiaria)}</p>}
               </div>
             )}
           </div>
@@ -347,19 +369,12 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
           {/* Formas de pagamento */}
           <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-5">
             <h3 className="font-bold text-sm mb-3">📊 Mix de Pagamento</h3>
-            {fpDados.length === 0 ? (
-              <p className="text-sm text-[var(--color-text-muted)] text-center py-6">Sem dados</p>
-            ) : (
+            {fpDados.length === 0 ? <p className="text-sm text-[var(--color-text-muted)] text-center py-6">Sem dados</p> : (
               <div className="space-y-3">
                 {fpDados.map(f => (
                   <div key={f.nome}>
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs font-medium">{f.nome}</span>
-                      <span className="text-xs font-bold" style={{ color: f.cor }}>{f.pct.toFixed(1)}% · {fmt(f.valor)}</span>
-                    </div>
-                    <div className="w-full bg-gray-200 rounded-full h-2">
-                      <div className="h-2 rounded-full transition-all" style={{ width: `${f.pct}%`, background: f.cor }} />
-                    </div>
+                    <div className="flex items-center justify-between mb-1"><span className="text-xs font-medium">{f.nome}</span><span className="text-xs font-bold" style={{ color: f.cor }}>{f.pct.toFixed(1)}% · {fmt(f.valor)}</span></div>
+                    <div className="w-full bg-gray-200 rounded-full h-2"><div className="h-2 rounded-full transition-all" style={{ width: `${f.pct}%`, background: f.cor }} /></div>
                   </div>
                 ))}
               </div>
@@ -367,7 +382,7 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
           </div>
         </div>
 
-        {/* Ranking dias */}
+        {/* Ranking */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
           <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-5">
             <h3 className="font-bold text-sm mb-3">🏆 Melhor Dia</h3>
@@ -390,16 +405,9 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
             ) : <p className="text-sm text-[var(--color-text-muted)] text-center">Sem dados</p>}
           </div>
           <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-5">
-            <h3 className="font-bold text-sm mb-3">📅 Média por Dia da Semana</h3>
+            <h3 className="font-bold text-sm mb-3">📅 Media por Dia da Semana</h3>
             {mediaPorSemana.length === 0 ? <p className="text-sm text-[var(--color-text-muted)] text-center">Sem dados</p> : (
-              <div className="space-y-2">
-                {mediaPorSemana.map(d => (
-                  <div key={d.dia} className="flex items-center justify-between">
-                    <span className="text-xs font-medium">{d.dia}</span>
-                    <span className="text-xs font-bold">{fmt(d.media)}</span>
-                  </div>
-                ))}
-              </div>
+              <div className="space-y-2">{mediaPorSemana.map(d => (<div key={d.dia} className="flex items-center justify-between"><span className="text-xs font-medium">{d.dia}</span><span className="text-xs font-bold">{fmt(d.media)}</span></div>))}</div>
             )}
           </div>
         </div>
@@ -420,16 +428,14 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
           </div>
         </div>
 
-        {/* Análise IA */}
+        {/* Analise IA */}
         {analiseIA && (
           <div className="bg-gradient-to-br from-purple-50 to-indigo-50 border border-purple-200 rounded-2xl p-6 mb-6">
             <div className="flex items-center gap-2 mb-4">
               <span className="text-xl">🧠</span>
-              <h3 className="font-bold text-purple-800">Análise Estratégica por IA</h3>
+              <h3 className="font-bold text-purple-800">Analise Estrategica por IA</h3>
             </div>
-            <div className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">
-              {analiseIA}
-            </div>
+            <div className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{analiseIA}</div>
           </div>
         )}
       </div>
