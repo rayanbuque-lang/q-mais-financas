@@ -1,174 +1,342 @@
 "use client";
-
-import { useState, useEffect } from "react";
-import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-import { Logo } from "@/components/logo";
+import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import NotificacoesBell from "@/components/notificacoes-bell";
 
 interface Profile {
   id: string;
   nome: string;
   email: string;
   role: string;
+  permissoes_modulos: string[] | null;
+  created_at: string;
 }
 
-const menuItems = [
-  { label: "Dashboard", href: "/dashboard", icon: "📊" },
-  { label: "Painel do CEO", href: "/painel-ceo", icon: "👔", masterOnly: true },
-  { label: "Movimentações", href: "/movimentacoes", icon: "💰" },
-  { label: "Captura por Foto", href: "/captura", icon: "📸" },
-  { label: "Recorrentes", href: "/recorrentes", icon: "🔁" },
-  { label: "Contas a Pagar", href: "/contas-pagar", icon: "📋" },
-  { label: "Máquinas e Contas", href: "/maquinas", icon: "🏦" },
-  { label: "Vendas Maquininha", href: "/vendas", icon: "💳" },
-  { label: "Categorias", href: "/categorias", icon: "🏷️" },
-  { label: "Fechamento de Caixa", href: "/fechamento-caixa", icon: "🧮" },
-  { label: "Fluxo de Caixa", href: "/fluxo-de-caixa", icon: "📈" },
-  { label: "DRE", href: "/dre", icon: "📑" },
-  { label: "Fechamento Mensal", href: "/fechamento", icon: "🔒" },
-  { label: "Conciliação Bancária", href: "/conciliacao", icon: "🏦" },
-  { label: "Relatórios", href: "/relatorios", icon: "📄" },
-  { label: "Análise Inteligente", href: "/analise", icon: "🧠" },
-  { label: "Histórico", href: "/audit", icon: "📜" },
-  { label: "Usuários", href: "/usuarios", icon: "👥", masterOnly: true },
+const todosModulos = [
+  { id: "dashboard", label: "Dashboard", icon: "📊" },
+  { id: "movimentacoes", label: "Movimentações", icon: "💰" },
+  { id: "captura", label: "Captura por Foto", icon: "📸" },
+  { id: "recorrentes", label: "Recorrentes", icon: "🔁" },
+  { id: "contas-pagar", label: "Contas a Pagar", icon: "📋" },
+  { id: "maquinas", label: "Máquinas e Contas", icon: "🏦" },
+  { id: "vendas", label: "Vendas Maquininha", icon: "💳" },
+  { id: "categorias", label: "Categorias", icon: "🏷️" },
+  { id: "fechamento-caixa", label: "Fechamento de Caixa", icon: "🧮" },
+  { id: "fluxo-de-caixa", label: "Fluxo de Caixa", icon: "📈" },
+  { id: "dre", label: "DRE", icon: "📑" },
+  { id: "fechamento", label: "Fechamento Mensal", icon: "🔒" },
+  { id: "conciliacao", label: "Conciliação Bancária", icon: "🏦" },
+  { id: "relatorios", label: "Relatórios", icon: "📄" },
+  { id: "analise", label: "Análise Inteligente", icon: "🧠" },
+  { id: "audit", label: "Histórico", icon: "📜" },
 ];
 
-export default function AppLayout({ children }: { children: React.ReactNode }) {
-  const pathname = usePathname();
-  const router = useRouter();
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [profile, setProfile] = useState<Profile | null>(null);
+export default function UsuariosPage() {
+  const [usuarios, setUsuarios] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
+  const [mensagem, setMensagem] = useState("");
+  const [showForm, setShowForm] = useState(false);
+  const [editandoId, setEditandoId] = useState<string | null>(null);
+
+  const [nome, setNome] = useState("");
+  const [email, setEmail] = useState("");
+  const [senha, setSenha] = useState("");
+  const [role, setRole] = useState("funcionario");
+  const [modulosSelecionados, setModulosSelecionados] = useState<string[]>([]);
+
   const supabase = createClient();
 
-  useEffect(() => {
-    async function loadProfile() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { router.push("/login"); return; }
-      const { data, error } = await supabase.from("profiles").select("id, nome, email, role").eq("id", user.id).single();
-      if (error) console.error("Erro profile:", error);
-      if (data) setProfile(data as Profile);
-      setLoading(false);
-    }
-    loadProfile();
-  }, []);
-
-  useEffect(() => { setSidebarOpen(false); }, [pathname]);
-
-  async function handleLogout() {
-    await supabase.auth.signOut();
-    router.push("/login");
+  async function carregarUsuarios() {
+    setLoading(true);
+    const { data } = await supabase.from("profiles").select("*").order("created_at", { ascending: false });
+    if (data) setUsuarios(data as Profile[]);
+    setLoading(false);
   }
 
-  if (loading) {
-    return (
-      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#f8f8f8" }}>
-        <div style={{ textAlign: "center" }}>
-          <div style={{ width: 40, height: 40, border: "4px solid #d1fae5", borderTopColor: "#059669", borderRadius: "50%", animation: "spin 0.8s linear infinite", margin: "0 auto 12px" }} />
-          <p style={{ color: "#6b7280", fontSize: 14 }}>Carregando...</p>
-          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-        </div>
-      </div>
+  useEffect(() => { carregarUsuarios(); }, []);
+
+  function resetForm() {
+    setNome(""); setEmail(""); setSenha(""); setRole("funcionario");
+    setModulosSelecionados([]); setEditandoId(null);
+  }
+
+  function novoUsuario() {
+    resetForm();
+    setShowForm(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function editarUsuario(u: Profile) {
+    setNome(u.nome);
+    setEmail(u.email);
+    setSenha("");
+    setRole(u.role);
+    setModulosSelecionados(u.permissoes_modulos || []);
+    setEditandoId(u.id);
+    setShowForm(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function toggleModulo(modId: string) {
+    setModulosSelecionados(prev =>
+      prev.includes(modId) ? prev.filter(m => m !== modId) : [...prev, modId]
     );
   }
 
-  const isMaster = profile?.role === "master";
-  const isReadOnly = profile?.role === "leitura";
-  const menuVisivel = isMaster ? menuItems : menuItems.filter(item => !item.masterOnly);
+  function selecionarTodos() {
+    setModulosSelecionados(todosModulos.map(m => m.id));
+  }
+
+  function limparTodos() {
+    setModulosSelecionados([]);
+  }
+
+  const precisaPermissoes = role === "funcionario" || role === "leitura";
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setLoading(true);
+    setMensagem("");
+
+    if (editandoId) {
+      const updateData: Record<string, unknown> = {
+        nome,
+        role,
+        permissoes_modulos: precisaPermissoes ? modulosSelecionados : [],
+      };
+      const { error } = await supabase.from("profiles").update(updateData).eq("id", editandoId);
+      if (error) setMensagem("Erro ao atualizar: " + error.message);
+      else setMensagem("Usuário atualizado!");
+    } else {
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email,
+        password: senha,
+        options: { data: { nome } },
+      });
+
+      if (authError) {
+        setMensagem("Erro ao criar conta: " + authError.message);
+        setLoading(false);
+        setTimeout(() => setMensagem(""), 5000);
+        return;
+      }
+
+      if (authData.user) {
+        const { error: profileError } = await supabase.from("profiles").upsert({
+          id: authData.user.id,
+          nome,
+          email,
+          role,
+          permissoes_modulos: precisaPermissoes ? modulosSelecionados : [],
+        });
+        if (profileError) setMensagem("Conta criada, mas erro no perfil: " + profileError.message);
+        else setMensagem("Usuário criado com sucesso!");
+      }
+    }
+
+    setShowForm(false);
+    resetForm();
+    await carregarUsuarios();
+    setLoading(false);
+    setTimeout(() => setMensagem(""), 3000);
+  }
+
+  async function excluirUsuario(id: string) {
+    if (!confirm("Tem certeza que deseja excluir este usuário?")) return;
+    await supabase.from("profiles").delete().eq("id", id);
+    setMensagem("Usuário removido!");
+    carregarUsuarios();
+    setTimeout(() => setMensagem(""), 3000);
+  }
+
+  function getRoleInfo(role: string) {
+    if (role === "master") return { label: "Administrador", bg: "#dcfce7", color: "#166534", icon: "👑" };
+    if (role === "leitura") return { label: "Somente Leitura", bg: "#fef3c7", color: "#92400e", icon: "👁️" };
+    return { label: "Funcionário", bg: "#dbeafe", color: "#1e40af", icon: "👤" };
+  }
+
+  function getModulosLabel(u: Profile) {
+    if (u.role === "master") return "Acesso total";
+    const mods = u.permissoes_modulos || [];
+    if (mods.length === 0) return "Todos os módulos";
+    return `${mods.length} módulo(s)`;
+  }
 
   return (
-    <>
-      <style>{`
-        @keyframes spin { to { transform: rotate(360deg); } }
-        * { box-sizing: border-box; }
-        .sidebar-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); backdrop-filter: blur(4px); z-index: 40; display: none; }
-        .sidebar-overlay.active { display: block; }
-        .sidebar { position: fixed; top: 0; left: 0; bottom: 0; width: 260px; min-width: 260px; background: #ffffff; border-right: 1px solid #e2e8e2; display: flex; flex-direction: column; z-index: 50; transform: translateX(-100%); transition: transform 0.3s ease; }
-        .sidebar.open { transform: translateX(0); }
-        .topbar { display: none; position: sticky; top: 0; z-index: 30; padding: 12px 16px; background: #ffffff; border-bottom: 1px solid #e2e8e2; align-items: center; justify-content: space-between; }
-        .main-content { flex: 1; min-width: 0; padding: 24px 16px; }
-        @media (min-width: 768px) { .sidebar { position: sticky; top: 0; transform: translateX(0); } .sidebar-overlay.active { display: none; } .topbar { display: none !important; } .main-content { padding: 32px; } }
-        @media (max-width: 767px) { .topbar { display: flex; } .desktop-notif { display: none !important; } }
-        .nav-link { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 10px; font-size: 13px; font-weight: 500; text-decoration: none; margin-bottom: 2px; transition: all 0.2s; color: #6b7280; }
-        .nav-link:hover { background: #f3f4f6; color: #374151; }
-        .nav-link.active { background: #dcfce7; color: #166534; }
-        .user-btn { width: 100%; text-align: left; padding: 10px 14px; border-radius: 10px; font-size: 13px; color: #6b7280; background: transparent; border: none; cursor: pointer; font-weight: 500; transition: all 0.2s; }
-        .user-btn:hover { background: #fef2f2; color: #dc2626; }
-        .hamburger { background: none; border: none; cursor: pointer; padding: 8px; border-radius: 8px; transition: background 0.2s; }
-        .hamburger:hover { background: #f3f4f6; }
-      `}</style>
+    <div className="space-y-6">
+      <div className="flex items-center justify-between flex-wrap gap-4">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Usuários</h1>
+          <p className="text-[var(--color-text-muted)] text-sm mt-1">Gerencie quem acessa o sistema</p>
+        </div>
+        <button onClick={novoUsuario} className="px-5 py-3 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white font-semibold rounded-xl hover:from-emerald-700 hover:to-emerald-600 transition-all text-sm shadow-md shadow-emerald-200">
+          + Novo Usuário
+        </button>
+      </div>
 
-      <div style={{ display: "flex", minHeight: "100vh" }}>
-        <div className={`sidebar-overlay ${sidebarOpen ? "active" : ""}`} onClick={() => setSidebarOpen(false)} />
+      {mensagem && (
+        <div className={`p-3 rounded-xl text-sm font-medium text-center ${mensagem.includes("Erro") ? "bg-red-50 text-red-600" : "bg-emerald-50 text-emerald-700"}`}>
+          {mensagem}
+        </div>
+      )}
 
-        <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
-          <div style={{ padding: "16px 20px", borderBottom: "1px solid #e2e8e2", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <Logo />
-            {isReadOnly && (
-              <span style={{ fontSize: 10, background: "#fef3c7", color: "#92400e", padding: "2px 8px", borderRadius: 6, fontWeight: 600 }}>Leitura</span>
-            )}
-          </div>
-
-          <nav style={{ flex: 1, padding: "10px 10px", overflowY: "auto" }}>
-            {menuVisivel.map((item) => {
-              const isActive = pathname === item.href;
-              return (
-                <Link key={item.href} href={item.href} className={`nav-link ${isActive ? "active" : ""}`}>
-                  <span style={{ fontSize: 15 }}>{item.icon}</span>
-                  {item.label}
-                  {isActive && <span style={{ marginLeft: "auto", width: 6, height: 6, borderRadius: "50%", background: "#16a34a" }} />}
-                </Link>
-              );
-            })}
-          </nav>
-
-          <div style={{ padding: "12px 14px", borderTop: "1px solid #e2e8e2" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, padding: "0 6px" }}>
-              <div style={{ width: 30, height: 30, borderRadius: 8, background: "#dcfce7", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: "bold", color: "#16a34a" }}>
-                {(profile?.nome || "U").charAt(0).toUpperCase()}
-              </div>
-              <div style={{ minWidth: 0 }}>
-                <p style={{ fontSize: 12, fontWeight: 600, margin: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{profile?.nome || profile?.email}</p>
-                <p style={{ fontSize: 10, color: "#6b7280", margin: 0 }}>
-                  {profile?.role === "master" ? "Administrador" : profile?.role === "leitura" ? "Somente Leitura" : "Funcionário"}
-                </p>
+      {/* Legenda */}
+      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-4">
+        <p className="text-xs font-bold text-[var(--color-text-muted)] mb-2">Tipos de acesso:</p>
+        <div className="flex flex-wrap gap-3">
+          {[
+            { icon: "👑", label: "Administrador", desc: "Acesso total. Vê tudo incluindo Painel do CEO e Usuários", bg: "#dcfce7" },
+            { icon: "👤", label: "Funcionário", desc: "Acessa apenas módulos definidos pelo administrador", bg: "#dbeafe" },
+            { icon: "👁️", label: "Somente Leitura", desc: "Apenas visualiza módulos definidos, sem editar nada", bg: "#fef3c7" },
+          ].map(r => (
+            <div key={r.label} className="flex items-center gap-2 px-3 py-2 rounded-lg" style={{ background: r.bg }}>
+              <span>{r.icon}</span>
+              <div>
+                <p className="text-xs font-semibold">{r.label}</p>
+                <p className="text-[10px] text-[var(--color-text-muted)]">{r.desc}</p>
               </div>
             </div>
-            <button onClick={handleLogout} className="user-btn">🚪 Sair</button>
-          </div>
-        </aside>
-
-        <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-          <div className="topbar">
-            <Logo />
-            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-              <NotificacoesBell />
-              <button onClick={() => setSidebarOpen(true)} className="hamburger">
-                <svg width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2.2">
-                  <path d="M3 6h18M3 11h18M3 16h18" strokeLinecap="round" />
-                </svg>
-              </button>
-            </div>
-          </div>
-
-          <div className="desktop-notif" style={{ padding: "12px 32px 0", display: "flex", justifyContent: "flex-end" }}>
-            <NotificacoesBell />
-          </div>
-
-          {isReadOnly && (
-            <div style={{ padding: "8px 32px", background: "#fef3c7", borderBottom: "1px solid #fde68a", display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 14 }}>👁️</span>
-              <span style={{ fontSize: 12, color: "#92400e", fontWeight: 500 }}>Modo somente leitura — você pode visualizar mas não editar</span>
-            </div>
-          )}
-
-          <main className="main-content">
-            <div style={{ maxWidth: 1100, margin: "0 auto", width: "100%" }}>{children}</div>
-          </main>
+          ))}
         </div>
       </div>
-    </>
+
+      {/* Formulário */}
+      {showForm && (
+        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-6">
+          <div className="flex items-center justify-between mb-5">
+            <h2 className="font-bold">{editandoId ? "Editar" : "Novo"} Usuário</h2>
+            <button onClick={() => { setShowForm(false); resetForm(); }} className="w-8 h-8 rounded-lg hover:bg-[var(--color-bg)] flex items-center justify-center text-[var(--color-text-muted)]">✕</button>
+          </div>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-semibold mb-1 text-[var(--color-text-muted)]">Nome</label>
+                <input type="text" value={nome} onChange={e => setNome(e.target.value)} required placeholder="Nome completo"
+                  className="w-full px-3 py-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm" />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold mb-1 text-[var(--color-text-muted)]">Email</label>
+                <input type="email" value={email} onChange={e => setEmail(e.target.value)} required placeholder="email@exemplo.com"
+                  disabled={!!editandoId}
+                  className="w-full px-3 py-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm disabled:opacity-50" />
+              </div>
+            </div>
+
+            {!editandoId && (
+              <div>
+                <label className="block text-xs font-semibold mb-1 text-[var(--color-text-muted)]">Senha</label>
+                <input type="password" value={senha} onChange={e => setSenha(e.target.value)} required placeholder="Mínimo 6 caracteres"
+                  minLength={6}
+                  className="w-full px-3 py-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm" />
+              </div>
+            )}
+
+            {/* Tipo de acesso */}
+            <div>
+              <label className="block text-xs font-semibold mb-2 text-[var(--color-text-muted)]">Tipo de Acesso</label>
+              <div className="flex gap-3">
+                {[
+                  { id: "master", label: "👑 Administrador", bg: "#dcfce7", border: "#86efac" },
+                  { id: "funcionario", label: "👤 Funcionário", bg: "#dbeafe", border: "#93c5fd" },
+                  { id: "leitura", label: "👁️ Somente Leitura", bg: "#fef3c7", border: "#fde68a" },
+                ].map(r => (
+                  <button key={r.id} type="button" onClick={() => setRole(r.id)}
+                    className={`flex-1 py-3 rounded-xl font-semibold text-xs transition-all ${role === r.id ? "shadow-md" : "opacity-60"}`}
+                    style={{ background: r.bg, border: role === r.id ? `2px solid ${r.border}` : "2px solid transparent" }}>
+                    {r.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Permissões para Funcionário e Leitura */}
+            {precisaPermissoes && (
+              <div className="rounded-xl p-4" style={{ background: role === "leitura" ? "#fefce8" : "#eff6ff", border: `1px solid ${role === "leitura" ? "#fde68a" : "#bfdbfe"}` }}>
+                <div className="flex items-center justify-between mb-3">
+                  <label className="text-xs font-bold" style={{ color: role === "leitura" ? "#92400e" : "#1e40af" }}>
+                    Módulos que este usuário pode acessar:
+                  </label>
+                  <div className="flex gap-2">
+                    <button type="button" onClick={selecionarTodos} className="text-[10px] px-2 py-1 rounded-lg font-semibold" style={{ background: role === "leitura" ? "#fde68a" : "#bfdbfe", color: role === "leitura" ? "#92400e" : "#1e40af" }}>Todos</button>
+                    <button type="button" onClick={limparTodos} className="text-[10px] px-2 py-1 bg-gray-100 text-gray-600 rounded-lg font-semibold hover:bg-gray-200">Limpar</button>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {todosModulos.map(mod => {
+                    const selecionado = modulosSelecionados.includes(mod.id);
+                    return (
+                      <button key={mod.id} type="button" onClick={() => toggleModulo(mod.id)}
+                        className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all text-left ${selecionado
+                            ? role === "leitura"
+                              ? "bg-amber-100 text-amber-800 border border-amber-300 shadow-sm"
+                              : "bg-blue-100 text-blue-800 border border-blue-300 shadow-sm"
+                            : "bg-white text-gray-500 border border-gray-200"
+                          }`}>
+                        <span>{mod.icon}</span>
+                        <span className="truncate">{mod.label}</span>
+                        {selecionado && <span className="ml-auto">✓</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-[10px] mt-2" style={{ color: role === "leitura" ? "#92400e" : "#1e40af" }}>
+                  {modulosSelecionados.length === 0
+                    ? "Nenhum módulo selecionado — usuário não verá nada no menu"
+                    : `${modulosSelecionados.length} de ${todosModulos.length} módulo(s) selecionado(s)`}
+                </p>
+              </div>
+            )}
+
+            {role === "master" && (
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3">
+                <p className="text-xs text-emerald-700 font-medium">👑 Administrador tem acesso total ao sistema, incluindo Painel do CEO e gerenciamento de usuários.</p>
+              </div>
+            )}
+
+            <button type="submit" disabled={loading}
+              className="w-full py-3 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white font-semibold rounded-xl hover:from-emerald-700 hover:to-emerald-600 transition-all disabled:opacity-50 text-sm shadow-md shadow-emerald-200">
+              {loading ? "Salvando..." : editandoId ? "Atualizar" : "Criar Usuário"}
+            </button>
+          </form>
+        </div>
+      )}
+
+      {/* Lista de usuários */}
+      {loading && !showForm ? (
+        <div className="text-center"><div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto" /></div>
+      ) : usuarios.length === 0 ? (
+        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-12 text-center text-[var(--color-text-muted)] text-sm">
+          Nenhum usuário cadastrado.
+        </div>
+      ) : (
+        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
+          {usuarios.map(u => {
+            const roleInfo = getRoleInfo(u.role);
+            return (
+              <div key={u.id} className="p-4 flex items-center justify-between hover:bg-[var(--color-bg)] transition-colors border-b border-[var(--color-border)] last:border-b-0">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center text-sm font-bold shrink-0" style={{ background: roleInfo.bg, color: roleInfo.color }}>
+                    {(u.nome || "U").charAt(0).toUpperCase()}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold truncate">{u.nome || "Sem nome"}</p>
+                    <p className="text-xs text-[var(--color-text-muted)]">{u.email}</p>
+                    <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+                      {getModulosLabel(u)}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-xs font-medium px-2.5 py-1 rounded-lg" style={{ background: roleInfo.bg, color: roleInfo.color }}>
+                    {roleInfo.icon} {roleInfo.label}
+                  </span>
+                  <button onClick={() => editarUsuario(u)} className="p-1.5 rounded-lg hover:bg-blue-50 text-[var(--color-text-muted)] hover:text-blue-600 transition text-sm">✏️</button>
+                  <button onClick={() => excluirUsuario(u.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-[var(--color-text-muted)] hover:text-red-500 transition text-sm">🗑️</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
