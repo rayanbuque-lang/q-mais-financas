@@ -166,6 +166,45 @@ export default function MovimentacoesPage() {
         ))}
       </div>
 
+      {/* Totais por Forma de Pagamento */}
+      {entradas.length > 0 && (() => {
+        const fpTotals: Record<string, number> = {};
+        entradas.forEach(m => {
+          const fp = m.forma_pagamento || "outros";
+          fpTotals[fp] = (fpTotals[fp] || 0) + m.valor;
+        });
+        const fpOrder = ["dinheiro","cartao","pix_santander","pix_inter","rom_card","app","prefeitura","outros"];
+        const fpDisplay: Record<string, { icon: string; label: string; cor: string }> = {
+          dinheiro: { icon: "💵", label: "Dinheiro", cor: "#16a34a" },
+          cartao: { icon: "💳", label: "Cartão", cor: "#2563eb" },
+          pix_santander: { icon: "📱", label: "Pix Santander", cor: "#dc2626" },
+          pix_inter: { icon: "📱", label: "Pix Inter", cor: "#f97316" },
+          rom_card: { icon: "💳", label: "Rom Card", cor: "#7c3aed" },
+          app: { icon: "📲", label: "App", cor: "#059669" },
+          prefeitura: { icon: "🏛️", label: "Prefeitura", cor: "#0891b2" },
+          outros: { icon: "❓", label: "Sem forma", cor: "#6b7280" },
+        };
+        const fpAtivos = fpOrder.filter(fp => fpTotals[fp] > 0);
+        if (fpAtivos.length === 0) return null;
+        return (
+          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-4">
+            <p className="text-sm font-bold mb-3">Entradas por Forma de Pagamento</p>
+            <div className="flex flex-wrap gap-3">
+              {fpAtivos.map(fp => {
+                const info = fpDisplay[fp];
+                return (
+                  <div key={fp} className="flex items-center gap-2 px-3 py-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)]">
+                    <span>{info.icon}</span>
+                    <span className="text-xs font-medium">{info.label}</span>
+                    <span className="text-xs font-bold" style={{ color: info.cor }}>{fmt(fpTotals[fp])}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+
       {mensagem && <div className={`p-3 rounded-xl text-sm font-medium text-center ${mensagem.includes("Erro") ? "bg-red-50 text-red-600" : "bg-emerald-50 text-emerald-700"}`}>{mensagem}</div>}
 
       {showForm && (
