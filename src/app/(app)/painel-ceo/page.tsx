@@ -152,10 +152,10 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
     const conteudo = document.getElementById("painel-ceo-conteudo");
     if (!conteudo) return;
 
-    const html2canvasModule = await import("html2canvas");
-    const html2canvas = html2canvasModule.default;
-    const jsPDFModule = await import("jspdf");
-    const jsPDF = jsPDFModule.jsPDF;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const html2canvas = (await import("html2canvas")).default as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const jsPDF = (await import("jspdf")).jsPDF as any;
 
     const canvas = await html2canvas(conteudo, { scale: 2, useCORS: true });
     const imgData = canvas.toDataURL("image/png");
