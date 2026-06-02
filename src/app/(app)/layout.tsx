@@ -12,47 +12,28 @@ interface Profile {
   nome: string;
   email: string;
   role: string;
-  permissoes: string[];
-  permissoes_modulos: string[];
 }
 
 const menuItems = [
-  { label: "Dashboard", href: "/dashboard", icon: "📊", modulo: "dashboard" },
-  { label: "Painel do CEO", href: "/painel-ceo", icon: "👔", modulo: "painel-ceo", masterOnly: true },
-  { label: "Movimentações", href: "/movimentacoes", icon: "💰", modulo: "movimentacoes" },
-  { label: "Captura por Foto", href: "/captura", icon: "📸", modulo: "captura" },
-  { label: "Recorrentes", href: "/recorrentes", icon: "🔁", modulo: "recorrentes" },
-  { label: "Contas a Pagar", href: "/contas-pagar", icon: "📋", modulo: "contas-pagar" },
-  { label: "Máquinas e Contas", href: "/maquinas", icon: "🏦", modulo: "maquinas" },
-  { label: "Vendas Maquininha", href: "/vendas", icon: "💳", modulo: "vendas" },
-  { label: "Categorias", href: "/categorias", icon: "🏷️", modulo: "categorias" },
-  { label: "Fechamento de Caixa", href: "/fechamento-caixa", icon: "🧮", modulo: "fechamento-caixa" },
-  { label: "Fluxo de Caixa", href: "/fluxo-de-caixa", icon: "📈", modulo: "fluxo-de-caixa" },
-  { label: "DRE", href: "/dre", icon: "📑", modulo: "dre" },
-  { label: "Fechamento Mensal", href: "/fechamento", icon: "🔒", modulo: "fechamento" },
-  { label: "Conciliação Bancária", href: "/conciliacao", icon: "🏦", modulo: "conciliacao" },
-  { label: "Relatórios", href: "/relatorios", icon: "📄", modulo: "relatorios" },
-  { label: "Análise Inteligente", href: "/analise", icon: "🧠", modulo: "analise" },
-  { label: "Histórico", href: "/audit", icon: "📜", modulo: "audit" },
-  { label: "Usuários", href: "/usuarios", icon: "👥", modulo: "usuarios", masterOnly: true },
+  { label: "Dashboard", href: "/dashboard", icon: "📊" },
+  { label: "Painel do CEO", href: "/painel-ceo", icon: "👔", masterOnly: true },
+  { label: "Movimentações", href: "/movimentacoes", icon: "💰" },
+  { label: "Captura por Foto", href: "/captura", icon: "📸" },
+  { label: "Recorrentes", href: "/recorrentes", icon: "🔁" },
+  { label: "Contas a Pagar", href: "/contas-pagar", icon: "📋" },
+  { label: "Máquinas e Contas", href: "/maquinas", icon: "🏦" },
+  { label: "Vendas Maquininha", href: "/vendas", icon: "💳" },
+  { label: "Categorias", href: "/categorias", icon: "🏷️" },
+  { label: "Fechamento de Caixa", href: "/fechamento-caixa", icon: "🧮" },
+  { label: "Fluxo de Caixa", href: "/fluxo-de-caixa", icon: "📈" },
+  { label: "DRE", href: "/dre", icon: "📑" },
+  { label: "Fechamento Mensal", href: "/fechamento", icon: "🔒" },
+  { label: "Conciliação Bancária", href: "/conciliacao", icon: "🏦" },
+  { label: "Relatórios", href: "/relatorios", icon: "📄" },
+  { label: "Análise Inteligente", href: "/analise", icon: "🧠" },
+  { label: "Histórico", href: "/audit", icon: "📜" },
+  { label: "Usuários", href: "/usuarios", icon: "👥", masterOnly: true },
 ];
-
-function getMenuVisivel(profile: Profile) {
-  // Master vê tudo
-  if (profile.role === "master") return menuItems;
-
-  // Funcionário vê tudo menos masterOnly
-  if (profile.role === "funcionario") {
-    return menuItems.filter(item => !item.masterOnly);
-  }
-
-  // Leitura: vê apenas módulos permitidos
-  const modsPermitidos = profile.permissoes_modulos || [];
-  return menuItems.filter(item => {
-    if (item.masterOnly) return false;
-    return modsPermitidos.includes(item.modulo) || modsPermitidos.includes("*");
-  });
-}
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -66,13 +47,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     async function loadProfile() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { router.push("/login"); return; }
-      const { data, error } = await supabase.from("profiles").select("id, nome, email, role, permissoes, permissoes_modulos").eq("id", user.id).single();
+      const { data } = await supabase.from("profiles").select("id, nome, email, role").eq("id", user.id).single();
       if (data) setProfile(data as Profile);
-      if (error) {
-        // Fallback: buscar sem permissoes_modulos
-        const { data: data2 } = await supabase.from("profiles").select("id, nome, email, role, permissoes").eq("id", user.id).single();
-        if (data2) setProfile({ ...data2, permissoes_modulos: [] } as Profile);
-      }
       setLoading(false);
     }
     loadProfile();
@@ -97,8 +73,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     );
   }
 
-  const menuVisivel = profile ? getMenuVisivel(profile) : [];
+  const isMaster = profile?.role === "master";
   const isReadOnly = profile?.role === "leitura";
+  const menuVisivel = isMaster ? menuItems : menuItems.filter(item => !item.masterOnly);
 
   return (
     <>
@@ -129,7 +106,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           <div style={{ padding: "16px 20px", borderBottom: "1px solid #e2e8e2", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <Logo />
             {isReadOnly && (
-              <span style={{ fontSize: 10, background: "#fef3c7", color: "#92400e", padding: "2px 8px", borderRadius: 6, fontWeight: 600 }}>👁️ Leitura</span>
+              <span style={{ fontSize: 10, background: "#fef3c7", color: "#92400e", padding: "2px 8px", borderRadius: 6, fontWeight: 600 }}>Leitura</span>
             )}
           </div>
 
@@ -179,7 +156,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             <NotificacoesBell />
           </div>
 
-          {/* Banner de leitura */}
           {isReadOnly && (
             <div style={{ padding: "8px 32px", background: "#fef3c7", borderBottom: "1px solid #fde68a", display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ fontSize: 14 }}>👁️</span>
