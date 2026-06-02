@@ -148,35 +148,86 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
     setCarregandoIA(false);
   }
 
-  async function exportarPDF() {
+  function exportarPDF() {
     const conteudo = document.getElementById("painel-ceo-conteudo");
     if (!conteudo) return;
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const html2canvas = (await import("html2canvas")).default as any;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const jsPDF = (await import("jspdf")).jsPDF as any;
+    const janela = window.open("", "_blank");
+    if (!janela) return;
 
-    const canvas = await html2canvas(conteudo, { scale: 2, useCORS: true });
-    const imgData = canvas.toDataURL("image/png");
-    const pdf = new jsPDF("p", "mm", "a4");
-    const pdfWidth = pdf.internal.pageSize.getWidth();
-    const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+    janela.document.write(`
+      <html>
+        <head>
+          <title>Painel CEO - ${mesesNomes[mes - 1]} ${ano}</title>
+          <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 40px; color: #1f2937; }
+            h1 { font-size: 24px; margin-bottom: 4px; }
+            h2 { font-size: 16px; margin-top: 24px; margin-bottom: 8px; }
+            table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+            th, td { padding: 8px 12px; border: 1px solid #e5e7eb; text-align: left; font-size: 12px; }
+            th { background: #f3f4f6; font-weight: 600; }
+            .kpi { display: inline-block; width: 15%; text-align: center; padding: 12px; margin: 4px; border: 1px solid #e5e7eb; border-radius: 8px; vertical-align: top; }
+            .kpi-label { font-size: 10px; color: #6b7280; text-transform: uppercase; }
+            .kpi-value { font-size: 16px; font-weight: 700; margin-top: 4px; }
+            .bar { height: 8px; background: #e5e7eb; border-radius: 4px; margin: 4px 0; }
+            .bar-fill { height: 8px; border-radius: 4px; }
+            .alert { padding: 8px 12px; border-radius: 8px; margin: 4px 0; font-size: 12px; }
+            @media print { body { padding: 20px; } }
+          </style>
+        </head>
+        <body>
+          <h1>Painel do CEO</h1>
+          <p style="color: #6b7280; font-size: 14px;">${mesesNomes[mes - 1]} de ${ano}</p>
+          <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 16px 0;">
 
-    let position = 0;
-    const pageHeight = pdf.internal.pageSize.getHeight();
+          <div style="text-align: center;">
+            <div class="kpi"><div class="kpi-label">Total Vendido</div><div class="kpi-value" style="color: #059669;">${fmt(totalVendido)}</div></div>
+            <div class="kpi"><div class="kpi-label">Média Diária</div><div class="kpi-value" style="color: #2563eb;">${fmt(mediaDiaria)}</div></div>
+            <div class="kpi"><div class="kpi-label">Meta Mensal</div><div class="kpi-value" style="color: #d97706;">${meta.meta_mensal > 0 ? fmt(meta.meta_mensal) : "—"}</div></div>
+            <div class="kpi"><div class="kpi-label">% Meta</div><div class="kpi-value" style="color: ${pctMeta >= 100 ? "#059669" : "#d97706"};">${meta.meta_mensal > 0 ? pctMeta.toFixed(1) + "%" : "—"}</div></div>
+            <div class="kpi"><div class="kpi-label">Despesas</div><div class="kpi-value" style="color: #dc2626;">${fmt(totalSaidasMov)}</div></div>
+            <div class="kpi"><div class="kpi-label">Resultado</div><div class="kpi-value" style="color: ${resultado >= 0 ? "#059669" : "#dc2626"};">${fmt(resultado)}</div></div>
+          </div>
 
-    if (pdfHeight <= pageHeight) {
-      pdf.addImage(imgData, "PNG", 0, 0, pdfWidth, pdfHeight);
-    } else {
-      while (position < pdfHeight) {
-        if (position > 0) pdf.addPage();
-        pdf.addImage(imgData, "PNG", 0, -position, pdfWidth, pdfHeight);
-        position += pageHeight;
-      }
-    }
+          <h2>Formas de Pagamento</h2>
+          <table>
+            <tr><th>Forma</th><th>Valor</th><th>%</th></tr>
+            ${fpDados.map(f => `<tr><td>${f.nome}</td><td>${fmt(f.valor)}</td><td>${f.pct.toFixed(1)}%</td></tr>`).join("")}
+          </table>
 
-    pdf.save(`Painel-CEO-${mesesNomes[mes - 1]}-${ano}.pdf`);
+          <h2>Ranking de Dias</h2>
+          <table>
+            <tr><th></th><th>Dia</th><th>Valor</th></tr>
+            ${melhorDia ? `<tr><td>🏆 Melhor</td><td>${melhorDia.dia} (${melhorDia.semana})</td><td>${fmt(melhorDia.totalVendas)}</td></tr>` : ""}
+            ${piorDia ? `<tr><td>📉 Pior</td><td>${piorDia.dia} (${piorDia.semana})</td><td>${fmt(piorDia.totalVendas)}</td></tr>` : ""}
+          </table>
+
+          <h2>Média por Dia da Semana</h2>
+          <table>
+            <tr><th>Dia</th><th>Média</th></tr>
+            ${mediaPorSemana.map(d => `<tr><td>${d.dia}</td><td>${fmt(d.media)}</td></tr>`).join("")}
+          </table>
+
+          <h2>Alertas</h2>
+          <div class="alert" style="background: ${contasVencidas > 0 ? "#fef2f2" : "#ecfdf5"}; color: ${contasVencidas > 0 ? "#dc2626" : "#059669"};">
+            Contas Vencidas: ${contasVencidas} | Pendentes: ${contasPendentes} | Dias Conferidos: ${diasFechados}/${totalDiasComDados}
+          </div>
+
+          ${analiseIA ? `
+          <h2>Análise Estratégica por IA</h2>
+          <div style="background: #f5f3ff; border: 1px solid #ddd6fe; border-radius: 8px; padding: 16px; font-size: 12px; line-height: 1.6; white-space: pre-wrap;">${analiseIA}</div>
+          ` : ""}
+
+          <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0 12px;">
+          <p style="font-size: 10px; color: #9ca3af; text-align: center;">
+            Gerado em ${new Date().toLocaleDateString("pt-BR")} às ${new Date().toLocaleTimeString("pt-BR")} · +Q Finanças
+          </p>
+
+          <script>window.print();</script>
+        </body>
+      </html>
+    `);
+    janela.document.close();
   }
 
   function mesAnterior() { if (mes === 1) { setMes(12); setAno(ano - 1); } else setMes(mes - 1); }
@@ -220,7 +271,7 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
           <p className="text-[var(--color-text-muted)] text-sm mt-1">Visão estratégica completa do negócio</p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          <button onClick={exportarPDF} className="px-4 py-3 bg-gradient-to-r from-red-600 to-red-500 text-white font-semibold rounded-xl hover:from-red-700 hover:to-red-600 transition-all text-sm shadow-md">📄 Exportar PDF</button>
+          <button onClick={exportarPDF} className="px-4 py-3 bg-gradient-to-r from-gray-700 to-gray-600 text-white font-semibold rounded-xl hover:from-gray-800 hover:to-gray-700 transition-all text-sm shadow-md">🖨️ Imprimir / PDF</button>
           <button onClick={gerarAnalise} disabled={carregandoIA} className="px-4 py-3 bg-gradient-to-r from-purple-600 to-purple-500 text-white font-semibold rounded-xl hover:from-purple-700 hover:to-purple-600 transition-all text-sm shadow-md disabled:opacity-50">
             {carregandoIA ? "Analisando..." : "🧠 Análise IA"}
           </button>
