@@ -63,11 +63,20 @@ export default function FechamentoCaixaPage() {
 
   async function garantirCategoria(): Promise<string | null> {
     const nome = "Dinheiro (Fechamento Caixa)";
-    const { data: existente } = await supabase.from("categorias_saida").select("id").eq("nome", nome).limit(1);
-    if (existente && existente.length > 0) return existente[0].id;
 
-    const { data: nova } = await supabase.from("categorias_saida").insert({ nome, ativo: true }).select("id").single();
-    return nova?.id || null;
+    // Buscar em categorias_entrada primeiro (para aparecer no DRE como entrada)
+    const { data: existenteEntrada } = await supabase.from("categorias_entrada").select("id").eq("nome", nome).limit(1);
+    if (existenteEntrada && existenteEntrada.length > 0) return existenteEntrada[0].id;
+
+    // Criar em categorias_entrada
+    const { data: novaEntrada } = await supabase.from("categorias_entrada").insert({ nome, ativo: true }).select("id").single();
+    if (novaEntrada) return novaEntrada.id;
+
+    // Fallback: buscar em categorias_saida
+    const { data: existenteSaida } = await supabase.from("categorias_saida").select("id").eq("nome", nome).limit(1);
+    if (existenteSaida && existenteSaida.length > 0) return existenteSaida[0].id;
+
+    return null;
   }
 
   async function carregarDados() {
