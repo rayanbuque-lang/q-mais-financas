@@ -55,6 +55,38 @@ export default function MovimentacoesPage() {
     if (c.length > 0 && !c.find(x => x.id === categoriaId)) setCategoriaId(c[0].id);
   }, [tipo, catEntrada, catSaida]);
 
+  function calcSoma(expr: string): string {
+    const limpa = expr.replace(/\s/g, "");
+    if (!limpa.includes("+") && !limpa.includes("-")) return expr;
+    try {
+      const partes = limpa.split(/([+-])/).filter(Boolean);
+      let total = 0;
+      let op = "+";
+      for (const p of partes) {
+        if (p === "+" || p === "-") { op = p; continue; }
+        const num = parseFloat(p.replace(",", "."));
+        if (isNaN(num)) return expr;
+        if (op === "+") total += num; else total -= num;
+      }
+      return total.toFixed(2).replace(".", ",");
+    } catch { return expr; }
+  }
+
+  function handleValorChange(v: string) {
+    if (v.includes("+") || (v.includes("-") && v.indexOf("-") > 0)) {
+      setValor(v);
+    } else {
+      setValor(v);
+    }
+  }
+
+  function handleValorBlur() {
+    if (valor.includes("+") || (valor.includes("-") && valor.indexOf("-") > 0)) {
+      const resultado = calcSoma(valor);
+      setValor(resultado);
+    }
+  }
+
   function resetForm() { setTipo("saida"); setData(""); setValor(""); setCategoriaId(""); setObservacao(""); setFormaPagamento(""); setEditandoId(null); }
 
   function novoLancamento() {
@@ -220,7 +252,7 @@ export default function MovimentacoesPage() {
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               <div><label className="block text-xs font-semibold mb-1 text-[var(--color-text-muted)]">Data</label><input type="date" value={data} onChange={e => setData(e.target.value)} required className="w-full px-3 py-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm" /></div>
-              <div><label className="block text-xs font-semibold mb-1 text-[var(--color-text-muted)]">Valor (R$)</label><input value={valor} onChange={e => setValor(e.target.value)} placeholder="0,00" required className="w-full px-3 py-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm" /></div>
+              <div><label className="block text-xs font-semibold mb-1 text-[var(--color-text-muted)]">Valor (R$) <span className="text-[var(--color-text-muted)] font-normal">— use + para somar</span></label><input value={valor} onChange={e => handleValorChange(e.target.value)} onBlur={handleValorBlur} placeholder="Ex: 13+15+23 ou 50,00" required className="w-full px-3 py-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm" /></div>
               <div><label className="block text-xs font-semibold mb-1 text-[var(--color-text-muted)]">Categoria</label><select value={categoriaId} onChange={e => setCategoriaId(e.target.value)} required className="w-full px-3 py-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm">{cats.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}</select></div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
