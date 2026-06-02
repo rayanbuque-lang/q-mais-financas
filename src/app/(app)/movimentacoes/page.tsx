@@ -174,29 +174,49 @@ export default function MovimentacoesPage() {
     }
 
     if (error) {
-      setMensagem("Erro ao salvar: " + error.message);
+      setMensagem("Erro ao salvar movimentação: " + error.message);
       setLoading(false);
       setTimeout(() => setMensagem(""), 5000);
       return;
     }
 
-    // Salvar itens individuais
+    // Salvar itens individuais da somatória
     if (movId) {
-      // Sempre deletar itens antigos primeiro
-      await supabase.from("movimentacao_itens").delete().eq("movimentacao_id", movId);
-
-      // Se tem itens, inserir novos
-      if (itensTemp.length > 0) {
-        const novosItens = itensTemp.map(v => ({
-          movimentacao_id: movId,
-          valor: parseFloat(v.toFixed(2)),
-        }));
-        const { error: errItens } = await supabase.from("movimentacao_itens").insert(novosItens);
-        if (errItens) {
-          console.error("Erro ao salvar itens:", errItens);
-          setMensagem("Movimentação salva, mas erro nos itens: " + errItens.message);
-        }
+      // Deletar itens antigos
+      const { error: errDel } = await supabase.from("movimentacao_itens").delete().eq("movimentacao_id", movId);
+      if (errDel) {
+        console.error("Erro ao limpar itens antigos:", errDel);
       }
+
+      // Inserir novos itens se existirem
+      if (itensTemp.length > 0) {
+        let itensSalvos = 0;
+        let ultimoErro = "";
+
+        for (const v of itensTemp) {
+          const { error: errInsert } = await supabase.from("movimentacao_itens").insert({
+            movimentacao_id: movId,
+            valor: parseFloat(v.toFixed(2)),
+          });
+          if (errInsert) {
+            ultimoErro = errInsert.message;
+            console.error("Erro ao inserir item:", errInsert);
+          } else {
+            itensSalvos++;
+          }
+        }
+
+        // Feedback visível
+        if (itensSalvos === itensTemp.length) {
+          setMensagem(`Salvo com sucesso! ${itensSalvos} valores individuais registrados.`);
+        } else {
+          setMensagem(`Movimentação salva, mas ${itensTemp.length - itensSalvos} itens falharam. Erro: ${ultimoErro}`);
+        }
+      } else {
+        setMensagem(editandoId ? "Atualizado!" : "Salvo!");
+      }
+    } else {
+      setMensagem("Erro: ID da movimentação não encontrado.");
     }
 
     await registrarLog({
