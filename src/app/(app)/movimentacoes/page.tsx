@@ -53,28 +53,28 @@ export default function MovimentacoesPage() {
     if (!resultado) return;
     setMovs(resultado as Movimentacao[]);
 
-    const ids = resultado.map((m: Movimentacao) => m.id);
-    if (ids.length > 0) {
-      const { data: itens } = await supabase.from("movimentacao_itens").select("*").in("movimentacao_id", ids);
-      if (itens) {
-        const mapa: Record<string, Item[]> = {};
-        (itens as Item[]).forEach(item => {
-          if (!mapa[item.movimentacao_id]) mapa[item.movimentacao_id] = [];
-          mapa[item.movimentacao_id].push(item);
-        });
-        setItensPorMov(mapa);
+    // Buscar itens de CADA movimentação
+    const mapa: Record<string, Item[]> = {};
+    for (const mov of resultado) {
+      const { data: itens } = await supabase
+        .from("movimentacao_itens")
+        .select("id, movimentacao_id, valor")
+        .eq("movimentacao_id", mov.id)
+        .order("created_at", { ascending: true });
+      if (itens && itens.length > 0) {
+        mapa[mov.id] = itens as Item[];
       }
-    } else {
-      setItensPorMov({});
     }
+    setItensPorMov(mapa);
   }
 
   useEffect(() => { carregarMovimentacoes(); carregarCategorias(); }, [mes, ano]);
 
   useEffect(() => {
+    if (!showForm) return;
     const c = tipo === "entrada" ? catEntrada : catSaida;
     if (c.length > 0 && !c.find(x => x.id === categoriaId)) setCategoriaId(c[0].id);
-  }, [tipo, catEntrada, catSaida]);
+  }, [tipo, catEntrada, catSaida, showForm]);
 
   function resetForm() {
     setTipo("saida"); setData(""); setValor(""); setCategoriaId("");
@@ -84,8 +84,6 @@ export default function MovimentacoesPage() {
 
   function novoLancamento() {
     resetForm();
-    const c = tipo === "saida" ? catSaida : catEntrada;
-    if (c.length > 0) setCategoriaId(c[0].id);
     setShowForm(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -98,41 +96,33 @@ export default function MovimentacoesPage() {
     setEditandoId(m.id);
     setShowForm(true);
 
-    const itens = itensPorMov[m.id];
-    if (itens && itens.length > 0) {
-      const valores = itens.map(i => i.valor);
-      const total = valores.reduce((a, b) => a + b, 0);
+    // Carregar itens existentes
+    const itensExistentes = itensPorMov[m.id];
+    if (itensExistentes && itensExistentes.length > 0) {
+      const valores = itensExistentes.map(i => i.valor);
       setItensTemp(valores);
-      setValor(total.toFixed(2).replace(".", ","));
-      setTimeout(() => setShowSomatoria(true), 50);
+      setValor(valores.reduce((a, b) => a + b, 0).toFixed(2).replace(".", ","));
+      setShowSomatoria(true);
     } else {
       setItensTemp([]);
       setShowSomatoria(false);
       setValor(m.valor.toFixed(2).replace(".", ","));
     }
 
-    setTimeout(() => {
-      window.scrollTo({ top: 0, behavior: "smooth" });
-    }, 100);
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  // Aceita "15+30+15" ou "15" ou "15,50+22+10"
   function addItem() {
     const limpo = itemInput.replace(/\s/g, "");
     if (!limpo) return;
 
     const novos: number[] = [];
 
-    // Se tem + ou -, é uma expressão
-    if (limpo.includes("+") || (limpo.includes("-") && limpo.indexOf("-") > 0)) {
+    if (limpo.includes("+")) {
       const partes = limpo.split("+").filter(Boolean);
       for (const p of partes) {
-        const subPartes = p.split("-").filter(Boolean);
-        // Simplificação: tratar tudo como positivo
-        for (const sp of subPartes) {
-          const v = parseFloat(sp.replace(",", "."));
-          if (!isNaN(v) && v > 0) novos.push(v);
-        }
+        const v = parseFloat(p.replace(",", "."));
+        if (!isNaN(v) && v > 0) novos.push(v);
       }
     } else {
       const v = parseFloat(limpo.replace(",", "."));
@@ -174,37 +164,52 @@ export default function MovimentacoesPage() {
     let error;
 
     if (editandoId) {
-      const r = await supabase.from("movimentacoes").update(dados).eq("id", editandoId);
-      error = r.error;
+      const { error: err } = await supabase.from("movimentacoes").update(dados).eq("id", editandoId);
+      error = err;
+      movId = editandoId;
     } else {
-      const r = await supabase.from("movimentacoes").insert(dados).select("id").single();
-      error = r.error;
-      if (r.data) movId = r.data.id;
-    }
-
-    // Salvar itens individuais
-    if (!error && movId && itensTemp.length > 0) {
-      if (editandoId) {
-        await supabase.from("movimentacao_itens").delete().eq("movimentacao_id", editandoId);
-      }
-      const novosItens = itensTemp.map(v => ({ movimentacao_id: movId, valor: v }));
-      const { error: errItens } = await supabase.from("movimentacao_itens").insert(novosItens);
-      if (errItens) console.error("Erro ao salvar itens:", errItens);
-    }
-
-    if (!error && editandoId && itensTemp.length === 0) {
-      await supabase.from("movimentacao_itens").delete().eq("movimentacao_id", editandoId);
+      const { data: novo, error: err } = await supabase.from("movimentacoes").insert(dados).select("id").single();
+      error = err;
+      if (novo) movId = novo.id;
     }
 
     if (error) {
-      setMensagem("Erro ao salvar.");
-    } else {
-      setMensagem(editandoId ? "Atualizado!" : "Salvo!");
-      await registrarLog({ acao: editandoId ? "editou" : "criou", tabela: "movimentacoes", registroId: movId || undefined, detalhes: `R$ ${valorNum.toFixed(2)}${itensTemp.length > 0 ? ` (${itensTemp.length} valores)` : ""}` });
-      resetForm();
-      setShowForm(false);
-      carregarMovimentacoes();
+      setMensagem("Erro ao salvar: " + error.message);
+      setLoading(false);
+      setTimeout(() => setMensagem(""), 5000);
+      return;
     }
+
+    // Salvar itens individuais
+    if (movId) {
+      // Sempre deletar itens antigos primeiro
+      await supabase.from("movimentacao_itens").delete().eq("movimentacao_id", movId);
+
+      // Se tem itens, inserir novos
+      if (itensTemp.length > 0) {
+        const novosItens = itensTemp.map(v => ({
+          movimentacao_id: movId,
+          valor: parseFloat(v.toFixed(2)),
+        }));
+        const { error: errItens } = await supabase.from("movimentacao_itens").insert(novosItens);
+        if (errItens) {
+          console.error("Erro ao salvar itens:", errItens);
+          setMensagem("Movimentação salva, mas erro nos itens: " + errItens.message);
+        }
+      }
+    }
+
+    await registrarLog({
+      acao: editandoId ? "editou" : "criou",
+      tabela: "movimentacoes",
+      registroId: movId || undefined,
+      detalhes: `R$ ${valorNum.toFixed(2)}${itensTemp.length > 0 ? ` (${itensTemp.length} valores)` : ""}`,
+    });
+
+    setMensagem(editandoId ? "Atualizado!" : "Salvo!");
+    resetForm();
+    setShowForm(false);
+    await carregarMovimentacoes();
     setLoading(false);
     setTimeout(() => setMensagem(""), 3000);
   }
@@ -258,7 +263,6 @@ export default function MovimentacoesPage() {
   const totalEntradas = entradas.reduce((a, m) => a + m.valor, 0);
   const totalSaidas = saidas.reduce((a, m) => a + m.valor, 0);
   const saldo = totalEntradas - totalSaidas;
-
   const totalSomatoria = itensTemp.reduce((a, b) => a + b, 0);
 
   return (
@@ -334,33 +338,27 @@ export default function MovimentacoesPage() {
           </div>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="flex gap-3">
-              <button type="button" onClick={() => { setTipo("entrada"); const c = catEntrada; if (c.length > 0) setCategoriaId(c[0].id); }}
+              <button type="button" onClick={() => { setTipo("entrada"); }}
                 className={`flex-1 py-3 rounded-xl font-semibold text-sm transition-all ${tipo === "entrada" ? "bg-emerald-600 text-white shadow-md" : "bg-[var(--color-bg)] text-[var(--color-text-muted)] border border-[var(--color-border)]"}`}>▲ Entrada</button>
-              <button type="button" onClick={() => { setTipo("saida"); const c = catSaida; if (c.length > 0) setCategoriaId(c[0].id); }}
+              <button type="button" onClick={() => { setTipo("saida"); }}
                 className={`flex-1 py-3 rounded-xl font-semibold text-sm transition-all ${tipo === "saida" ? "bg-red-500 text-white shadow-md" : "bg-[var(--color-bg)] text-[var(--color-text-muted)] border border-[var(--color-border)]"}`}>▼ Saída</button>
             </div>
 
-            {/* Data */}
             <div>
               <label className="block text-xs font-semibold mb-1 text-[var(--color-text-muted)]">Data</label>
-              <input type="date" value={data} onChange={e => setData(e.target.value)} required
-                className="w-full px-3 py-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm" />
+              <input type="date" value={data} onChange={e => setData(e.target.value)} required className="w-full px-3 py-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm" />
             </div>
 
-            {/* Categoria - SELECT */}
             <div>
               <label className="block text-xs font-semibold mb-1 text-[var(--color-text-muted)]">Categoria</label>
-              <select value={categoriaId} onChange={e => setCategoriaId(e.target.value)} required
-                className="w-full px-3 py-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm">
+              <select value={categoriaId} onChange={e => setCategoriaId(e.target.value)} required className="w-full px-3 py-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm">
                 {cats.map(c => <option key={c.id} value={c.id}>{getCatIcon(c.nome)} {c.nome}</option>)}
               </select>
             </div>
 
-            {/* Valor */}
             <div>
               <label className="block text-xs font-semibold mb-1 text-[var(--color-text-muted)]">Valor Total (R$)</label>
-              <input value={valor} onChange={e => setValor(e.target.value)} placeholder="0,00" required
-                className="w-full px-3 py-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm" />
+              <input value={valor} onChange={e => setValor(e.target.value)} placeholder="0,00" required className="w-full px-3 py-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm" />
             </div>
 
             {/* Somatória */}
@@ -404,11 +402,9 @@ export default function MovimentacoesPage() {
               )}
             </div>
 
-            {/* Observação */}
             <div>
               <label className="block text-xs font-semibold mb-1 text-[var(--color-text-muted)]">Observação</label>
-              <input value={observacao} onChange={e => setObservacao(e.target.value)} placeholder="Ex: Venda balcão"
-                className="w-full px-3 py-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm" />
+              <input value={observacao} onChange={e => setObservacao(e.target.value)} placeholder="Ex: Venda balcão" className="w-full px-3 py-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm" />
             </div>
 
             <button type="submit" disabled={loading}
@@ -434,8 +430,12 @@ export default function MovimentacoesPage() {
             const isDetalhe = detalheId === m.id;
             return (
               <div key={m.id}>
-                <div className="p-4 flex items-center justify-between hover:bg-[var(--color-bg)] transition-colors border-b border-[var(--color-border)]">
-                  <div className="flex items-center gap-3 min-w-0 cursor-pointer" onClick={() => { if (temItens) setDetalheId(isDetalhe ? null : m.id); }}>
+                {/* Linha principal - clicável se tem itens */}
+                <div
+                  className={`p-4 flex items-center justify-between transition-colors border-b border-[var(--color-border)] ${temItens ? "cursor-pointer hover:bg-blue-50" : "hover:bg-[var(--color-bg)]"}`}
+                  onClick={() => { if (temItens) setDetalheId(isDetalhe ? null : m.id); }}
+                >
+                  <div className="flex items-center gap-3 min-w-0">
                     <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-sm shrink-0 ${m.tipo === "entrada" ? "bg-emerald-50 text-emerald-600" : "bg-red-50 text-red-500"}`}>
                       {icon}
                     </div>
@@ -444,7 +444,6 @@ export default function MovimentacoesPage() {
                       <p className="text-xs text-[var(--color-text-muted)]">
                         {new Date(m.data + "T12:00:00").toLocaleDateString("pt-BR")}
                         {m.observacao && ` · ${m.observacao}`}
-                        {temItens && <span className="ml-1 text-blue-500 font-medium">📐 {itens!.length} valores {isDetalhe ? "▲" : "▼"}</span>}
                       </p>
                     </div>
                   </div>
@@ -452,15 +451,20 @@ export default function MovimentacoesPage() {
                     <span className={`font-bold text-sm ${m.tipo === "entrada" ? "text-emerald-600" : "text-red-500"}`}>
                       {m.tipo === "entrada" ? "+" : "-"} {fmt(m.valor)}
                     </span>
-                    <button onClick={() => editarMov(m)} className="p-1.5 rounded-lg hover:bg-blue-50 text-[var(--color-text-muted)] hover:text-blue-600 transition text-sm">✏️</button>
-                    <button onClick={() => excluirMov(m.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-[var(--color-text-muted)] hover:text-red-500 transition text-sm">🗑️</button>
+                    {temItens && (
+                      <span className="text-xs font-medium text-blue-600 bg-blue-50 px-2 py-1 rounded-lg">
+                        📐 {itens!.length} valores {isDetalhe ? "▲" : "▼"}
+                      </span>
+                    )}
+                    <button onClick={(e) => { e.stopPropagation(); editarMov(m); }} className="p-1.5 rounded-lg hover:bg-blue-100 text-[var(--color-text-muted)] hover:text-blue-600 transition text-sm">✏️</button>
+                    <button onClick={(e) => { e.stopPropagation(); excluirMov(m.id); }} className="p-1.5 rounded-lg hover:bg-red-100 text-[var(--color-text-muted)] hover:text-red-500 transition text-sm">🗑️</button>
                   </div>
                 </div>
 
+                {/* Detalhe dos itens */}
                 {isDetalhe && temItens && (
-                  <div className="bg-blue-50 border-b border-blue-200 px-4 py-3" style={{ animation: "fadeUp 0.2s ease" }}>
-                    <style>{`@keyframes fadeUp{from{opacity:0}to{opacity:1}}`}</style>
-                    <p className="text-xs font-bold text-blue-700 mb-2">📐 Valores individuais:</p>
+                  <div className="bg-blue-50 border-b border-blue-200 px-4 py-3">
+                    <p className="text-xs font-bold text-blue-700 mb-2">📐 Valores individuais que formaram o total:</p>
                     <div className="flex flex-wrap gap-2">
                       {itens!.map((item, i) => (
                         <span key={item.id} className="inline-flex items-center px-2.5 py-1 bg-white border border-blue-200 rounded-lg text-xs font-medium text-blue-700">
@@ -469,7 +473,7 @@ export default function MovimentacoesPage() {
                       ))}
                     </div>
                     <div className="flex items-center justify-between pt-2 mt-2 border-t border-blue-200">
-                      <span className="text-xs font-bold text-blue-800">{itens!.length} valores</span>
+                      <span className="text-xs font-bold text-blue-800">{itens!.length} valores somados</span>
                       <span className="text-sm font-bold text-blue-800">Total: {fmt(itens!.reduce((a, b) => a + b.valor, 0))}</span>
                     </div>
                   </div>
