@@ -47,7 +47,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     async function loadProfile() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { router.push("/login"); return; }
-      const { data } = await supabase.from("profiles").select("id, nome, email, role").eq("id", user.id).single();
+      const { data, error } = await supabase.from("profiles").select("id, nome, email, role").eq("id", user.id).single();
+      if (error) console.error("Erro profile:", error);
       if (data) setProfile(data as Profile);
       setLoading(false);
     }
