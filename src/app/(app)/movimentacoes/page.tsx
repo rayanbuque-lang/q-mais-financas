@@ -91,21 +91,29 @@ export default function MovimentacoesPage() {
   }
 
   function editarMov(m: Movimentacao) {
-    setTipo(m.tipo as "entrada" | "saida"); setData(m.data);
-    setCategoriaId(m.categoria_id); setObservacao(m.observacao || "");
+    setTipo(m.tipo as "entrada" | "saida");
+    setData(m.data);
+    setCategoriaId(m.categoria_id);
+    setObservacao(m.observacao || "");
     setEditandoId(m.id);
+    setShowForm(true);
+
     const itens = itensPorMov[m.id];
     if (itens && itens.length > 0) {
-      setShowSomatoria(true);
-      setItensTemp(itens.map(i => i.valor));
-      setValor(itens.reduce((a, i) => a + i.valor, 0).toFixed(2).replace(".", ","));
+      const valores = itens.map(i => i.valor);
+      const total = valores.reduce((a, b) => a + b, 0);
+      setItensTemp(valores);
+      setValor(total.toFixed(2).replace(".", ","));
+      setTimeout(() => setShowSomatoria(true), 50);
     } else {
-      setShowSomatoria(false);
       setItensTemp([]);
+      setShowSomatoria(false);
       setValor(m.valor.toFixed(2).replace(".", ","));
     }
-    setShowForm(true);
-    window.scrollTo({ top: 0, behavior: "smooth" });
+
+    setTimeout(() => {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }, 100);
   }
 
   // Aceita "15+30+15" ou "15" ou "15,50+22+10"
