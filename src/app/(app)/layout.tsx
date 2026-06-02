@@ -66,8 +66,13 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     async function loadProfile() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { router.push("/login"); return; }
-      const { data } = await supabase.from("profiles").select("*").eq("id", user.id).single();
+      const { data, error } = await supabase.from("profiles").select("id, nome, email, role, permissoes, permissoes_modulos").eq("id", user.id).single();
       if (data) setProfile(data as Profile);
+      if (error) {
+        // Fallback: buscar sem permissoes_modulos
+        const { data: data2 } = await supabase.from("profiles").select("id, nome, email, role, permissoes").eq("id", user.id).single();
+        if (data2) setProfile({ ...data2, permissoes_modulos: [] } as Profile);
+      }
       setLoading(false);
     }
     loadProfile();
