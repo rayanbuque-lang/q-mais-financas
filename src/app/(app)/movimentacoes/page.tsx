@@ -181,42 +181,31 @@ export default function MovimentacoesPage() {
     }
 
     // Salvar itens individuais da somatória
-    if (movId) {
+    if (movId && itensTemp.length > 0) {
       // Deletar itens antigos
-      const { error: errDel } = await supabase.from("movimentacao_itens").delete().eq("movimentacao_id", movId);
-      if (errDel) {
-        console.error("Erro ao limpar itens antigos:", errDel);
-      }
+      await supabase.from("movimentacao_itens").delete().eq("movimentacao_id", movId);
 
-      // Inserir novos itens se existirem
-      if (itensTemp.length > 0) {
-        let itensSalvos = 0;
-        let ultimoErro = "";
+      // Inserir todos de uma vez
+      const novosItens = itensTemp.map(v => ({
+        movimentacao_id: movId,
+        valor: parseFloat(v.toFixed(2)),
+      }));
 
-        for (const v of itensTemp) {
-          const { error: errInsert } = await supabase.from("movimentacao_itens").insert({
-            movimentacao_id: movId,
-            valor: parseFloat(v.toFixed(2)),
-          });
-          if (errInsert) {
-            ultimoErro = errInsert.message;
-            console.error("Erro ao inserir item:", errInsert);
-          } else {
-            itensSalvos++;
-          }
-        }
+      const { data: itensInseridos, error: errItens } = await supabase
+        .from("movimentacao_itens")
+        .insert(novosItens)
+        .select();
 
-        // Feedback visível
-        if (itensSalvos === itensTemp.length) {
-          setMensagem(`Salvo com sucesso! ${itensSalvos} valores individuais registrados.`);
-        } else {
-          setMensagem(`Movimentação salva, mas ${itensTemp.length - itensSalvos} itens falharam. Erro: ${ultimoErro}`);
-        }
+      if (errItens) {
+        setMensagem(`ERRO ao salvar somatória: ${errItens.message}. Detalhes: ${errItens.details || "nenhum"}`);
       } else {
-        setMensagem(editandoId ? "Atualizado!" : "Salvo!");
+        setMensagem(`Salvo! ${itensInseridos?.length || 0} valores individuais registrados.`);
       }
+    } else if (movId && editandoId) {
+      await supabase.from("movimentacao_itens").delete().eq("movimentacao_id", movId);
+      setMensagem(editandoId ? "Atualizado!" : "Salvo!");
     } else {
-      setMensagem("Erro: ID da movimentação não encontrado.");
+      setMensagem(editandoId ? "Atualizado!" : "Salvo!");
     }
 
     await registrarLog({
