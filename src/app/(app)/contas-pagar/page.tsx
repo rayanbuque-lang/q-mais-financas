@@ -52,6 +52,7 @@ export default function ContasPagarPage() {
   const [selecionadas, setSelecionadas] = useState<Set<string>>(new Set());
   const [modoLote, setModoLote] = useState(false);
   const [loteDataPagamento, setLoteDataPagamento] = useState(new Date().toISOString().split("T")[0]);
+  const [highlightId, setHighlightId] = useState<string | null>(null);
 
   const supabase = createClient();
 
@@ -78,6 +79,30 @@ export default function ContasPagarPage() {
   }
 
   useEffect(() => { carregarDados(); gerarRecorrentes(); }, [mes, ano]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const destacar = params.get("destacar");
+    const dataParam = params.get("data");
+    if (destacar) {
+      setHighlightId(destacar);
+      if (dataParam) {
+        const d = new Date(dataParam + "T12:00:00");
+        setMes(d.getMonth() + 1);
+        setAno(d.getFullYear());
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!highlightId) return;
+    const el = document.getElementById(`conta-${highlightId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      const timer = setTimeout(() => setHighlightId(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [contas, highlightId]);
 
   async function gerarRecorrentes() {
     const inicio = `${ano}-${String(mes).padStart(2, "0")}-01`;
@@ -287,8 +312,12 @@ export default function ContasPagarPage() {
     const isPagando = pagandoId === conta.id;
 
     return (
-      <div key={conta.id}>
-        <div className={`p-4 flex items-center justify-between hover:bg-[var(--color-bg)] transition-colors ${conta.status === "pago" ? "opacity-60" : ""}`}>
+      <div key={conta.id} id={`conta-${conta.id}`}>
+        <div className={`p-4 flex items-center justify-between transition-all duration-300 ${
+          highlightId === conta.id
+            ? "bg-yellow-50 ring-2 ring-inset ring-yellow-400"
+            : `hover:bg-[var(--color-bg)] ${conta.status === "pago" ? "opacity-60" : ""}`
+        }`}>
           <div className="flex items-center gap-3 min-w-0">
             {modoLote && conta.status === "pendente" && (
               <input type="checkbox" checked={selecionadas.has(conta.id)} onChange={() => toggleSelecionada(conta.id)} className="w-4 h-4 rounded accent-emerald-600 shrink-0" />

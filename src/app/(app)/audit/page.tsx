@@ -1,7 +1,18 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
+
+const tabelasRoutes: Record<string, string> = {
+  movimentacoes: "/movimentacoes",
+  contas_pagar: "/contas-pagar",
+  categorias_entrada: "/categorias",
+  categorias_saida: "/categorias",
+  maquinas: "/maquinas",
+  vendas_maquina: "/vendas",
+  profiles: "/usuarios",
+};
 
 interface LogEntry {
   id: string;
@@ -150,6 +161,17 @@ export default function AuditPage() {
     if (typeof valor === "boolean") return valor ? "Sim" : "Não";
     if (typeof valor === "object") return JSON.stringify(valor);
     return String(valor);
+  }
+
+  function buildVerUrl(log: LogEntry): string | null {
+    if (log.acao === "excluiu") return null;
+    const rota = tabelasRoutes[log.tabela];
+    if (!rota || !log.registro_id) return null;
+    const params = new URLSearchParams({ destacar: log.registro_id });
+    const dados = log.dados_novos || log.dados_anteriores;
+    const data = dados?.data ?? dados?.data_vencimento;
+    if (data && typeof data === "string") params.set("data", String(data));
+    return `${rota}?${params.toString()}`;
   }
 
   function descreverLog(log: LogEntry): string {
@@ -393,6 +415,17 @@ export default function AuditPage() {
                     <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${config.bg} ${config.color}`}>
                       {config.label}
                     </span>
+                    {(() => {
+                      const url = buildVerUrl(log);
+                      if (!url) return null;
+                      return (
+                        <span onClick={(e) => e.stopPropagation()}>
+                          <Link href={url} className="px-2 py-1 rounded-lg text-[10px] font-semibold bg-blue-50 text-blue-600 hover:bg-blue-100 transition">
+                            Ver →
+                          </Link>
+                        </span>
+                      );
+                    })()}
                     {temDiff && (
                       <span className="text-xs text-[var(--color-text-muted)]">
                         {isExpandido ? "▼" : "▶"}

@@ -32,6 +32,7 @@ export default function MovimentacoesPage() {
   const [itemInput, setItemInput] = useState("");
 
   const [detalheId, setDetalheId] = useState<string | null>(null);
+  const [highlightId, setHighlightId] = useState<string | null>(null);
 
   const supabase = createClient();
   const cats = tipo === "entrada" ? catEntrada : catSaida;
@@ -69,6 +70,30 @@ export default function MovimentacoesPage() {
   }
 
   useEffect(() => { carregarMovimentacoes(); carregarCategorias(); }, [mes, ano]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const destacar = params.get("destacar");
+    const dataParam = params.get("data");
+    if (destacar) {
+      setHighlightId(destacar);
+      if (dataParam) {
+        const d = new Date(dataParam + "T12:00:00");
+        setMes(d.getMonth());
+        setAno(d.getFullYear());
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!highlightId) return;
+    const el = document.getElementById(`mov-${highlightId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      const timer = setTimeout(() => setHighlightId(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [movs, highlightId]);
 
   useEffect(() => {
     if (!showForm) return;
@@ -439,10 +464,14 @@ export default function MovimentacoesPage() {
             const temItens = itens && itens.length > 0;
             const isDetalhe = detalheId === m.id;
             return (
-              <div key={m.id}>
+              <div key={m.id} id={`mov-${m.id}`}>
                 {/* Linha principal - clicável se tem itens */}
                 <div
-                  className={`p-4 flex items-center justify-between transition-colors border-b border-[var(--color-border)] ${temItens ? "cursor-pointer hover:bg-blue-50" : "hover:bg-[var(--color-bg)]"}`}
+                  className={`p-4 flex items-center justify-between transition-all duration-300 border-b border-[var(--color-border)] ${
+                    highlightId === m.id
+                      ? "bg-yellow-50 ring-2 ring-inset ring-yellow-400"
+                      : temItens ? "cursor-pointer hover:bg-blue-50" : "hover:bg-[var(--color-bg)]"
+                  }`}
                   onClick={() => { if (temItens) setDetalheId(isDetalhe ? null : m.id); }}
                 >
                   <div className="flex items-center gap-3 min-w-0">

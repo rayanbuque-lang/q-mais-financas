@@ -33,6 +33,7 @@ export default function DashboardPage() {
   const [movAnterior, setMovAnterior] = useState<Movimentacao[]>([]);
   const [movRecentes, setMovRecentes] = useState<Movimentacao[]>([]);
   const [grafico, setGrafico] = useState<MesGrafico[]>([]);
+  const [mesSelecionadoIdx, setMesSelecionadoIdx] = useState<number | null>(null);
   const [contasPendentes, setContasPendentes] = useState<ContaPendente[]>([]);
   const [loading, setLoading] = useState(true);
   const [recentesNomes, setRecentesNomes] = useState<Record<string, string>>({});
@@ -244,22 +245,65 @@ export default function DashboardPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-6">
-          <h2 className="font-bold text-sm uppercase tracking-wider text-[var(--color-text-muted)] mb-5">Últimos 6 Meses</h2>
+          <h2 className="font-bold text-sm uppercase tracking-wider text-[var(--color-text-muted)] mb-1">Últimos 6 Meses</h2>
+          <p className="text-[10px] text-[var(--color-text-muted)] mb-4">Clique em um mês para ver os detalhes</p>
           <div className="flex items-end gap-3 h-40">
-            {grafico.map((g, i) => (
-              <div key={i} className="flex-1 flex flex-col items-center gap-1 h-full justify-end">
-                <div className="flex gap-1 items-end w-full h-full">
-                  <div className="flex-1 bg-emerald-400 rounded-t-md transition-all duration-700" style={{ height: `${maxGrafico > 0 ? (g.entradas / maxGrafico) * 100 : 0}%`, minHeight: g.entradas > 0 ? "4px" : "0" }} />
-                  <div className="flex-1 bg-red-400 rounded-t-md transition-all duration-700" style={{ height: `${maxGrafico > 0 ? (g.saidas / maxGrafico) * 100 : 0}%`, minHeight: g.saidas > 0 ? "4px" : "0" }} />
+            {grafico.map((g, i) => {
+              const selecionado = mesSelecionadoIdx === i;
+              return (
+                <div
+                  key={i}
+                  className="flex-1 flex flex-col items-center gap-1 h-full justify-end cursor-pointer group"
+                  onClick={() => setMesSelecionadoIdx(selecionado ? null : i)}
+                >
+                  <div className="flex gap-1 items-end w-full h-full">
+                    <div
+                      className={`flex-1 rounded-t-md transition-all duration-300 ${selecionado ? "bg-emerald-600" : "bg-emerald-400 group-hover:bg-emerald-500"}`}
+                      style={{ height: `${maxGrafico > 0 ? (g.entradas / maxGrafico) * 100 : 0}%`, minHeight: g.entradas > 0 ? "4px" : "0" }}
+                    />
+                    <div
+                      className={`flex-1 rounded-t-md transition-all duration-300 ${selecionado ? "bg-red-600" : "bg-red-400 group-hover:bg-red-500"}`}
+                      style={{ height: `${maxGrafico > 0 ? (g.saidas / maxGrafico) * 100 : 0}%`, minHeight: g.saidas > 0 ? "4px" : "0" }}
+                    />
+                  </div>
+                  <span className={`text-[10px] font-medium capitalize transition-colors ${selecionado ? "text-[var(--color-text)] font-bold" : "text-[var(--color-text-muted)]"}`}>
+                    {g.nome}
+                  </span>
                 </div>
-                <span className="text-[10px] text-[var(--color-text-muted)] font-medium capitalize">{g.nome}</span>
-              </div>
-            ))}
+              );
+            })}
           </div>
           <div className="flex justify-center gap-6 mt-4">
             <div className="flex items-center gap-2"><div className="w-3 h-3 rounded bg-emerald-400" /><span className="text-xs text-[var(--color-text-muted)]">Entradas</span></div>
             <div className="flex items-center gap-2"><div className="w-3 h-3 rounded bg-red-400" /><span className="text-xs text-[var(--color-text-muted)]">Saídas</span></div>
           </div>
+
+          {mesSelecionadoIdx !== null && grafico[mesSelecionadoIdx] && (() => {
+            const g = grafico[mesSelecionadoIdx];
+            const saldo = g.entradas - g.saidas;
+            return (
+              <div className="mt-4 p-4 bg-[var(--color-bg)] rounded-xl border border-[var(--color-border)]">
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-xs font-bold capitalize text-[var(--color-text)]">{g.nome}</p>
+                  <button onClick={() => setMesSelecionadoIdx(null)} className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition">✕</button>
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="text-center p-2 bg-emerald-50 rounded-lg">
+                    <p className="text-[10px] text-emerald-700 font-semibold uppercase">Entradas</p>
+                    <p className="text-sm font-bold text-emerald-600 mt-0.5">{fmt(g.entradas)}</p>
+                  </div>
+                  <div className="text-center p-2 bg-red-50 rounded-lg">
+                    <p className="text-[10px] text-red-700 font-semibold uppercase">Saídas</p>
+                    <p className="text-sm font-bold text-red-500 mt-0.5">{fmt(g.saidas)}</p>
+                  </div>
+                  <div className={`text-center p-2 rounded-lg ${saldo >= 0 ? "bg-emerald-50" : "bg-red-50"}`}>
+                    <p className={`text-[10px] font-semibold uppercase ${saldo >= 0 ? "text-emerald-700" : "text-red-700"}`}>Saldo</p>
+                    <p className={`text-sm font-bold mt-0.5 ${saldo >= 0 ? "text-emerald-700" : "text-red-600"}`}>{fmt(saldo)}</p>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
         </div>
 
         <div className="space-y-4">
