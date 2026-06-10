@@ -84,13 +84,27 @@ export default function ContasPagarPage() {
     const params = new URLSearchParams(window.location.search);
     const destacar = params.get("destacar");
     const dataParam = params.get("data");
-    if (destacar) {
-      setHighlightId(destacar);
-      if (dataParam) {
-        const d = new Date(dataParam + "T12:00:00");
-        setMes(d.getMonth() + 1);
-        setAno(d.getFullYear());
-      }
+    if (!destacar) return;
+
+    setHighlightId(destacar);
+
+    if (dataParam) {
+      const d = new Date(dataParam + "T12:00:00");
+      setMes(d.getMonth() + 1);
+      setAno(d.getFullYear());
+    } else {
+      createClient()
+        .from("contas_pagar")
+        .select("data_vencimento")
+        .eq("id", destacar)
+        .single()
+        .then(({ data: registro }) => {
+          if (registro?.data_vencimento) {
+            const d = new Date(registro.data_vencimento + "T12:00:00");
+            setMes(d.getMonth() + 1);
+            setAno(d.getFullYear());
+          }
+        });
     }
   }, []);
 

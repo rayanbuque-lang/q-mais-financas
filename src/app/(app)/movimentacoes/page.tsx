@@ -75,13 +75,28 @@ export default function MovimentacoesPage() {
     const params = new URLSearchParams(window.location.search);
     const destacar = params.get("destacar");
     const dataParam = params.get("data");
-    if (destacar) {
-      setHighlightId(destacar);
-      if (dataParam) {
-        const d = new Date(dataParam + "T12:00:00");
-        setMes(d.getMonth());
-        setAno(d.getFullYear());
-      }
+    if (!destacar) return;
+
+    setHighlightId(destacar);
+
+    if (dataParam) {
+      const d = new Date(dataParam + "T12:00:00");
+      setMes(d.getMonth());
+      setAno(d.getFullYear());
+    } else {
+      // data não veio na URL — busca direto no banco
+      createClient()
+        .from("movimentacoes")
+        .select("data")
+        .eq("id", destacar)
+        .single()
+        .then(({ data: registro }) => {
+          if (registro?.data) {
+            const d = new Date(registro.data + "T12:00:00");
+            setMes(d.getMonth());
+            setAno(d.getFullYear());
+          }
+        });
     }
   }, []);
 
