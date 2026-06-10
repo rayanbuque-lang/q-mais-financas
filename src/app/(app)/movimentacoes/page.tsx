@@ -2,8 +2,9 @@
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { registrarLog } from "@/lib/audit";
+import ComprovantePicker from "@/components/comprovante-picker";
 
-interface Movimentacao { id: string; tipo: string; data: string; valor: number; categoria_id: string; observacao: string; revisar: boolean; }
+interface Movimentacao { id: string; tipo: string; data: string; valor: number; categoria_id: string; observacao: string; revisar: boolean; comprovante_url?: string; }
 interface Cat { id: string; nome: string; }
 interface Item { id: string; movimentacao_id: string; valor: number; }
 interface Template { id: string; nome: string; tipo: "entrada" | "saida"; valor: number; categoria_id: string; observacao: string; }
@@ -35,6 +36,7 @@ export default function MovimentacoesPage() {
   const [detalheId, setDetalheId] = useState<string | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const [sugestaoCat, setSugestaoCat] = useState<string | null>(null);
+  const [comprovanteUrl, setComprovanteUrl] = useState<string | null>(null);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [showTemplates, setShowTemplates] = useState(false);
   const [salvandoTemplate, setSalvandoTemplate] = useState(false);
@@ -165,6 +167,7 @@ export default function MovimentacoesPage() {
     setTipo("saida"); setData(""); setValor(""); setCategoriaId("");
     setObservacao(""); setEditandoId(null);
     setShowSomatoria(false); setItensTemp([]); setItemInput("");
+    setComprovanteUrl(null);
   }
 
   function novoLancamento() {
@@ -178,6 +181,7 @@ export default function MovimentacoesPage() {
     setData(m.data);
     setCategoriaId(m.categoria_id);
     setObservacao(m.observacao || "");
+    setComprovanteUrl(m.comprovante_url ?? null);
     setEditandoId(m.id);
     setShowForm(true);
 
@@ -244,7 +248,7 @@ export default function MovimentacoesPage() {
       return;
     }
 
-    const dados = { tipo, data, valor: valorNum, categoria_id: categoriaId, observacao, forma_pagamento: null, revisar: false };
+    const dados = { tipo, data, valor: valorNum, categoria_id: categoriaId, observacao, forma_pagamento: null, revisar: false, comprovante_url: comprovanteUrl };
     let movId = editandoId;
     let error;
 
@@ -571,6 +575,12 @@ export default function MovimentacoesPage() {
               )}
             </div>
 
+            <ComprovantePicker
+              tabela="movimentacoes"
+              urlAtual={comprovanteUrl}
+              onChange={setComprovanteUrl}
+            />
+
             {!editandoId && (
               <div className="border border-dashed border-[var(--color-border)] rounded-xl p-3">
                 <button type="button" onClick={() => setSalvandoTemplate(!salvandoTemplate)}
@@ -627,6 +637,13 @@ export default function MovimentacoesPage() {
                       <p className="text-xs text-[var(--color-text-muted)]">
                         {new Date(m.data + "T12:00:00").toLocaleDateString("pt-BR")}
                         {m.observacao && ` · ${m.observacao}`}
+                        {m.comprovante_url && (
+                          <a href={m.comprovante_url} target="_blank" rel="noopener noreferrer"
+                            onClick={e => e.stopPropagation()}
+                            className="ml-1 inline-flex items-center gap-0.5 text-blue-500 hover:text-blue-700 hover:underline">
+                            📎 comprovante
+                          </a>
+                        )}
                       </p>
                     </div>
                   </div>

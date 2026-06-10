@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { registrarLog, verificarMesFechado, verificarAdmin } from "@/lib/audit";
+import ComprovantePicker from "@/components/comprovante-picker";
 
 interface ContaPagar {
   id: string;
@@ -15,6 +16,7 @@ interface ContaPagar {
   categoria_id: string;
   observacao: string;
   categoria_nome: string;
+  comprovante_url?: string;
 }
 
 interface Categoria { id: string; nome: string; }
@@ -53,6 +55,7 @@ export default function ContasPagarPage() {
   const [modoLote, setModoLote] = useState(false);
   const [loteDataPagamento, setLoteDataPagamento] = useState(new Date().toISOString().split("T")[0]);
   const [highlightId, setHighlightId] = useState<string | null>(null);
+  const [comprovanteUrl, setComprovanteUrl] = useState<string | null>(null);
 
   const supabase = createClient();
 
@@ -176,13 +179,13 @@ export default function ContasPagarPage() {
 
 
   function resetarFormulario() {
-    setFornecedor(""); setDescricao(""); setValor(""); setDataVencimento(""); setCategoriaId(""); setObservacao(""); setStatusInicial("pendente"); setDataPagamento(""); setEditandoId(null);
+    setFornecedor(""); setDescricao(""); setValor(""); setDataVencimento(""); setCategoriaId(""); setObservacao(""); setStatusInicial("pendente"); setDataPagamento(""); setEditandoId(null); setComprovanteUrl(null);
   }
 
   function abrirNovo() { resetarFormulario(); if (categorias.length > 0) setCategoriaId(categorias[0].id); setShowForm(true); }
 
   function abrirEditar(conta: ContaPagar) {
-    setFornecedor(conta.fornecedor); setDescricao(conta.descricao || ""); setValor(conta.valor.toString().replace(".", ",")); setDataVencimento(conta.data_vencimento); setCategoriaId(conta.categoria_id || ""); setObservacao(conta.observacao || ""); setStatusInicial(conta.status as "pendente" | "pago"); setDataPagamento(conta.data_pagamento || ""); setEditandoId(conta.id); setShowForm(true);
+    setFornecedor(conta.fornecedor); setDescricao(conta.descricao || ""); setValor(conta.valor.toString().replace(".", ",")); setDataVencimento(conta.data_vencimento); setCategoriaId(conta.categoria_id || ""); setObservacao(conta.observacao || ""); setStatusInicial(conta.status as "pendente" | "pago"); setDataPagamento(conta.data_pagamento || ""); setComprovanteUrl(conta.comprovante_url ?? null); setEditandoId(conta.id); setShowForm(true);
     setPagandoId(null);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -200,7 +203,7 @@ export default function ContasPagarPage() {
       }
     }
 
-    const dados: Record<string, unknown> = { fornecedor, descricao, valor: parseFloat(valor.replace(",", ".")), data_vencimento: dataVencimento, categoria_id: categoriaId, observacao, status: statusInicial };
+    const dados: Record<string, unknown> = { fornecedor, descricao, valor: parseFloat(valor.replace(",", ".")), data_vencimento: dataVencimento, categoria_id: categoriaId, observacao, status: statusInicial, comprovante_url: comprovanteUrl };
     if (statusInicial === "pago") { dados.data_pagamento = dataPagamento || new Date().toISOString().split("T")[0]; } else { dados.data_pagamento = null; }
 
     let error; let contaId = editandoId;
@@ -348,6 +351,13 @@ export default function ContasPagarPage() {
                 Vence: {new Date(conta.data_vencimento + "T12:00:00").toLocaleDateString("pt-BR")} ({diasSemana[new Date(conta.data_vencimento + "T12:00:00").getDay()]})
                 {conta.descricao && ` · ${conta.descricao}`}
                 {conta.data_pagamento && ` · Pago em ${new Date(conta.data_pagamento + "T12:00:00").toLocaleDateString("pt-BR")}`}
+                {conta.comprovante_url && (
+                  <a href={conta.comprovante_url} target="_blank" rel="noopener noreferrer"
+                    onClick={e => e.stopPropagation()}
+                    className="ml-1 inline-flex items-center gap-0.5 text-blue-500 hover:text-blue-700 hover:underline">
+                    📎 comprovante
+                  </a>
+                )}
               </p>
             </div>
           </div>
@@ -467,6 +477,11 @@ export default function ContasPagarPage() {
                 <input type="date" value={dataPagamento} onChange={e => setDataPagamento(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none" />
               </div>
             )}
+            <ComprovantePicker
+              tabela="contas-pagar"
+              urlAtual={comprovanteUrl}
+              onChange={setComprovanteUrl}
+            />
             <div className="flex gap-3 pt-2">
               <button type="button" onClick={() => { setShowForm(false); resetarFormulario(); }} className="flex-1 py-3 bg-[var(--color-bg)] text-[var(--color-text-muted)] font-semibold rounded-xl border border-[var(--color-border)] hover:bg-gray-100 transition text-sm">Cancelar</button>
               <button type="submit" disabled={loading} className="flex-1 py-3 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white font-semibold rounded-xl hover:from-emerald-700 hover:to-emerald-600 transition-all disabled:opacity-50 text-sm shadow-md shadow-emerald-200">{loading ? "Salvando..." : editandoId ? "Atualizar" : "Salvar"}</button>
