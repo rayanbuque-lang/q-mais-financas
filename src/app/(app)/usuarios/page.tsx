@@ -150,7 +150,12 @@ export default function UsuariosPage() {
 
   async function excluirUsuario(id: string) {
     if (!confirm("Tem certeza que deseja excluir este usuário?")) return;
-    await supabase.from("profiles").delete().eq("id", id);
+    const { error } = await supabase.rpc("delete_user_completely", { target_id: id });
+    if (error) {
+      setMensagem("Erro ao excluir: " + error.message);
+      setTimeout(() => setMensagem(""), 5000);
+      return;
+    }
     setMensagem("Usuário removido!");
     carregarUsuarios();
     setTimeout(() => setMensagem(""), 3000);
