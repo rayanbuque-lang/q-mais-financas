@@ -30,7 +30,7 @@ export default function ContasPagarPage() {
   const [loading, setLoading] = useState(false);
   const [mensagem, setMensagem] = useState("");
   const [filtroStatus, setFiltroStatus] = useState<"pendentes" | "pagos" | "todos">("pendentes");
-  const [visualizacao, setVisualizacao] = useState<"semanal" | "lista">("semanal");
+  const [visualizacao, setVisualizacao] = useState<"semanal" | "lista">("lista");
   const [mes, setMes] = useState(new Date().getMonth() + 1);
   const [ano, setAno] = useState(new Date().getFullYear());
 

@@ -202,6 +202,10 @@ export default function CapturaPage() {
     );
   }
 
+  function confirmarTodos() {
+    setValoresDetectados((prev) => prev.map((v) => ({ ...v, selecionado: true })));
+  }
+
   const totalSelecionado = valoresDetectados
     .filter((v) => v.selecionado)
     .reduce((a, v) => a + v.valor, 0);
@@ -402,7 +406,14 @@ export default function CapturaPage() {
 
           {/* Valores detectados */}
           <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-6">
-            <h2 className="font-bold text-sm mb-3">3. Valores detectados — clique para selecionar</h2>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="font-bold text-sm">3. Valores detectados — clique para selecionar</h2>
+              {valoresDetectados.length > 0 && (
+                <button onClick={confirmarTodos} className="px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-semibold hover:bg-emerald-100 transition">
+                  ✓ Confirmar todos
+                </button>
+              )}
+            </div>
             {valoresDetectados.length === 0 ? (
               <p className="text-sm text-[var(--color-text-muted)] text-center py-4">
                 Nenhum valor encontrado. Tente uma foto mais clara.

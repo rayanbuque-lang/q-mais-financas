@@ -37,6 +37,9 @@ export default function DashboardPage() {
   const [contasPendentes, setContasPendentes] = useState<ContaPendente[]>([]);
   const [loading, setLoading] = useState(true);
   const [recentesNomes, setRecentesNomes] = useState<Record<string, string>>({});
+  const [metaMensal, setMetaMensal] = useState(0);
+  const [editandoMeta, setEditandoMeta] = useState(false);
+  const [inputMeta, setInputMeta] = useState("");
   const supabase = createClient();
 
   const now = new Date();
@@ -58,18 +61,20 @@ export default function DashboardPage() {
     const inicioAnt = `${anoAnt}-${String(mesAnt + 1).padStart(2, "0")}-01`;
     const fimAnt = `${anoAnt}-${String(mesAnt + 1).padStart(2, "0")}-${String(new Date(anoAnt, mesAnt + 1, 0).getDate()).padStart(2, "0")}`;
 
-    const [r1, r2, r3, r4, r5] = await Promise.all([
+    const [r1, r2, r3, r4, r5, r6] = await Promise.all([
       supabase.from("movimentacoes").select("*").gte("data", inicioAtual).lte("data", fimAtual),
       supabase.from("movimentacoes").select("*").gte("data", inicioAnt).lte("data", fimAnt),
       supabase.from("movimentacoes").select("*").order("created_at", { ascending: false }).limit(5),
       supabase.from("contas_pagar").select("*").eq("status", "pendente").order("data_vencimento", { ascending: true }),
       supabase.from("movimentacoes").select("tipo,valor,data"),
+      supabase.from("metas").select("valor_meta").eq("mes", mesAtual + 1).eq("ano", anoAtual).maybeSingle(),
     ]);
 
     if (r1.data) setMovAtual(r1.data);
     if (r2.data) setMovAnterior(r2.data);
     if (r3.data) setMovRecentes(r3.data);
     if (r4.data) setContasPendentes(r4.data);
+    if (r6.data) setMetaMensal(r6.data.valor_meta);
 
     const graficoData: MesGrafico[] = [];
     const todosMovs = r5.data || [];
@@ -224,7 +229,7 @@ export default function DashboardPage() {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {cards.map((card) => (
-          <div key={card.label} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-5 hover:shadow-md transition-all duration-200">
+          <Link key={card.label} href={`/movimentacoes?mes=${mesAtual + 1}&ano=${anoAtual}`} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-5 hover:shadow-md hover:border-emerald-200 transition-all duration-200 block">
             <div className="flex items-center justify-between mb-3">
               <span className="text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">{card.label}</span>
               <div className={`${card.bg} w-9 h-9 rounded-xl flex items-center justify-center text-base`}>{card.icon}</div>
@@ -239,31 +244,96 @@ export default function DashboardPage() {
                 {card.mudanca > 0 ? "↑" : "↓"} {Math.abs(card.mudanca).toFixed(1)}% vs mês anterior
               </p>
             )}
-          </div>
+          </Link>
         ))}
+      </div>
+
+      {/* Meta mensal de receita */}
+      <div className="animate-fade-up bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-5">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Meta de Receita</p>
+            {metaMensal > 0 ? (
+              <p className="text-sm font-bold mt-0.5">
+                {fmt(eAtual)} <span className="text-[var(--color-text-muted)] font-normal">de {fmt(metaMensal)}</span>
+              </p>
+            ) : (
+              <p className="text-sm text-[var(--color-text-muted)] mt-0.5">Nenhuma meta definida</p>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {metaMensal > 0 && (
+              <span className={`text-lg font-bold ${eAtual >= metaMensal ? "text-emerald-600" : "text-amber-500"}`}>
+                {Math.min(Math.round((eAtual / metaMensal) * 100), 100)}%
+              </span>
+            )}
+            <button
+              onClick={() => { setEditandoMeta(true); setInputMeta(metaMensal > 0 ? metaMensal.toFixed(2) : ""); }}
+              className="text-xs px-3 py-1.5 rounded-lg bg-[var(--color-bg)] border border-[var(--color-border)] hover:bg-[var(--color-border)] transition font-medium"
+            >
+              {metaMensal > 0 ? "Editar" : "Definir meta"}
+            </button>
+          </div>
+        </div>
+        {metaMensal > 0 && (
+          <>
+            <div className="w-full h-3 bg-gray-100 rounded-full overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all duration-700 ${eAtual >= metaMensal ? "bg-emerald-500" : "bg-amber-400"}`}
+                style={{ width: `${Math.min((eAtual / metaMensal) * 100, 100)}%` }}
+              />
+            </div>
+            <p className="text-xs text-[var(--color-text-muted)] mt-2">
+              {eAtual >= metaMensal ? "Meta atingida!" : `Faltam ${fmt(metaMensal - eAtual)} para atingir a meta`}
+            </p>
+          </>
+        )}
+        {editandoMeta && (
+          <div className="mt-4 flex gap-2 items-center">
+            <input
+              type="number"
+              step="0.01"
+              placeholder="Valor da meta (R$)"
+              value={inputMeta}
+              onChange={(e) => setInputMeta(e.target.value)}
+              className="flex-1 px-3 py-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none"
+            />
+            <button
+              onClick={async () => {
+                const v = parseFloat(inputMeta.replace(",", "."));
+                if (isNaN(v) || v <= 0) return;
+                await supabase.from("metas").upsert({ mes: mesAtual + 1, ano: anoAtual, valor_meta: v }, { onConflict: "mes,ano" });
+                setMetaMensal(v);
+                setEditandoMeta(false);
+              }}
+              className="px-4 py-2 bg-emerald-600 text-white rounded-xl text-sm font-semibold hover:bg-emerald-700 transition"
+            >Salvar</button>
+            <button onClick={() => setEditandoMeta(false)} className="px-3 py-2 rounded-xl border border-[var(--color-border)] text-sm hover:bg-[var(--color-bg)] transition">✕</button>
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-6">
           <h2 className="font-bold text-sm uppercase tracking-wider text-[var(--color-text-muted)] mb-1">Últimos 6 Meses</h2>
           <p className="text-[10px] text-[var(--color-text-muted)] mb-4">Clique em um mês para ver os detalhes</p>
-          <div className="flex items-end gap-3 h-40">
+          <div className="flex items-end gap-2 h-52">
             {grafico.map((g, i) => {
               const selecionado = mesSelecionadoIdx === i;
               return (
                 <div
                   key={i}
-                  className="flex-1 flex flex-col items-center gap-1 h-full justify-end cursor-pointer group"
+                  className="flex-1 flex flex-col items-center gap-1.5 h-full justify-end cursor-pointer group"
                   onClick={() => setMesSelecionadoIdx(selecionado ? null : i)}
                 >
-                  <div className="flex gap-1 items-end w-full h-full">
+                  <div className="flex gap-1.5 items-end w-full h-full">
                     <div
-                      className={`flex-1 rounded-t-md transition-all duration-300 ${selecionado ? "bg-emerald-600" : "bg-emerald-400 group-hover:bg-emerald-500"}`}
-                      style={{ height: `${maxGrafico > 0 ? (g.entradas / maxGrafico) * 100 : 0}%`, minHeight: g.entradas > 0 ? "4px" : "0" }}
+                      className={`flex-1 rounded-t-lg transition-all duration-300 ${selecionado ? "bg-emerald-600" : "bg-emerald-400 group-hover:bg-emerald-500"}`}
+                      style={{ height: `${maxGrafico > 0 ? (g.entradas / maxGrafico) * 100 : 0}%`, minHeight: g.entradas > 0 ? "6px" : "0" }}
                     />
                     <div
-                      className={`flex-1 rounded-t-md transition-all duration-300 ${selecionado ? "bg-red-600" : "bg-red-400 group-hover:bg-red-500"}`}
-                      style={{ height: `${maxGrafico > 0 ? (g.saidas / maxGrafico) * 100 : 0}%`, minHeight: g.saidas > 0 ? "4px" : "0" }}
+                      className={`flex-1 rounded-t-lg transition-all duration-300 ${selecionado ? "bg-red-600" : "bg-red-400 group-hover:bg-red-500"}`}
+                      style={{ height: `${maxGrafico > 0 ? (g.saidas / maxGrafico) * 100 : 0}%`, minHeight: g.saidas > 0 ? "6px" : "0" }}
                     />
                   </div>
                   <span className={`text-[10px] font-medium capitalize transition-colors ${selecionado ? "text-[var(--color-text)] font-bold" : "text-[var(--color-text-muted)]"}`}>

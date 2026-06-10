@@ -33,6 +33,7 @@ export default function MovimentacoesPage() {
 
   const [detalheId, setDetalheId] = useState<string | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
+  const [sugestaoCat, setSugestaoCat] = useState<string | null>(null);
 
   const supabase = createClient();
   const cats = tipo === "entrada" ? catEntrada : catSaida;
@@ -75,6 +76,12 @@ export default function MovimentacoesPage() {
     const params = new URLSearchParams(window.location.search);
     const destacar = params.get("destacar");
     const dataParam = params.get("data");
+    const mesParam = params.get("mes");
+    const anoParam = params.get("ano");
+
+    if (mesParam) setMes(parseInt(mesParam) - 1);
+    if (anoParam) setAno(parseInt(anoParam));
+
     if (!destacar) return;
 
     setHighlightId(destacar);
@@ -208,6 +215,14 @@ export default function MovimentacoesPage() {
       error = err;
       movId = editandoId;
     } else {
+      const { data: existente } = await supabase
+        .from("movimentacoes").select("id")
+        .eq("tipo", tipo).eq("data", data).eq("categoria_id", categoriaId)
+        .gte("valor", valorNum * 0.99).lte("valor", valorNum * 1.01).limit(1);
+      if (existente && existente.length > 0) {
+        setMensagem("⚠️ Lançamento similar encontrado. Verifique se não é duplicado.");
+        setTimeout(() => setMensagem(""), 5000);
+      }
       const { data: novo, error: err } = await supabase.from("movimentacoes").insert(dados).select("id").single();
       error = err;
       if (novo) movId = novo.id;
@@ -377,7 +392,7 @@ export default function MovimentacoesPage() {
         );
       })()}
 
-      {mensagem && <div className={`p-3 rounded-xl text-sm font-medium text-center ${mensagem.includes("Erro") ? "bg-red-50 text-red-600" : "bg-emerald-50 text-emerald-700"}`}>{mensagem}</div>}
+      {mensagem && <div className={`p-3 rounded-xl text-sm font-medium text-center ${mensagem.includes("Erro") ? "bg-red-50 text-red-600" : mensagem.includes("⚠️") ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700"}`}>{mensagem}</div>}
 
       {/* Formulário */}
       {showForm && (
@@ -454,7 +469,23 @@ export default function MovimentacoesPage() {
 
             <div>
               <label className="block text-xs font-semibold mb-1 text-[var(--color-text-muted)]">Observação</label>
-              <input value={observacao} onChange={e => setObservacao(e.target.value)} placeholder="Ex: Venda balcão" className="w-full px-3 py-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm" />
+              <input value={observacao} onChange={e => {
+                const v = e.target.value;
+                setObservacao(v);
+                if (v.length > 2) {
+                  const lower = v.toLowerCase();
+                  const match = cats.find(c => lower.includes(c.nome.toLowerCase()));
+                  setSugestaoCat(match?.id ?? null);
+                } else {
+                  setSugestaoCat(null);
+                }
+              }} placeholder="Ex: Venda balcão" className="w-full px-3 py-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm" />
+              {sugestaoCat && !categoriaId && (
+                <button type="button" onClick={() => { setCategoriaId(sugestaoCat); setSugestaoCat(null); }}
+                  className="mt-1.5 text-xs px-3 py-1 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg hover:bg-blue-100 transition">
+                  Categoria sugerida: {cats.find(c => c.id === sugestaoCat)?.nome} — Usar
+                </button>
+              )}
             </div>
 
             <button type="submit" disabled={loading}

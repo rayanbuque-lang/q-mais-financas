@@ -54,6 +54,15 @@ function fmt(v: number) {
   return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
+function downloadCSV(rows: string[][], nomeArquivo: string) {
+  const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(";")).join("\n");
+  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = nomeArquivo; a.click();
+  URL.revokeObjectURL(url);
+}
+
 export default function RelatoriosPage() {
   const [ano, setAno] = useState(new Date().getFullYear());
   const [mes, setMes] = useState(new Date().getMonth());
@@ -162,6 +171,39 @@ export default function RelatoriosPage() {
     `);
   }
 
+  function getCatNome(id: string, tipo: string): string {
+    const cats = tipo === "entrada" ? catEntrada : catSaida;
+    return cats.find(c => c.id === id)?.nome || "Sem categoria";
+  }
+
+  function exportarCSVMensal() {
+    const rows: string[][] = [
+      ["Tipo", "Data", "Categoria", "Valor (R$)"],
+      ...movsMes.map(m => [
+        m.tipo === "entrada" ? "Entrada" : "Saída",
+        m.data,
+        getCatNome(m.categoria_id, m.tipo),
+        m.valor.toFixed(2).replace(".", ","),
+      ]),
+    ];
+    downloadCSV(rows, `movimentacoes_${meses[mes]}_${ano}.csv`);
+  }
+
+  function exportarCSVAnual() {
+    const rows: string[][] = [
+      ["Mês", "Receita (R$)", "Despesa (R$)", "Resultado (R$)", "Margem %", "Acumulado (R$)"],
+      ...evolucao.map(m => [
+        m.nome,
+        m.entradas.toFixed(2).replace(".", ","),
+        m.saidas.toFixed(2).replace(".", ","),
+        m.resultado.toFixed(2).replace(".", ","),
+        m.margem.toFixed(1),
+        m.acumulado.toFixed(2).replace(".", ","),
+      ]),
+    ];
+    downloadCSV(rows, `relatorio_anual_${ano}.csv`);
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-4">
@@ -231,10 +273,14 @@ export default function RelatoriosPage() {
             </div>
           )}
 
-          {/* Botão imprimir */}
-          <button onClick={imprimirMensal} className="w-full py-3 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl text-sm font-semibold text-[var(--color-text-muted)] hover:bg-[var(--color-bg)] hover:text-[var(--color-text)] transition flex items-center justify-center gap-2">
-            🖨️ Imprimir / Salvar PDF
-          </button>
+          <div className="flex gap-3">
+            <button onClick={imprimirMensal} className="flex-1 py-3 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl text-sm font-semibold text-[var(--color-text-muted)] hover:bg-[var(--color-bg)] hover:text-[var(--color-text)] transition flex items-center justify-center gap-2">
+              🖨️ Imprimir / Salvar PDF
+            </button>
+            <button onClick={exportarCSVMensal} className="flex-1 py-3 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl text-sm font-semibold text-[var(--color-text-muted)] hover:bg-[var(--color-bg)] hover:text-[var(--color-text)] transition flex items-center justify-center gap-2">
+              📥 Exportar CSV
+            </button>
+          </div>
         </div>
       )}
 
@@ -288,9 +334,14 @@ export default function RelatoriosPage() {
             </div>
           </div>
 
-          <button onClick={imprimirAnual} className="w-full py-3 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl text-sm font-semibold text-[var(--color-text-muted)] hover:bg-[var(--color-bg)] hover:text-[var(--color-text)] transition flex items-center justify-center gap-2">
-            🖨️ Imprimir / Salvar PDF
-          </button>
+          <div className="flex gap-3">
+            <button onClick={imprimirAnual} className="flex-1 py-3 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl text-sm font-semibold text-[var(--color-text-muted)] hover:bg-[var(--color-bg)] hover:text-[var(--color-text)] transition flex items-center justify-center gap-2">
+              🖨️ Imprimir / Salvar PDF
+            </button>
+            <button onClick={exportarCSVAnual} className="flex-1 py-3 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl text-sm font-semibold text-[var(--color-text-muted)] hover:bg-[var(--color-bg)] hover:text-[var(--color-text)] transition flex items-center justify-center gap-2">
+              📥 Exportar CSV
+            </button>
+          </div>
         </div>
       )}
 
@@ -337,6 +388,9 @@ export default function RelatoriosPage() {
 
           <button onClick={imprimirCategorias} className="w-full py-3 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl text-sm font-semibold text-[var(--color-text-muted)] hover:bg-[var(--color-bg)] hover:text-[var(--color-text)] transition flex items-center justify-center gap-2">
             🖨️ Imprimir / Salvar PDF
+          </button>
+          <button onClick={exportarCSVMensal} className="w-full py-3 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl text-sm font-semibold text-[var(--color-text-muted)] hover:bg-[var(--color-bg)] hover:text-[var(--color-text)] transition flex items-center justify-center gap-2">
+            📥 Exportar CSV (movimentações do mês)
           </button>
         </div>
       )}
