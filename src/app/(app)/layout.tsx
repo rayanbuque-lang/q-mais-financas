@@ -34,6 +34,7 @@ const menuItems = [
   { label: "Conciliação Bancária", href: "/conciliacao", icon: "🏦", modulo: "conciliacao" },
   { label: "Relatórios", href: "/relatorios", icon: "📄", modulo: "relatorios" },
   { label: "Análise Inteligente", href: "/analise", icon: "🧠", modulo: "analise" },
+  { label: "Assistente IA", href: "/assistente", icon: "🤖", modulo: "assistente" },
   { label: "Histórico", href: "/audit", icon: "📜", modulo: "audit" },
   { label: "Usuários", href: "/usuarios", icon: "👥", modulo: "usuarios", masterOnly: true },
 ];
