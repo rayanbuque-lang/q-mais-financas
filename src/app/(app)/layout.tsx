@@ -37,6 +37,7 @@ const menuItems = [
   { label: "Assistente IA", href: "/assistente", icon: "🤖", modulo: "assistente" },
   { label: "Histórico", href: "/audit", icon: "📜", modulo: "audit" },
   { label: "Usuários", href: "/usuarios", icon: "👥", modulo: "usuarios", masterOnly: true },
+  { label: "Configurações", href: "/configuracoes", icon: "⚙️", modulo: "configuracoes", masterOnly: true },
 ];
 
 function getMenuVisivel(profile: Profile) {
