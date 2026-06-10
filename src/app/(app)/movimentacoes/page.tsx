@@ -6,6 +6,7 @@ import { registrarLog } from "@/lib/audit";
 interface Movimentacao { id: string; tipo: string; data: string; valor: number; categoria_id: string; observacao: string; revisar: boolean; }
 interface Cat { id: string; nome: string; }
 interface Item { id: string; movimentacao_id: string; valor: number; }
+interface Template { id: string; nome: string; tipo: "entrada" | "saida"; valor: number; categoria_id: string; observacao: string; }
 const mesesNomes = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
 
 export default function MovimentacoesPage() {
@@ -34,9 +35,45 @@ export default function MovimentacoesPage() {
   const [detalheId, setDetalheId] = useState<string | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const [sugestaoCat, setSugestaoCat] = useState<string | null>(null);
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [showTemplates, setShowTemplates] = useState(false);
+  const [salvandoTemplate, setSalvandoTemplate] = useState(false);
+  const [nomeTemplate, setNomeTemplate] = useState("");
 
   const supabase = createClient();
   const cats = tipo === "entrada" ? catEntrada : catSaida;
+
+  async function carregarTemplates() {
+    const { data } = await supabase.from("movimentacao_templates").select("*").order("nome");
+    if (data) setTemplates(data as Template[]);
+  }
+
+  function usarTemplate(t: Template) {
+    setTipo(t.tipo);
+    setCategoriaId(t.categoria_id);
+    setValor(t.valor.toFixed(2).replace(".", ","));
+    setObservacao(t.observacao || "");
+    setData(new Date().toISOString().split("T")[0]);
+    setEditandoId(null);
+    setShowForm(true);
+    setShowTemplates(false);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function excluirTemplate(id: string) {
+    await supabase.from("movimentacao_templates").delete().eq("id", id);
+    setTemplates((prev) => prev.filter((t) => t.id !== id));
+  }
+
+  async function salvarTemplate() {
+    if (!nomeTemplate.trim() || !categoriaId || !valor) return;
+    const valorNum = parseFloat(valor.replace(",", "."));
+    if (isNaN(valorNum) || valorNum <= 0) return;
+    await supabase.from("movimentacao_templates").insert({ nome: nomeTemplate.trim(), tipo, valor: valorNum, categoria_id: categoriaId, observacao });
+    setNomeTemplate("");
+    setSalvandoTemplate(false);
+    carregarTemplates();
+  }
 
   async function carregarCategorias() {
     const [r1, r2] = await Promise.all([
@@ -71,6 +108,7 @@ export default function MovimentacoesPage() {
   }
 
   useEffect(() => { carregarMovimentacoes(); carregarCategorias(); }, [mes, ano]);
+  useEffect(() => { carregarTemplates(); }, []);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -360,6 +398,51 @@ export default function MovimentacoesPage() {
         {busca && <p className="text-xs text-[var(--color-text-muted)] mt-2">{movsFiltrados.length} resultado{movsFiltrados.length !== 1 ? "s" : ""}</p>}
       </div>
 
+      {/* Templates Rápidos */}
+      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
+        <button
+          onClick={() => setShowTemplates(!showTemplates)}
+          className="w-full flex items-center justify-between p-4 hover:bg-[var(--color-bg)] transition text-left"
+        >
+          <div className="flex items-center gap-2">
+            <span>⚡</span>
+            <span className="text-sm font-bold">Templates Rápidos</span>
+            {templates.length > 0 && <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full text-xs font-bold">{templates.length}</span>}
+          </div>
+          <span className="text-[var(--color-text-muted)] text-xs">{showTemplates ? "▲ Fechar" : "▼ Ver"}</span>
+        </button>
+        {showTemplates && (
+          <div className="border-t border-[var(--color-border)] p-4">
+            {templates.length === 0 ? (
+              <p className="text-sm text-[var(--color-text-muted)] text-center py-2">
+                Nenhum template ainda. Salve um lançamento frequente como template no formulário.
+              </p>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {templates.map((t) => {
+                  const catNome = [...catEntrada, ...catSaida].find(c => c.id === t.categoria_id)?.nome || "Sem categoria";
+                  return (
+                    <div key={t.id} className={`border rounded-xl p-4 flex items-start justify-between gap-2 ${t.tipo === "entrada" ? "border-emerald-200 bg-emerald-50" : "border-red-200 bg-red-50"}`}>
+                      <div className="min-w-0">
+                        <p className="text-sm font-bold truncate">{t.nome}</p>
+                        <p className="text-xs text-[var(--color-text-muted)] mt-0.5">{catNome}</p>
+                        <p className={`text-sm font-semibold mt-1 ${t.tipo === "entrada" ? "text-emerald-600" : "text-red-500"}`}>
+                          {t.tipo === "entrada" ? "+" : "-"} {t.valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+                        </p>
+                      </div>
+                      <div className="flex flex-col gap-1 shrink-0">
+                        <button onClick={() => usarTemplate(t)} className="px-3 py-1.5 bg-white border border-current rounded-lg text-xs font-semibold hover:bg-gray-50 transition text-emerald-700">Usar</button>
+                        <button onClick={() => excluirTemplate(t.id)} className="px-3 py-1.5 bg-white border border-red-200 rounded-lg text-xs text-red-400 hover:bg-red-50 transition">✕</button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* Cards */}
       <div className="grid grid-cols-3 gap-3">
         {[{ l: "Entradas", v: fmt(totalEntradas), c: "text-emerald-600" }, { l: "Saídas", v: fmt(totalSaidas), c: "text-red-500" }, { l: "Saldo", v: fmt(saldo), c: saldo >= 0 ? "text-emerald-600" : "text-red-500" }].map(c => (
@@ -487,6 +570,21 @@ export default function MovimentacoesPage() {
                 </button>
               )}
             </div>
+
+            {!editandoId && (
+              <div className="border border-dashed border-[var(--color-border)] rounded-xl p-3">
+                <button type="button" onClick={() => setSalvandoTemplate(!salvandoTemplate)}
+                  className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition flex items-center gap-1.5">
+                  ⚡ {salvandoTemplate ? "Cancelar template" : "Salvar como template rápido"}
+                </button>
+                {salvandoTemplate && (
+                  <div className="mt-2 flex gap-2">
+                    <input value={nomeTemplate} onChange={e => setNomeTemplate(e.target.value)} placeholder="Nome do template (ex: Pix Santander)" className="flex-1 px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none" />
+                    <button type="button" onClick={salvarTemplate} className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-xs font-semibold hover:bg-emerald-700 transition">Salvar</button>
+                  </div>
+                )}
+              </div>
+            )}
 
             <button type="submit" disabled={loading}
               className="w-full py-3 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white font-semibold rounded-xl hover:from-emerald-700 hover:to-emerald-600 transition-all disabled:opacity-50 text-sm shadow-md shadow-emerald-200">

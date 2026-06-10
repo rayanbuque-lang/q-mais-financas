@@ -29,6 +29,7 @@ const menuItems = [
   { label: "Fechamento de Caixa", href: "/fechamento-caixa", icon: "🧮", modulo: "fechamento-caixa" },
   { label: "Fluxo de Caixa", href: "/fluxo-de-caixa", icon: "📈", modulo: "fluxo-de-caixa" },
   { label: "DRE", href: "/dre", icon: "📑", modulo: "dre" },
+  { label: "Painel Comparativo", href: "/comparativo", icon: "📊", modulo: "comparativo" },
   { label: "Fechamento Mensal", href: "/fechamento", icon: "🔒", modulo: "fechamento" },
   { label: "Conciliação Bancária", href: "/conciliacao", icon: "🏦", modulo: "conciliacao" },
   { label: "Relatórios", href: "/relatorios", icon: "📄", modulo: "relatorios" },
