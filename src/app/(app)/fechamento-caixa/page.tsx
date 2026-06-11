@@ -9,6 +9,21 @@ const mesesNomes = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho
 const diasSemana = ["Dom","Seg","Ter","Qua","Qui","Sex","Sáb"];
 const diasSemanaLong = ["Domingo","Segunda-feira","Terça-feira","Quarta-feira","Quinta-feira","Sexta-feira","Sábado"];
 
+const CAMPOS_CONFIG = [
+  { field: "cartao",        label: "Cartão",          emoji: "💳", bg: "#eff6ff", border: "#bfdbfe", color: "#1d4ed8" },
+  { field: "pix_santander", label: "Pix Santander",   emoji: "📱", bg: "#fef2f2", border: "#fecaca", color: "#dc2626" },
+  { field: "pix_inter",     label: "Pix Inter",       emoji: "📱", bg: "#fff7ed", border: "#fed7aa", color: "#ea580c" },
+  { field: "rom_card",      label: "Rom Card",        emoji: "💳", bg: "#f5f3ff", border: "#ddd6fe", color: "#7c3aed" },
+  { field: "app",           label: "App",             emoji: "📲", bg: "#ecfdf5", border: "#a7f3d0", color: "#059669" },
+  { field: "prefeitura",    label: "Prefeitura",      emoji: "🏛️", bg: "#ecfeff", border: "#a5f3fc", color: "#0891b2" },
+  { field: "compras_prazo", label: "Compras à Prazo", emoji: "🛒", bg: "#fef2f2", border: "#fecaca", color: "#dc2626" },
+  { field: "sobras_faltas", label: "Sobras/Faltas",   emoji: "⚖️", bg: "",        border: "",         color: ""        },
+] as const;
+
+type CampoKey = typeof CAMPOS_CONFIG[number]["field"];
+const CAMPOS_PADRAO: CampoKey[] = ["cartao","pix_santander","pix_inter","rom_card","app","prefeitura","compras_prazo","sobras_faltas"];
+const LS_KEY = "fechamento_campos_ativos";
+
 interface CaixaDia {
   id: string; data: string; turnos: number;
   valor_total_vendas: number; cartao: number;
@@ -44,9 +59,21 @@ export default function FechamentoCaixaPage() {
   const [detailRecord, setDetailRecord] = useState<CaixaDia | null>(null);
   const [form, setForm] = useState<CaixaForm>({ ...formVazio });
   const [turnos, setTurnos] = useState(1);
-  const [sobrasfaltas, setSobrasfaltas] = useState(0); // positivo = sobras, negativo = faltas
+  const [sobrasfaltas, setSobrasfaltas] = useState(0);
+  const [camposAtivos, setCamposAtivos] = useState<CampoKey[]>(() => {
+    if (typeof window === "undefined") return CAMPOS_PADRAO;
+    try { return JSON.parse(localStorage.getItem(LS_KEY) ?? "null") ?? CAMPOS_PADRAO; } catch { return CAMPOS_PADRAO; }
+  });
 
   const supabase = createClient();
+
+  function toggleCampo(field: CampoKey) {
+    setCamposAtivos(prev => {
+      const next = prev.includes(field) ? prev.filter(f => f !== field) : [...prev, field];
+      try { localStorage.setItem(LS_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+  }
 
   useEffect(() => {
     async function check() {
@@ -86,11 +113,10 @@ export default function FechamentoCaixaPage() {
   function mesProximo() { if (mes === 12) { setMes(1); setAno(ano + 1); } else setMes(mes + 1); }
   function fmt(v: number) { return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }); }
 
-  function calcDinheiroTotal(f: CaixaForm, sf: number) {
+  function calcDinheiroTotal(f: CaixaForm) {
     const sub = f.cartao + f.pix_santander + f.pix_inter + f.rom_card + f.app + f.prefeitura + f.compras_prazo;
     const dinheiro = Math.max(f.valor_total_vendas - sub, 0);
-    const total = dinheiro + sf;
-    return { dinheiro, total };
+    return { dinheiro, total: dinheiro };
   }
 
   function getRecord(data: string): CaixaDia | undefined {
@@ -155,7 +181,7 @@ export default function FechamentoCaixaPage() {
   async function handleSalvar() {
     if (!detailData) return;
     setLoading(true);
-    const { dinheiro, total } = calcDinheiroTotal(form, sobrasfaltas);
+    const { dinheiro, total } = calcDinheiroTotal(form);
     const dados = {
       data: detailData, turnos,
       valor_total_vendas: form.valor_total_vendas,
@@ -184,7 +210,7 @@ export default function FechamentoCaixaPage() {
   async function fecharDia() {
     if (!detailData) return;
     setLoading(true);
-    const { dinheiro, total } = calcDinheiroTotal(form, sobrasfaltas);
+    const { dinheiro, total } = calcDinheiroTotal(form);
 
     const dados = {
       data: detailData, turnos,
@@ -281,13 +307,12 @@ export default function FechamentoCaixaPage() {
   const totalBrutoMes = registros.reduce((a, c) => a + c.valor_total_vendas, 0);
   const diasConferidos = registros.length;
 
-  // Derived sign state for UI
   const sfSinal = sobrasfaltas >= 0 ? 1 : -1;
   const sfAbs = Math.abs(sobrasfaltas);
   function toggleSinal() { setSobrasfaltas(prev => (prev === 0 ? 0 : -prev)); }
 
   const detailContent = showDetail && detailData ? (() => {
-    const { dinheiro, total } = calcDinheiroTotal(form, sobrasfaltas);
+    const { dinheiro, total } = calcDinheiroTotal(form);
     const dow = new Date(detailData + "T12:00:00").getDay();
 
     const inputStyle = (border: string, color: string): React.CSSProperties => ({
@@ -296,15 +321,9 @@ export default function FechamentoCaixaPage() {
       fontSize: 14, fontWeight: 600, color, outline: "none",
     });
 
-    const campos: { field: keyof CaixaForm; label: string; bg: string; border: string; color: string }[] = [
-      { field: "cartao", label: "💳 Cartão", bg: "#eff6ff", border: "#bfdbfe", color: "#1d4ed8" },
-      { field: "pix_santander", label: "📱 Pix Santander", bg: "#fef2f2", border: "#fecaca", color: "#dc2626" },
-      { field: "pix_inter", label: "📱 Pix Inter", bg: "#fff7ed", border: "#fed7aa", color: "#ea580c" },
-      { field: "rom_card", label: "💳 Rom Card", bg: "#f5f3ff", border: "#ddd6fe", color: "#7c3aed" },
-      { field: "app", label: "📲 App", bg: "#ecfdf5", border: "#a7f3d0", color: "#059669" },
-      { field: "prefeitura", label: "🏛️ Prefeitura", bg: "#ecfeff", border: "#a5f3fc", color: "#0891b2" },
-      { field: "compras_prazo", label: "🛒 Compras à Prazo", bg: "#fef2f2", border: "#fecaca", color: "#dc2626" },
-    ];
+    // Apenas os campos de pagamento (não sobras_faltas) filtrados
+    const camposVisiveis = CAMPOS_CONFIG.filter(c => c.field !== "sobras_faltas" && camposAtivos.includes(c.field as CampoKey));
+    const mostrarSobras = camposAtivos.includes("sobras_faltas");
 
     return (
       <div style={{ animation: "fadeUp 0.3s ease", background: "var(--color-surface)", border: "2px solid #3b82f6", borderRadius: 20, overflow: "hidden" }}>
@@ -332,74 +351,82 @@ export default function FechamentoCaixaPage() {
             />
           </div>
 
-          {/* Grid */}
+          {/* Seletor de campos */}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 12, alignItems: "center" }}>
+            <span style={{ fontSize: 10, fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", letterSpacing: ".05em", marginRight: 2 }}>Campos:</span>
+            {CAMPOS_CONFIG.map(c => {
+              const ativo = camposAtivos.includes(c.field as CampoKey);
+              return (
+                <button key={c.field} type="button" onClick={() => toggleCampo(c.field as CampoKey)}
+                  style={{
+                    padding: "3px 9px", borderRadius: 20, fontSize: 11, fontWeight: 600, cursor: "pointer",
+                    border: `1px solid ${ativo ? "#16a34a" : "#e5e7eb"}`,
+                    background: ativo ? "#dcfce7" : "#f9fafb",
+                    color: ativo ? "#15803d" : "#9ca3af",
+                    transition: "all 0.15s",
+                  }}>
+                  {c.emoji} {c.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Grid de campos de pagamento */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px, 1fr))", gap: 10 }}>
-            {campos.map(item => (
+            {camposVisiveis.map(item => (
               <div key={item.field} style={{ background: item.bg, border: `1px solid ${item.border}`, borderRadius: 12, padding: 12 }}>
-                <label style={{ fontSize: 10, fontWeight: 700, color: item.color, textTransform: "uppercase" }}>{item.label}</label>
+                <label style={{ fontSize: 10, fontWeight: 700, color: item.color, textTransform: "uppercase" }}>{item.emoji} {item.label}</label>
                 <CurrencyInput
-                  value={form[item.field]}
-                  onChange={v => handleFormChange(item.field, v)}
+                  value={form[item.field as keyof CaixaForm]}
+                  onChange={v => handleFormChange(item.field as keyof CaixaForm, v)}
                   style={inputStyle(item.border, item.color)}
                 />
               </div>
             ))}
 
-            {/* Dinheiro (auto) */}
+            {/* Dinheiro (sempre visível, calculado) */}
             <div style={{ background: "#f0fdf4", border: "2px solid #16a34a", borderRadius: 12, padding: 12 }}>
-              <label style={{ fontSize: 10, fontWeight: 700, color: "#16a34a", textTransform: "uppercase" }}>💵 DINHEIRO (auto)</label>
-              <div style={{ marginTop: 6, padding: "8px 10px", borderRadius: 8, background: "white", border: "1px solid #bbf7d0", fontSize: 16, fontWeight: 700, color: dinheiro >= 0 ? "#16a34a" : "#dc2626" }}>
+              <label style={{ fontSize: 10, fontWeight: 700, color: "#16a34a", textTransform: "uppercase" }}>💵 Dinheiro (auto)</label>
+              <div style={{ marginTop: 6, padding: "8px 10px", borderRadius: 8, background: "white", border: "1px solid #bbf7d0", fontSize: 16, fontWeight: 700, color: "#16a34a" }}>
                 {fmt(dinheiro)}
               </div>
             </div>
 
-            {/* Sobras e Faltas */}
-            <div style={{ background: sobrasfaltas > 0 ? "#f0fdf4" : sobrasfaltas < 0 ? "#fef2f2" : "#fffbeb", border: `2px solid ${sobrasfaltas > 0 ? "#16a34a" : sobrasfaltas < 0 ? "#dc2626" : "#d97706"}`, borderRadius: 12, padding: 12 }}>
-              <label style={{ fontSize: 10, fontWeight: 700, color: sobrasfaltas > 0 ? "#16a34a" : sobrasfaltas < 0 ? "#dc2626" : "#d97706", textTransform: "uppercase" }}>
-                ⚖️ SOBRAS E FALTAS
-              </label>
-              <div style={{ display: "flex", gap: 5, marginTop: 4, alignItems: "center" }}>
-                <button
-                  type="button"
-                  onClick={toggleSinal}
-                  title={sfSinal > 0 ? "Clique para Faltas (−)" : "Clique para Sobras (+)"}
-                  style={{
-                    width: 30, height: 30, borderRadius: 7, border: "none",
-                    background: sfSinal > 0 ? "#dcfce7" : "#fee2e2",
-                    color: sfSinal > 0 ? "#16a34a" : "#dc2626",
-                    fontWeight: 800, fontSize: 15, cursor: "pointer", flexShrink: 0,
-                  }}
-                >
-                  {sfSinal > 0 ? "+" : "−"}
-                </button>
-                <CurrencyInput
-                  value={sfAbs}
-                  onChange={v => setSobrasfaltas(sfSinal * v)}
-                  style={{
-                    flex: 1, padding: "7px 9px", borderRadius: 8,
-                    border: `1px solid ${sfSinal > 0 ? "#bbf7d0" : "#fecaca"}`,
-                    background: "white", fontSize: 14, fontWeight: 600,
-                    color: sfSinal > 0 ? "#16a34a" : "#dc2626", outline: "none",
-                  }}
-                />
+            {/* Sobras e Faltas (condicional, apenas registro) */}
+            {mostrarSobras && (
+              <div style={{ background: sobrasfaltas > 0 ? "#f0fdf4" : sobrasfaltas < 0 ? "#fef2f2" : "#fffbeb", border: `1px solid ${sobrasfaltas > 0 ? "#bbf7d0" : sobrasfaltas < 0 ? "#fecaca" : "#fde68a"}`, borderRadius: 12, padding: 12 }}>
+                <label style={{ fontSize: 10, fontWeight: 700, color: sobrasfaltas > 0 ? "#16a34a" : sobrasfaltas < 0 ? "#dc2626" : "#d97706", textTransform: "uppercase" }}>
+                  ⚖️ Sobras / Faltas
+                </label>
+                <p style={{ margin: "2px 0 6px", fontSize: 9, color: "#9ca3af" }}>Apenas registro — não altera o total</p>
+                <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
+                  <button type="button" onClick={toggleSinal}
+                    title={sfSinal > 0 ? "Clique para Faltas (−)" : "Clique para Sobras (+)"}
+                    style={{ width: 28, height: 28, borderRadius: 7, border: "none", background: sfSinal > 0 ? "#dcfce7" : "#fee2e2", color: sfSinal > 0 ? "#16a34a" : "#dc2626", fontWeight: 800, fontSize: 14, cursor: "pointer", flexShrink: 0 }}>
+                    {sfSinal > 0 ? "+" : "−"}
+                  </button>
+                  <CurrencyInput value={sfAbs} onChange={v => setSobrasfaltas(sfSinal * v)}
+                    style={{ flex: 1, padding: "6px 8px", borderRadius: 8, border: `1px solid ${sfSinal > 0 ? "#bbf7d0" : "#fecaca"}`, background: "white", fontSize: 13, fontWeight: 600, color: sfSinal > 0 ? "#16a34a" : "#dc2626", outline: "none" }}
+                  />
+                </div>
               </div>
-              {sobrasfaltas !== 0 && (
-                <p style={{ margin: "3px 0 0", fontSize: 10, color: sobrasfaltas > 0 ? "#16a34a" : "#dc2626", fontWeight: 600 }}>
-                  {sobrasfaltas > 0 ? "Sobras" : "Faltas"}: {sobrasfaltas > 0 ? "+" : "−"}{fmt(sfAbs)}
-                </p>
-              )}
-            </div>
+            )}
           </div>
 
           {/* Total */}
           <div style={{ marginTop: 12, background: total >= 0 ? "#ecfdf5" : "#fef2f2", border: `2px solid ${total >= 0 ? "#16a34a" : "#dc2626"}`, borderRadius: 12, padding: 16, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
             <div>
               <p style={{ fontSize: 11, fontWeight: 700, color: total >= 0 ? "#16a34a" : "#dc2626", textTransform: "uppercase", margin: 0 }}>📊 TOTAL DO DIA</p>
-              <p style={{ fontSize: 9, color: "#6b7280", margin: "2px 0 0" }}>
-                Dinheiro {sobrasfaltas !== 0 ? (sobrasfaltas > 0 ? "+ Sobras" : "− Faltas") : ""}
-              </p>
+              <p style={{ fontSize: 9, color: "#6b7280", margin: "2px 0 0" }}>Valor em dinheiro do dia</p>
             </div>
-            <span style={{ fontSize: 24, fontWeight: 800, color: total >= 0 ? "#16a34a" : "#dc2626" }}>{fmt(total)}</span>
+            <div style={{ textAlign: "right" }}>
+              <span style={{ fontSize: 24, fontWeight: 800, color: total >= 0 ? "#16a34a" : "#dc2626", display: "block" }}>{fmt(total)}</span>
+              {mostrarSobras && sobrasfaltas !== 0 && (
+                <span style={{ fontSize: 10, color: sobrasfaltas > 0 ? "#16a34a" : "#dc2626", fontWeight: 600 }}>
+                  {sobrasfaltas > 0 ? "Sobras: +" : "Faltas: −"}{fmt(sfAbs)} (registro)
+                </span>
+              )}
+            </div>
           </div>
 
           {/* Botões */}
