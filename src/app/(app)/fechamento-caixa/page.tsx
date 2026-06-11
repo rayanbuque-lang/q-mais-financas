@@ -43,6 +43,7 @@ interface CaixaDia {
   app: number; prefeitura: number;
   compras_prazo: number; dinheiro: number;
   sobras_faltas: number; total: number;
+  rascunho: boolean;
   fechado: boolean; fechado_por: string | null; fechado_em: string | null;
 }
 
@@ -174,7 +175,7 @@ export default function FechamentoCaixaPage() {
     });
   }
 
-  async function handleSalvar() {
+  async function salvarRascunho() {
     if (!detailData) return;
     setLoading(true);
     const dinheiro = calcDinheiro(form);
@@ -187,20 +188,20 @@ export default function FechamentoCaixaPage() {
       app: form.app, prefeitura: form.prefeitura,
       compras_prazo: form.compras_prazo,
       dinheiro, sobras_faltas: sobrasValor, total: dinheiro,
+      rascunho: true,
     };
     if (detailRecord) {
       await supabase.from("fechamento_caixa").update(dados).eq("id", detailRecord.id);
       await registrarLog({ acao: "editou", tabela: "fechamento_caixa", registroId: detailRecord.id });
-      setMensagem("Atualizado!");
     } else {
       await supabase.from("fechamento_caixa").upsert(dados, { onConflict: "data" });
       await registrarLog({ acao: "criou", tabela: "fechamento_caixa" });
-      setMensagem("Dia salvo!");
     }
+    setMensagem("📝 Rascunho salvo! Aguardando revisão.");
     await carregarDados();
     const atualizado = getRecord(detailData);
     if (atualizado) setFormFromRecord(atualizado);
-    setLoading(false); setTimeout(() => setMensagem(""), 3000);
+    setLoading(false); setTimeout(() => setMensagem(""), 4000);
   }
 
   async function fecharDia() {
@@ -216,7 +217,7 @@ export default function FechamentoCaixaPage() {
       app: form.app, prefeitura: form.prefeitura,
       compras_prazo: form.compras_prazo,
       dinheiro, sobras_faltas: sobrasValor, total: dinheiro,
-      fechado: true, fechado_em: new Date().toISOString(),
+      rascunho: false, fechado: true, fechado_em: new Date().toISOString(),
     };
     await supabase.from("fechamento_caixa").upsert(dados, { onConflict: "data" });
 
@@ -254,7 +255,7 @@ export default function FechamentoCaixaPage() {
     setLoading(true);
     const catId = await garantirCategoria();
     if (catId) await supabase.from("movimentacoes").delete().eq("data", detailRecord.data).eq("categoria_id", catId);
-    await supabase.from("fechamento_caixa").update({ fechado: false, fechado_por: null, fechado_em: null }).eq("id", detailRecord.id);
+    await supabase.from("fechamento_caixa").update({ fechado: false, rascunho: true, fechado_por: null, fechado_em: null }).eq("id", detailRecord.id);
     await registrarLog({ acao: "reabriu", tabela: "fechamento_caixa", registroId: detailRecord.id });
     setMensagem("Dia reaberto.");
     await carregarDados();
@@ -275,6 +276,7 @@ export default function FechamentoCaixaPage() {
 
   const diasNoMes = new Date(ano, mes, 0).getDate();
   const registros = caixas.filter(c => c.fechado);
+  const rascunhos = caixas.filter(c => c.rascunho && !c.fechado);
   const totalVendidoMes = registros.reduce((a, c) => a + c.total, 0);
   const totalBrutoMes = registros.reduce((a, c) => a + c.valor_total_vendas, 0);
 
@@ -317,8 +319,8 @@ export default function FechamentoCaixaPage() {
         {[
           { l: "Total Bruto", v: fmt(totalBrutoMes), c: "text-blue-600" },
           { l: "Total Vendido", v: fmt(totalVendidoMes), c: totalVendidoMes >= 0 ? "text-emerald-600" : "text-red-500" },
-          { l: "Conferidos", v: `${registros.length}`, c: "text-emerald-600" },
-          { l: "Dias no Mês", v: `${diasNoMes}`, c: "text-[var(--color-text)]" },
+          { l: "Finalizados", v: `${registros.length}`, c: "text-emerald-600" },
+          { l: rascunhos.length > 0 ? `📝 Rascunhos` : "Dias no Mês", v: rascunhos.length > 0 ? `${rascunhos.length}` : `${diasNoMes}`, c: rascunhos.length > 0 ? "text-amber-600" : "text-[var(--color-text)]" },
         ].map(c => (
           <div key={c.l} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl p-4 text-center">
             <p className="text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1">{c.l}</p>
@@ -340,7 +342,11 @@ export default function FechamentoCaixaPage() {
                 <h2 style={{ fontWeight: 700, fontSize: 16, margin: 0, textTransform: "capitalize" }}>
                   {diasSemanaLong[dow]}, {new Date(detailData + "T12:00:00").toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric" })}
                 </h2>
-                {detailRecord?.fechado && <span style={{ fontSize: 11, color: "#16a34a", fontWeight: 600, marginTop: 4, display: "block" }}>✅ Conferido</span>}
+                {detailRecord?.fechado
+                  ? <span style={{ fontSize: 11, color: "#16a34a", fontWeight: 600, marginTop: 4, display: "block" }}>✅ Fechado em definitivo</span>
+                  : detailRecord?.rascunho
+                  ? <span style={{ fontSize: 11, color: "#d97706", fontWeight: 600, marginTop: 4, display: "block" }}>📝 Rascunho salvo — aguardando revisão</span>
+                  : null}
               </div>
               <button onClick={closeDetail} style={{ width: 32, height: 32, borderRadius: 8, border: "none", background: "white", cursor: "pointer", fontSize: 14, color: "#6b7280" }}>✕</button>
             </div>
@@ -430,23 +436,29 @@ export default function FechamentoCaixaPage() {
 
               {/* Botões */}
               <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
-                <button onClick={handleSalvar} disabled={loading}
-                  style={{ flex: 1, minWidth: 120, padding: "12px 20px", borderRadius: 12, border: "none", background: "linear-gradient(135deg,#059669,#10b981)", color: "white", fontWeight: 700, fontSize: 13, cursor: "pointer", opacity: loading ? 0.5 : 1 }}>
-                  {loading ? "Salvando..." : "💾 Salvar"}
-                </button>
-                {detailRecord && !detailRecord.fechado && (
-                  <button onClick={fecharDia} disabled={loading}
-                    style={{ padding: "12px 20px", borderRadius: 12, border: "none", background: "#16a34a", color: "white", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>
-                    ✓ Conferir e Fechar
+                {/* Salvar Rascunho — disponível para todos enquanto não fechado */}
+                {!detailRecord?.fechado && (
+                  <button onClick={salvarRascunho} disabled={loading}
+                    style={{ flex: 1, minWidth: 150, padding: "12px 20px", borderRadius: 12, border: "none", background: "linear-gradient(135deg,#d97706,#f59e0b)", color: "white", fontWeight: 700, fontSize: 13, cursor: "pointer", opacity: loading ? 0.5 : 1 }}>
+                    {loading ? "Salvando..." : "📝 Salvar Rascunho"}
                   </button>
                 )}
+                {/* Fechar em Definitivo — apenas admin */}
+                {isAdmin && !detailRecord?.fechado && (
+                  <button onClick={fecharDia} disabled={loading}
+                    style={{ padding: "12px 20px", borderRadius: 12, border: "none", background: "#16a34a", color: "white", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>
+                    ✅ Fechar em Definitivo
+                  </button>
+                )}
+                {/* Reabrir — apenas admin, quando fechado */}
                 {detailRecord?.fechado && (
                   <button onClick={reabrirDia}
-                    style={{ padding: "12px 20px", borderRadius: 12, border: "1px solid #d1d5db", background: "white", color: "#6b7280", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>
+                    style={{ flex: 1, padding: "12px 20px", borderRadius: 12, border: "1px solid #d1d5db", background: "white", color: "#6b7280", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>
                     ↩️ Reabrir {!isAdmin && "(Admin)"}
                   </button>
                 )}
-                {detailRecord && (
+                {/* Excluir — apenas admin */}
+                {detailRecord && isAdmin && (
                   <button onClick={excluirDia}
                     style={{ padding: "12px 20px", borderRadius: 12, border: "1px solid #fecaca", background: "#fef2f2", color: "#dc2626", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>
                     🗑️
@@ -469,20 +481,20 @@ export default function FechamentoCaixaPage() {
             <button key={d} type="button" onClick={() => handleDayClick(dataStr)}
               style={{
                 display: "block", width: "100%", textAlign: "left", borderRadius: 12, padding: "10px 12px", cursor: "pointer", transition: "all 0.2s",
-                border: `2px solid ${rec?.fechado ? "#16a34a" : isSelected ? "#3b82f6" : rec ? "#93c5fd" : "#e5e7eb"}`,
-                background: rec?.fechado ? "#f0fdf4" : isSelected ? "#eff6ff" : rec ? "#f0f9ff" : "white",
+                border: `2px solid ${rec?.fechado ? "#16a34a" : rec?.rascunho ? "#f59e0b" : isSelected ? "#3b82f6" : "#e5e7eb"}`,
+                background: rec?.fechado ? "#f0fdf4" : rec?.rascunho ? "#fffbeb" : isSelected ? "#eff6ff" : "white",
               }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
                 <div>
                   <span style={{ fontWeight: 800, fontSize: 18, lineHeight: 1 }}>{d}</span>
                   <span style={{ fontSize: 9, color: dow === 0 ? "#dc2626" : "#9ca3af", marginLeft: 3, fontWeight: dow === 0 ? 700 : 400 }}>{diasSemana[dow]}</span>
                 </div>
-                {rec?.fechado && <span style={{ fontSize: 12 }}>✅</span>}
+                {rec?.fechado ? <span style={{ fontSize: 12 }}>✅</span> : rec?.rascunho ? <span style={{ fontSize: 10 }}>📝</span> : null}
               </div>
               {rec ? (
                 <div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: rec.total >= 0 ? "#059669" : "#dc2626", lineHeight: 1.2 }}>{fmt(rec.total)}</div>
-                  <div style={{ fontSize: 8, color: "#9ca3af", marginTop: 2 }}>{rec.turnos}T · {fmt(rec.dinheiro)}</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: rec.fechado ? "#059669" : "#d97706", lineHeight: 1.2 }}>{fmt(rec.total)}</div>
+                  <div style={{ fontSize: 8, color: rec.rascunho && !rec.fechado ? "#d97706" : "#9ca3af", marginTop: 2 }}>{rec.rascunho && !rec.fechado ? "Rascunho" : fmt(rec.dinheiro)}</div>
                 </div>
               ) : (
                 <div style={{ fontSize: 9, color: "#0ea5e9", padding: "6px 0", fontWeight: 600 }}>+ Abrir</div>

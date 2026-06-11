@@ -100,7 +100,7 @@ export default function UsuariosPage() {
       const updateData: Record<string, unknown> = {
         nome,
         role,
-        permissoes_modulos: role === "leitura" ? modulosSelecionados : [],
+        permissoes_modulos: (role === "leitura" || role === "funcionario") ? modulosSelecionados : [],
       };
 
       const { error } = await supabase.from("profiles").update(updateData).eq("id", editandoId);
@@ -130,7 +130,7 @@ export default function UsuariosPage() {
           nome,
           email,
           role,
-          permissoes_modulos: role === "leitura" ? modulosSelecionados : [],
+          permissoes_modulos: (role === "leitura" || role === "funcionario") ? modulosSelecionados : [],
         });
 
         if (profileError) {
@@ -191,7 +191,7 @@ export default function UsuariosPage() {
         <div className="flex flex-wrap gap-3">
           {[
             { icon: "👑", label: "Administrador", desc: "Acesso total, pode editar tudo", bg: "#dcfce7" },
-            { icon: "👤", label: "Funcionário", desc: "Acesso normal, não pode editar meses fechados", bg: "#dbeafe" },
+            { icon: "👤", label: "Funcionário", desc: "Acesso de escrita nos módulos selecionados (sem seleção = acesso total)", bg: "#dbeafe" },
             { icon: "👁️", label: "Somente Leitura", desc: "Apenas visualiza módulos permitidos, sem editar", bg: "#fef3c7" },
           ].map(r => (
             <div key={r.label} className="flex items-center gap-2 px-3 py-2 rounded-lg" style={{ background: r.bg }}>
@@ -254,13 +254,20 @@ export default function UsuariosPage() {
               </div>
             </div>
 
-            {/* Permissões de módulos (apenas para leitura) */}
-            {role === "leitura" && (
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+            {/* Permissões de módulos (para leitura e funcionário) */}
+            {(role === "leitura" || role === "funcionario") && (
+              <div className={`border rounded-xl p-4 ${role === "funcionario" ? "bg-blue-50 border-blue-200" : "bg-amber-50 border-amber-200"}`}>
                 <div className="flex items-center justify-between mb-3">
-                  <label className="text-xs font-bold text-amber-800">📋 Módulos que este usuário pode visualizar:</label>
+                  <div>
+                    <label className={`text-xs font-bold ${role === "funcionario" ? "text-blue-800" : "text-amber-800"}`}>
+                      {role === "funcionario" ? "🔧 Módulos que este funcionário pode acessar:" : "📋 Módulos que este usuário pode visualizar:"}
+                    </label>
+                    {role === "funcionario" && (
+                      <p className="text-[10px] text-blue-600 mt-0.5">Deixe vazio para acesso total a todos os módulos</p>
+                    )}
+                  </div>
                   <div className="flex gap-2">
-                    <button type="button" onClick={selecionarTodos} className="text-[10px] px-2 py-1 bg-amber-100 text-amber-700 rounded-lg font-semibold hover:bg-amber-200">Todos</button>
+                    <button type="button" onClick={selecionarTodos} className={`text-[10px] px-2 py-1 rounded-lg font-semibold ${role === "funcionario" ? "bg-blue-100 text-blue-700 hover:bg-blue-200" : "bg-amber-100 text-amber-700 hover:bg-amber-200"}`}>Todos</button>
                     <button type="button" onClick={limparTodos} className="text-[10px] px-2 py-1 bg-gray-100 text-gray-600 rounded-lg font-semibold hover:bg-gray-200">Limpar</button>
                   </div>
                 </div>
@@ -269,16 +276,22 @@ export default function UsuariosPage() {
                     const selecionado = modulosSelecionados.includes(mod.id);
                     return (
                       <button key={mod.id} type="button" onClick={() => toggleModulo(mod.id)}
-                        className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all text-left ${selecionado ? "bg-amber-100 text-amber-800 border border-amber-300 shadow-sm" : "bg-white text-gray-500 border border-gray-200"}`}>
+                        className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all text-left ${selecionado
+                          ? role === "funcionario"
+                            ? "bg-blue-100 text-blue-800 border border-blue-300 shadow-sm"
+                            : "bg-amber-100 text-amber-800 border border-amber-300 shadow-sm"
+                          : "bg-white text-gray-500 border border-gray-200"}`}>
                         <span>{mod.icon}</span>
                         <span className="truncate">{mod.label}</span>
-                        {selecionado && <span className="ml-auto text-amber-600">✓</span>}
+                        {selecionado && <span className={`ml-auto ${role === "funcionario" ? "text-blue-600" : "text-amber-600"}`}>✓</span>}
                       </button>
                     );
                   })}
                 </div>
-                <p className="text-[10px] text-amber-600 mt-2">
-                  {modulosSelecionados.length === 0 ? "⚠️ Nenhum módulo selecionado — usuário não verá nada" : `✅ ${modulosSelecionados.length} módulo(s) selecionado(s)`}
+                <p className={`text-[10px] mt-2 ${role === "funcionario" ? "text-blue-600" : "text-amber-600"}`}>
+                  {modulosSelecionados.length === 0
+                    ? role === "funcionario" ? "ℹ️ Nenhum selecionado — acesso total (padrão funcionário)" : "⚠️ Nenhum módulo selecionado — usuário não verá nada"
+                    : `✅ ${modulosSelecionados.length} módulo(s) selecionado(s)`}
                 </p>
               </div>
             )}
@@ -311,9 +324,9 @@ export default function UsuariosPage() {
                   <div className="min-w-0">
                     <p className="text-sm font-semibold truncate">{u.nome || "Sem nome"}</p>
                     <p className="text-xs text-[var(--color-text-muted)]">{u.email}</p>
-                    {u.role === "leitura" && u.permissoes_modulos && u.permissoes_modulos.length > 0 && (
-                      <p className="text-[10px] text-amber-600 mt-0.5">
-                        📋 {u.permissoes_modulos.length} módulo(s)
+                    {u.permissoes_modulos && u.permissoes_modulos.length > 0 && (
+                      <p className={`text-[10px] mt-0.5 ${u.role === "funcionario" ? "text-blue-600" : "text-amber-600"}`}>
+                        {u.role === "funcionario" ? "🔧" : "📋"} {u.permissoes_modulos.length} módulo(s) permitido(s)
                       </p>
                     )}
                   </div>

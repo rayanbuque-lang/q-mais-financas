@@ -44,8 +44,15 @@ function getMenuVisivel(profile: Profile) {
   // Master vê tudo
   if (profile.role === "master") return menuItems;
 
-  // Funcionário vê tudo menos masterOnly
+  // Funcionário: se tiver módulos definidos, restringe; senão, vê tudo menos masterOnly
   if (profile.role === "funcionario") {
+    const modsPermitidos = profile.permissoes_modulos || [];
+    if (modsPermitidos.length > 0) {
+      return menuItems.filter(item => {
+        if (item.masterOnly) return false;
+        return modsPermitidos.includes(item.modulo);
+      });
+    }
     return menuItems.filter(item => !item.masterOnly);
   }
 
