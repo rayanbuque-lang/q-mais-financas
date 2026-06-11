@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { Logo } from "@/components/logo";
 import { createClient } from "@/lib/supabase/client";
 import NotificacoesBell from "@/components/notificacoes-bell";
+import ChatWidget from "@/components/chat-widget";
 
 interface Profile {
   id: string;
@@ -34,7 +35,6 @@ const menuItems = [
   { label: "Conciliação Bancária", href: "/conciliacao", icon: "🏦", modulo: "conciliacao" },
   { label: "Relatórios", href: "/relatorios", icon: "📄", modulo: "relatorios" },
   { label: "Análise Inteligente", href: "/analise", icon: "🧠", modulo: "analise" },
-  { label: "Assistente IA", href: "/assistente", icon: "🤖", modulo: "assistente" },
   { label: "Histórico", href: "/audit", icon: "📜", modulo: "audit" },
   { label: "Usuários", href: "/usuarios", icon: "👥", modulo: "usuarios", masterOnly: true },
   { label: "Configurações", href: "/configuracoes", icon: "⚙️", modulo: "configuracoes", masterOnly: true },
@@ -190,6 +190,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </main>
         </div>
       </div>
+      <ChatWidget />
     </>
   );
 }
