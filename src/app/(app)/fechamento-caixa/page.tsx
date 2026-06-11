@@ -340,17 +340,7 @@ export default function FechamentoCaixaPage() {
                 <h2 style={{ fontWeight: 700, fontSize: 16, margin: 0, textTransform: "capitalize" }}>
                   {diasSemanaLong[dow]}, {new Date(detailData + "T12:00:00").toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric" })}
                 </h2>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
-                  <span style={{ fontSize: 11, color: "#6b7280" }}>Turnos:</span>
-                  {[1, 2].map(t => (
-                    <button key={t} type="button" onClick={() => setTurnos(t)}
-                      style={{ padding: "2px 10px", borderRadius: 12, fontSize: 11, fontWeight: 700, border: "none", cursor: "pointer",
-                        background: turnos === t ? "#3b82f6" : "#e0e7ff", color: turnos === t ? "white" : "#3b82f6" }}>
-                      {t}T
-                    </button>
-                  ))}
-                  {detailRecord?.fechado && <span style={{ fontSize: 11, color: "#16a34a", fontWeight: 600 }}>· ✅ Conferido</span>}
-                </div>
+                {detailRecord?.fechado && <span style={{ fontSize: 11, color: "#16a34a", fontWeight: 600, marginTop: 4, display: "block" }}>✅ Conferido</span>}
               </div>
               <button onClick={closeDetail} style={{ width: 32, height: 32, borderRadius: 8, border: "none", background: "white", cursor: "pointer", fontSize: 14, color: "#6b7280" }}>✕</button>
             </div>
