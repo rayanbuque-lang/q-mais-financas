@@ -3,13 +3,11 @@
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { registrarLog } from "@/lib/audit";
+import { CurrencyInput } from "@/components/currency-input";
 
 const mesesNomes = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
 const diasSemana = ["Dom","Seg","Ter","Qua","Qui","Sex","Sáb"];
 const diasSemanaLong = ["Domingo","Segunda-feira","Terça-feira","Quarta-feira","Quinta-feira","Sexta-feira","Sábado"];
-const VALOR_1T_SEMANA = 333;
-const VALOR_2T_SEMANA = 666;
-const VALOR_1T_DOMINGO = 435;
 
 interface CaixaDia {
   id: string; data: string; turnos: number;
@@ -17,19 +15,19 @@ interface CaixaDia {
   pix_santander: number; pix_inter: number; rom_card: number;
   app: number; prefeitura: number;
   compras_prazo: number; dinheiro: number;
-  valor_inicial_caixa: number; total: number;
+  sobras_faltas: number; total: number;
   fechado: boolean; fechado_por: string | null; fechado_em: string | null;
 }
 
 interface CaixaForm {
-  valor_total_vendas: string; cartao: string;
-  pix_santander: string; pix_inter: string; rom_card: string;
-  app: string; prefeitura: string; compras_prazo: string;
+  valor_total_vendas: number; cartao: number;
+  pix_santander: number; pix_inter: number; rom_card: number;
+  app: number; prefeitura: number; compras_prazo: number;
 }
 
 const formVazio: CaixaForm = {
-  valor_total_vendas: "", cartao: "", pix_santander: "", pix_inter: "",
-  rom_card: "", app: "", prefeitura: "", compras_prazo: "",
+  valor_total_vendas: 0, cartao: 0, pix_santander: 0, pix_inter: 0,
+  rom_card: 0, app: 0, prefeitura: 0, compras_prazo: 0,
 };
 
 export default function FechamentoCaixaPage() {
@@ -46,7 +44,7 @@ export default function FechamentoCaixaPage() {
   const [detailRecord, setDetailRecord] = useState<CaixaDia | null>(null);
   const [form, setForm] = useState<CaixaForm>({ ...formVazio });
   const [turnos, setTurnos] = useState(1);
-  const [valorInicial, setValorInicial] = useState(0);
+  const [sobrasfaltas, setSobrasfaltas] = useState(0); // positivo = sobras, negativo = faltas
 
   const supabase = createClient();
 
@@ -63,19 +61,12 @@ export default function FechamentoCaixaPage() {
 
   async function garantirCategoria(): Promise<string | null> {
     const nome = "Dinheiro (Fechamento Caixa)";
-
-    // Buscar em categorias_entrada primeiro (para aparecer no DRE como entrada)
     const { data: existenteEntrada } = await supabase.from("categorias_entrada").select("id").eq("nome", nome).limit(1);
     if (existenteEntrada && existenteEntrada.length > 0) return existenteEntrada[0].id;
-
-    // Criar em categorias_entrada
     const { data: novaEntrada } = await supabase.from("categorias_entrada").insert({ nome, ativo: true }).select("id").single();
     if (novaEntrada) return novaEntrada.id;
-
-    // Fallback: buscar em categorias_saida
     const { data: existenteSaida } = await supabase.from("categorias_saida").select("id").eq("nome", nome).limit(1);
     if (existenteSaida && existenteSaida.length > 0) return existenteSaida[0].id;
-
     return null;
   }
 
@@ -94,13 +85,11 @@ export default function FechamentoCaixaPage() {
   function mesAnterior() { if (mes === 1) { setMes(12); setAno(ano - 1); } else setMes(mes - 1); }
   function mesProximo() { if (mes === 12) { setMes(1); setAno(ano + 1); } else setMes(mes + 1); }
   function fmt(v: number) { return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }); }
-  function pf(s: string) { return s ? parseFloat(s.replace(",", ".")) : 0; }
 
-  function calcDinheiroTotal(f: CaixaForm, vi: number) {
-    const tv = pf(f.valor_total_vendas);
-    const sub = pf(f.cartao) + pf(f.pix_santander) + pf(f.pix_inter) + pf(f.rom_card) + pf(f.app) + pf(f.prefeitura) + pf(f.compras_prazo);
-    const dinheiro = Math.max(tv - sub, 0);
-    const total = dinheiro - vi;
+  function calcDinheiroTotal(f: CaixaForm, sf: number) {
+    const sub = f.cartao + f.pix_santander + f.pix_inter + f.rom_card + f.app + f.prefeitura + f.compras_prazo;
+    const dinheiro = Math.max(f.valor_total_vendas - sub, 0);
+    const total = dinheiro + sf;
     return { dinheiro, total };
   }
 
@@ -110,21 +99,21 @@ export default function FechamentoCaixaPage() {
 
   function setFormFromRecord(r: CaixaDia) {
     setForm({
-      valor_total_vendas: r.valor_total_vendas ? r.valor_total_vendas.toString().replace(".", ",") : "",
-      cartao: r.cartao ? r.cartao.toString().replace(".", ",") : "",
-      pix_santander: r.pix_santander ? r.pix_santander.toString().replace(".", ",") : "",
-      pix_inter: r.pix_inter ? r.pix_inter.toString().replace(".", ",") : "",
-      rom_card: r.rom_card ? r.rom_card.toString().replace(".", ",") : "",
-      app: r.app ? r.app.toString().replace(".", ",") : "",
-      prefeitura: r.prefeitura ? r.prefeitura.toString().replace(".", ",") : "",
-      compras_prazo: r.compras_prazo ? r.compras_prazo.toString().replace(".", ",") : "",
+      valor_total_vendas: r.valor_total_vendas ?? 0,
+      cartao: r.cartao ?? 0,
+      pix_santander: r.pix_santander ?? 0,
+      pix_inter: r.pix_inter ?? 0,
+      rom_card: r.rom_card ?? 0,
+      app: r.app ?? 0,
+      prefeitura: r.prefeitura ?? 0,
+      compras_prazo: r.compras_prazo ?? 0,
     });
     setTurnos(r.turnos);
-    setValorInicial(r.valor_inicial_caixa);
+    setSobrasfaltas(r.sobras_faltas ?? 0);
     setDetailRecord(r);
   }
 
-  function handleFormChange(field: keyof CaixaForm, value: string) {
+  function handleFormChange(field: keyof CaixaForm, value: number) {
     setForm(prev => ({ ...prev, [field]: value }));
   }
 
@@ -139,10 +128,10 @@ export default function FechamentoCaixaPage() {
       setDetailData(data);
       setForm({ ...formVazio });
       setDetailRecord(null);
+      setSobrasfaltas(0);
       const dow = new Date(data + "T12:00:00").getDay();
       if (dow === 0) {
         setTurnos(1);
-        setValorInicial(VALOR_1T_DOMINGO);
         setShowDetail(true);
         setShowShifts(false);
       } else {
@@ -152,9 +141,8 @@ export default function FechamentoCaixaPage() {
     }
   }
 
-  function selectShift(t: number, v: number) {
+  function selectShift(t: number) {
     setTurnos(t);
-    setValorInicial(v);
     setShowShifts(false);
     setShowDetail(true);
   }
@@ -167,14 +155,15 @@ export default function FechamentoCaixaPage() {
   async function handleSalvar() {
     if (!detailData) return;
     setLoading(true);
-    const { dinheiro, total } = calcDinheiroTotal(form, valorInicial);
+    const { dinheiro, total } = calcDinheiroTotal(form, sobrasfaltas);
     const dados = {
-      data: detailData, turnos, valor_total_vendas: pf(form.valor_total_vendas),
-      cartao: pf(form.cartao), pix_santander: pf(form.pix_santander),
-      pix_inter: pf(form.pix_inter), rom_card: pf(form.rom_card),
-      app: pf(form.app), prefeitura: pf(form.prefeitura),
-      compras_prazo: pf(form.compras_prazo),
-      dinheiro, valor_inicial_caixa: valorInicial, total,
+      data: detailData, turnos,
+      valor_total_vendas: form.valor_total_vendas,
+      cartao: form.cartao, pix_santander: form.pix_santander,
+      pix_inter: form.pix_inter, rom_card: form.rom_card,
+      app: form.app, prefeitura: form.prefeitura,
+      compras_prazo: form.compras_prazo,
+      dinheiro, sobras_faltas: sobrasfaltas, total,
     };
 
     if (detailRecord) {
@@ -195,63 +184,50 @@ export default function FechamentoCaixaPage() {
   async function fecharDia() {
     if (!detailData) return;
     setLoading(true);
+    const { dinheiro, total } = calcDinheiroTotal(form, sobrasfaltas);
 
-    const { dinheiro, total } = calcDinheiroTotal(form, valorInicial);
-
-    // Salvar todos os valores primeiro
     const dados = {
-      data: detailData, turnos, valor_total_vendas: pf(form.valor_total_vendas),
-      cartao: pf(form.cartao), pix_santander: pf(form.pix_santander),
-      pix_inter: pf(form.pix_inter), rom_card: pf(form.rom_card),
-      app: pf(form.app), prefeitura: pf(form.prefeitura),
-      compras_prazo: pf(form.compras_prazo),
-      dinheiro, valor_inicial_caixa: valorInicial, total,
+      data: detailData, turnos,
+      valor_total_vendas: form.valor_total_vendas,
+      cartao: form.cartao, pix_santander: form.pix_santander,
+      pix_inter: form.pix_inter, rom_card: form.rom_card,
+      app: form.app, prefeitura: form.prefeitura,
+      compras_prazo: form.compras_prazo,
+      dinheiro, sobras_faltas: sobrasfaltas, total,
       fechado: true, fechado_em: new Date().toISOString(),
     };
 
     await supabase.from("fechamento_caixa").upsert(dados, { onConflict: "data" });
 
-    // Garantir que a categoria existe
     const catId = await garantirCategoria();
-
     if (catId) {
-      // Verificar se já existe movimentação para este dia
       const { data: existente } = await supabase.from("movimentacoes")
-        .select("id, valor")
-        .eq("data", detailData)
-        .eq("categoria_id", catId)
-        .limit(1);
+        .select("id, valor").eq("data", detailData).eq("categoria_id", catId).limit(1);
 
       const valorMov = total > 0 ? total : 0;
-
       if (existente && existente.length > 0) {
-        // Atualizar existente
         await supabase.from("movimentacoes").update({
           valor: valorMov,
           observacao: `Fechamento de Caixa - ${new Date(detailData + "T12:00:00").toLocaleDateString("pt-BR")}`,
         }).eq("id", existente[0].id);
       } else if (valorMov > 0) {
-        // Criar nova
         await supabase.from("movimentacoes").insert({
-          tipo: "entrada",
-          data: detailData,
-          valor: valorMov,
+          tipo: "entrada", data: detailData, valor: valorMov,
           categoria_id: catId,
           observacao: `Fechamento de Caixa - ${new Date(detailData + "T12:00:00").toLocaleDateString("pt-BR")}`,
-          forma_pagamento: "dinheiro",
-          revisar: false,
+          forma_pagamento: "dinheiro", revisar: false,
         });
       }
     }
 
     await registrarLog({
       acao: "fechou", tabela: "fechamento_caixa",
-      detalhes: `Dia ${detailData} - Bruto: ${fmt(pf(form.valor_total_vendas))} - Dinheiro: ${fmt(dinheiro)} - Total: ${fmt(total)}`,
+      detalhes: `Dia ${detailData} - Bruto: ${fmt(form.valor_total_vendas)} - Dinheiro: ${fmt(dinheiro)} - Total: ${fmt(total)}`,
     });
 
     const msg = total > 0
-      ? `Dia fechado! ${fmt(total)} lançado em Movimentações como Dinheiro.`
-      : `Dia fechado! Total ${fmt(total)} — sem valor para lançar em Movimentações.`;
+      ? `Dia fechado! ${fmt(total)} lançado em Movimentações.`
+      : `Dia fechado! Total ${fmt(total)} — sem valor para lançar.`;
 
     await carregarDados();
     const atualizado = getRecord(detailData);
@@ -265,14 +241,11 @@ export default function FechamentoCaixaPage() {
       setMensagem("Apenas administradores podem reabrir."); setTimeout(() => setMensagem(""), 3000); return;
     }
     setLoading(true);
-
     const catId = await garantirCategoria();
     if (catId) {
       await supabase.from("movimentacoes").delete()
-        .eq("data", detailRecord.data)
-        .eq("categoria_id", catId);
+        .eq("data", detailRecord.data).eq("categoria_id", catId);
     }
-
     await supabase.from("fechamento_caixa").update({ fechado: false, fechado_por: null, fechado_em: null }).eq("id", detailRecord.id);
     await registrarLog({ acao: "reabriu", tabela: "fechamento_caixa", registroId: detailRecord.id });
     setMensagem("Dia reaberto e movimentação removida.");
@@ -286,12 +259,10 @@ export default function FechamentoCaixaPage() {
     if (!detailRecord) return;
     if (!confirm("Excluir este dia e sua movimentação?")) return;
     setLoading(true);
-
     const catId = await garantirCategoria();
     if (catId && detailRecord.fechado) {
       await supabase.from("movimentacoes").delete()
-        .eq("data", detailRecord.data)
-        .eq("categoria_id", catId);
+        .eq("data", detailRecord.data).eq("categoria_id", catId);
     }
     await supabase.from("fechamento_caixa").delete().eq("id", detailRecord.id);
     await registrarLog({ acao: "excluiu", tabela: "fechamento_caixa", registroId: detailRecord.id });
@@ -310,18 +281,29 @@ export default function FechamentoCaixaPage() {
   const totalBrutoMes = registros.reduce((a, c) => a + c.valor_total_vendas, 0);
   const diasConferidos = registros.length;
 
+  // Derived sign state for UI
+  const sfSinal = sobrasfaltas >= 0 ? 1 : -1;
+  const sfAbs = Math.abs(sobrasfaltas);
+  function toggleSinal() { setSobrasfaltas(prev => (prev === 0 ? 0 : -prev)); }
+
   const detailContent = showDetail && detailData ? (() => {
-    const { dinheiro, total } = calcDinheiroTotal(form, valorInicial);
+    const { dinheiro, total } = calcDinheiroTotal(form, sobrasfaltas);
     const dow = new Date(detailData + "T12:00:00").getDay();
 
-    const campos = [
-      { field: "cartao" as const, label: "💳 Cartão", bg: "#eff6ff", border: "#bfdbfe", color: "#1d4ed8" },
-      { field: "pix_santander" as const, label: "📱 Pix Santander", bg: "#fef2f2", border: "#fecaca", color: "#dc2626" },
-      { field: "pix_inter" as const, label: "📱 Pix Inter", bg: "#fff7ed", border: "#fed7aa", color: "#ea580c" },
-      { field: "rom_card" as const, label: "💳 Rom Card", bg: "#f5f3ff", border: "#ddd6fe", color: "#7c3aed" },
-      { field: "app" as const, label: "📲 App", bg: "#ecfdf5", border: "#a7f3d0", color: "#059669" },
-      { field: "prefeitura" as const, label: "🏛️ Prefeitura", bg: "#ecfeff", border: "#a5f3fc", color: "#0891b2" },
-      { field: "compras_prazo" as const, label: "🛒 Compras à Prazo", bg: "#fef2f2", border: "#fecaca", color: "#dc2626" },
+    const inputStyle = (border: string, color: string): React.CSSProperties => ({
+      width: "100%", marginTop: 4, padding: "8px 10px", borderRadius: 8,
+      border: `1px solid ${border}`, background: "white",
+      fontSize: 14, fontWeight: 600, color, outline: "none",
+    });
+
+    const campos: { field: keyof CaixaForm; label: string; bg: string; border: string; color: string }[] = [
+      { field: "cartao", label: "💳 Cartão", bg: "#eff6ff", border: "#bfdbfe", color: "#1d4ed8" },
+      { field: "pix_santander", label: "📱 Pix Santander", bg: "#fef2f2", border: "#fecaca", color: "#dc2626" },
+      { field: "pix_inter", label: "📱 Pix Inter", bg: "#fff7ed", border: "#fed7aa", color: "#ea580c" },
+      { field: "rom_card", label: "💳 Rom Card", bg: "#f5f3ff", border: "#ddd6fe", color: "#7c3aed" },
+      { field: "app", label: "📲 App", bg: "#ecfdf5", border: "#a7f3d0", color: "#059669" },
+      { field: "prefeitura", label: "🏛️ Prefeitura", bg: "#ecfeff", border: "#a5f3fc", color: "#0891b2" },
+      { field: "compras_prazo", label: "🛒 Compras à Prazo", bg: "#fef2f2", border: "#fecaca", color: "#dc2626" },
     ];
 
     return (
@@ -332,7 +314,7 @@ export default function FechamentoCaixaPage() {
               {diasSemanaLong[dow]}, {new Date(detailData + "T12:00:00").toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric" })}
             </h2>
             <span style={{ fontSize: 11, color: "#6b7280" }}>
-              {turnos} {turnos === 1 ? "turno" : "turnos"} · Caixa inicial: {fmt(valorInicial)}
+              {turnos} {turnos === 1 ? "turno" : "turnos"}
               {detailRecord?.fechado && " · ✅ Conferido"}
             </span>
           </div>
@@ -343,8 +325,11 @@ export default function FechamentoCaixaPage() {
           {/* Total Vendas */}
           <div style={{ background: "#f0f9ff", border: "2px solid #0ea5e9", borderRadius: 12, padding: 14, marginBottom: 12 }}>
             <label style={{ fontSize: 11, fontWeight: 700, color: "#0369a1", textTransform: "uppercase" }}>💰 VALOR TOTAL DE VENDAS DO DIA</label>
-            <input type="text" value={form.valor_total_vendas} onChange={e => handleFormChange("valor_total_vendas", e.target.value)} placeholder="0,00"
-              style={{ width: "100%", marginTop: 6, padding: "10px 12px", borderRadius: 8, border: "1px solid #7dd3fc", background: "white", fontSize: 18, fontWeight: 700, color: "#0369a1", outline: "none" }} />
+            <CurrencyInput
+              value={form.valor_total_vendas}
+              onChange={v => handleFormChange("valor_total_vendas", v)}
+              style={{ width: "100%", marginTop: 6, padding: "10px 12px", borderRadius: 8, border: "1px solid #7dd3fc", background: "white", fontSize: 18, fontWeight: 700, color: "#0369a1", outline: "none" }}
+            />
           </div>
 
           {/* Grid */}
@@ -352,12 +337,15 @@ export default function FechamentoCaixaPage() {
             {campos.map(item => (
               <div key={item.field} style={{ background: item.bg, border: `1px solid ${item.border}`, borderRadius: 12, padding: 12 }}>
                 <label style={{ fontSize: 10, fontWeight: 700, color: item.color, textTransform: "uppercase" }}>{item.label}</label>
-                <input type="text" value={form[item.field]} onChange={e => handleFormChange(item.field, e.target.value)} placeholder="0,00"
-                  style={{ width: "100%", marginTop: 4, padding: "8px 10px", borderRadius: 8, border: `1px solid ${item.border}`, background: "white", fontSize: 14, fontWeight: 600, color: item.color, outline: "none" }} />
+                <CurrencyInput
+                  value={form[item.field]}
+                  onChange={v => handleFormChange(item.field, v)}
+                  style={inputStyle(item.border, item.color)}
+                />
               </div>
             ))}
 
-            {/* Dinheiro */}
+            {/* Dinheiro (auto) */}
             <div style={{ background: "#f0fdf4", border: "2px solid #16a34a", borderRadius: 12, padding: 12 }}>
               <label style={{ fontSize: 10, fontWeight: 700, color: "#16a34a", textTransform: "uppercase" }}>💵 DINHEIRO (auto)</label>
               <div style={{ marginTop: 6, padding: "8px 10px", borderRadius: 8, background: "white", border: "1px solid #bbf7d0", fontSize: 16, fontWeight: 700, color: dinheiro >= 0 ? "#16a34a" : "#dc2626" }}>
@@ -365,12 +353,41 @@ export default function FechamentoCaixaPage() {
               </div>
             </div>
 
-            {/* Caixa Inicial */}
-            <div style={{ background: "#fffbeb", border: "2px solid #d97706", borderRadius: 12, padding: 12 }}>
-              <label style={{ fontSize: 10, fontWeight: 700, color: "#d97706", textTransform: "uppercase" }}>💰 CAIXA INICIAL</label>
-              <div style={{ marginTop: 6, padding: "8px 10px", borderRadius: 8, background: "white", border: "1px solid #fde68a", fontSize: 16, fontWeight: 700, color: "#d97706" }}>
-                - {fmt(valorInicial)}
+            {/* Sobras e Faltas */}
+            <div style={{ background: sobrasfaltas > 0 ? "#f0fdf4" : sobrasfaltas < 0 ? "#fef2f2" : "#fffbeb", border: `2px solid ${sobrasfaltas > 0 ? "#16a34a" : sobrasfaltas < 0 ? "#dc2626" : "#d97706"}`, borderRadius: 12, padding: 12 }}>
+              <label style={{ fontSize: 10, fontWeight: 700, color: sobrasfaltas > 0 ? "#16a34a" : sobrasfaltas < 0 ? "#dc2626" : "#d97706", textTransform: "uppercase" }}>
+                ⚖️ SOBRAS E FALTAS
+              </label>
+              <div style={{ display: "flex", gap: 5, marginTop: 4, alignItems: "center" }}>
+                <button
+                  type="button"
+                  onClick={toggleSinal}
+                  title={sfSinal > 0 ? "Clique para Faltas (−)" : "Clique para Sobras (+)"}
+                  style={{
+                    width: 30, height: 30, borderRadius: 7, border: "none",
+                    background: sfSinal > 0 ? "#dcfce7" : "#fee2e2",
+                    color: sfSinal > 0 ? "#16a34a" : "#dc2626",
+                    fontWeight: 800, fontSize: 15, cursor: "pointer", flexShrink: 0,
+                  }}
+                >
+                  {sfSinal > 0 ? "+" : "−"}
+                </button>
+                <CurrencyInput
+                  value={sfAbs}
+                  onChange={v => setSobrasfaltas(sfSinal * v)}
+                  style={{
+                    flex: 1, padding: "7px 9px", borderRadius: 8,
+                    border: `1px solid ${sfSinal > 0 ? "#bbf7d0" : "#fecaca"}`,
+                    background: "white", fontSize: 14, fontWeight: 600,
+                    color: sfSinal > 0 ? "#16a34a" : "#dc2626", outline: "none",
+                  }}
+                />
               </div>
+              {sobrasfaltas !== 0 && (
+                <p style={{ margin: "3px 0 0", fontSize: 10, color: sobrasfaltas > 0 ? "#16a34a" : "#dc2626", fontWeight: 600 }}>
+                  {sobrasfaltas > 0 ? "Sobras" : "Faltas"}: {sobrasfaltas > 0 ? "+" : "−"}{fmt(sfAbs)}
+                </p>
+              )}
             </div>
           </div>
 
@@ -378,7 +395,9 @@ export default function FechamentoCaixaPage() {
           <div style={{ marginTop: 12, background: total >= 0 ? "#ecfdf5" : "#fef2f2", border: `2px solid ${total >= 0 ? "#16a34a" : "#dc2626"}`, borderRadius: 12, padding: 16, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
             <div>
               <p style={{ fontSize: 11, fontWeight: 700, color: total >= 0 ? "#16a34a" : "#dc2626", textTransform: "uppercase", margin: 0 }}>📊 TOTAL DO DIA</p>
-              <p style={{ fontSize: 9, color: "#6b7280", margin: "2px 0 0" }}>Dinheiro - Caixa Inicial</p>
+              <p style={{ fontSize: 9, color: "#6b7280", margin: "2px 0 0" }}>
+                Dinheiro {sobrasfaltas !== 0 ? (sobrasfaltas > 0 ? "+ Sobras" : "− Faltas") : ""}
+              </p>
             </div>
             <span style={{ fontSize: 24, fontWeight: 800, color: total >= 0 ? "#16a34a" : "#dc2626" }}>{fmt(total)}</span>
           </div>
@@ -490,17 +509,15 @@ export default function FechamentoCaixaPage() {
           </p>
           <p style={{ fontSize: 12, color: "#6b7280", marginBottom: 12 }}>Quantos turnos de caixa?</p>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <button onClick={() => selectShift(1, VALOR_1T_SEMANA)}
+            <button onClick={() => selectShift(1)}
               style={{ flex: 1, minWidth: 140, padding: "14px 16px", borderRadius: 12, border: "2px solid #d97706", background: "#fffbeb", cursor: "pointer", textAlign: "center" }}>
-              <span style={{ fontSize: 20 }}>💰</span>
+              <span style={{ fontSize: 20 }}>☀️</span>
               <p style={{ fontWeight: 700, fontSize: 13, margin: "4px 0 0", color: "#92400e" }}>1 Turno</p>
-              <p style={{ fontSize: 11, color: "#d97706" }}>R$ {VALOR_1T_SEMANA.toFixed(2)}</p>
             </button>
-            <button onClick={() => selectShift(2, VALOR_2T_SEMANA)}
+            <button onClick={() => selectShift(2)}
               style={{ flex: 1, minWidth: 140, padding: "14px 16px", borderRadius: 12, border: "2px solid #d97706", background: "#fffbeb", cursor: "pointer", textAlign: "center" }}>
-              <span style={{ fontSize: 20 }}>💰💰</span>
+              <span style={{ fontSize: 20 }}>🌙</span>
               <p style={{ fontWeight: 700, fontSize: 13, margin: "4px 0 0", color: "#92400e" }}>2 Turnos</p>
-              <p style={{ fontSize: 11, color: "#d97706" }}>R$ {VALOR_2T_SEMANA.toFixed(2)}</p>
             </button>
             <button onClick={cancelShift}
               style={{ padding: "14px 16px", borderRadius: 12, border: "1px solid #d1d5db", background: "white", cursor: "pointer", fontSize: 12, color: "#6b7280" }}>Cancelar</button>

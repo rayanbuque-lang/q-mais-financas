@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { registrarLog, verificarMesFechado, verificarAdmin } from "@/lib/audit";
 import ComprovantePicker from "@/components/comprovante-picker";
+import { CurrencyInput } from "@/components/currency-input";
 
 interface ContaPagar {
   id: string;
@@ -39,7 +40,7 @@ export default function ContasPagarPage() {
   // Form
   const [fornecedor, setFornecedor] = useState("");
   const [descricao, setDescricao] = useState("");
-  const [valor, setValor] = useState("");
+  const [valor, setValor] = useState(0);
   const [dataVencimento, setDataVencimento] = useState("");
   const [categoriaId, setCategoriaId] = useState("");
   const [observacao, setObservacao] = useState("");
@@ -179,13 +180,13 @@ export default function ContasPagarPage() {
 
 
   function resetarFormulario() {
-    setFornecedor(""); setDescricao(""); setValor(""); setDataVencimento(""); setCategoriaId(""); setObservacao(""); setStatusInicial("pendente"); setDataPagamento(""); setEditandoId(null); setComprovanteUrl(null);
+    setFornecedor(""); setDescricao(""); setValor(0); setDataVencimento(""); setCategoriaId(""); setObservacao(""); setStatusInicial("pendente"); setDataPagamento(""); setEditandoId(null); setComprovanteUrl(null);
   }
 
   function abrirNovo() { resetarFormulario(); if (categorias.length > 0) setCategoriaId(categorias[0].id); setShowForm(true); }
 
   function abrirEditar(conta: ContaPagar) {
-    setFornecedor(conta.fornecedor); setDescricao(conta.descricao || ""); setValor(conta.valor.toString().replace(".", ",")); setDataVencimento(conta.data_vencimento); setCategoriaId(conta.categoria_id || ""); setObservacao(conta.observacao || ""); setStatusInicial(conta.status as "pendente" | "pago"); setDataPagamento(conta.data_pagamento || ""); setComprovanteUrl(conta.comprovante_url ?? null); setEditandoId(conta.id); setShowForm(true);
+    setFornecedor(conta.fornecedor); setDescricao(conta.descricao || ""); setValor(conta.valor); setDataVencimento(conta.data_vencimento); setCategoriaId(conta.categoria_id || ""); setObservacao(conta.observacao || ""); setStatusInicial(conta.status as "pendente" | "pago"); setDataPagamento(conta.data_pagamento || ""); setComprovanteUrl(conta.comprovante_url ?? null); setEditandoId(conta.id); setShowForm(true);
     setPagandoId(null);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -203,7 +204,7 @@ export default function ContasPagarPage() {
       }
     }
 
-    const dados: Record<string, unknown> = { fornecedor, descricao, valor: parseFloat(valor.replace(",", ".")), data_vencimento: dataVencimento, categoria_id: categoriaId, observacao, status: statusInicial, comprovante_url: comprovanteUrl };
+    const dados: Record<string, unknown> = { fornecedor, descricao, valor: valor, data_vencimento: dataVencimento, categoria_id: categoriaId, observacao, status: statusInicial, comprovante_url: comprovanteUrl };
     if (statusInicial === "pago") { dados.data_pagamento = dataPagamento || new Date().toISOString().split("T")[0]; } else { dados.data_pagamento = null; }
 
     let error; let contaId = editandoId;
@@ -211,12 +212,12 @@ export default function ContasPagarPage() {
     else { const r = await supabase.from("contas_pagar").insert(dados).select("id").single(); error = r.error; if (r.data) contaId = r.data.id; }
 
     if (!error && statusInicial === "pago" && contaId && !editandoId) {
-      await supabase.from("movimentacoes").insert({ tipo: "saida", data: dados.data_pagamento as string, valor: parseFloat(valor.replace(",", ".")), categoria_id: categoriaId, observacao: `Pagamento: ${fornecedor}${descricao ? ` - ${descricao}` : ""}`, revisar: false });
-      await registrarLog({ acao: "criou", tabela: "contas_pagar", registroId: contaId, dadosNovos: dados, detalhes: `${fornecedor} - ${fmt(parseFloat(valor.replace(",", ".")))}` });
+      await supabase.from("movimentacoes").insert({ tipo: "saida", data: dados.data_pagamento as string, valor: valor, categoria_id: categoriaId, observacao: `Pagamento: ${fornecedor}${descricao ? ` - ${descricao}` : ""}`, revisar: false });
+      await registrarLog({ acao: "criou", tabela: "contas_pagar", registroId: contaId, dadosNovos: dados, detalhes: `${fornecedor} - ${fmt(valor)}` });
       setMensagem("Cadastrada como paga!");
     } else if (error) { setMensagem("Erro ao salvar."); }
     else {
-      await registrarLog({ acao: editandoId ? "editou" : "criou", tabela: "contas_pagar", registroId: contaId || undefined, dadosNovos: dados, detalhes: `${fornecedor} - ${fmt(parseFloat(valor.replace(",", ".")))}` });
+      await registrarLog({ acao: editandoId ? "editou" : "criou", tabela: "contas_pagar", registroId: contaId || undefined, dadosNovos: dados, detalhes: `${fornecedor} - ${fmt(valor)}` });
       setMensagem(editandoId ? "Atualizada!" : "Cadastrada!");
     }
     resetarFormulario(); setShowForm(false); carregarDados(); setLoading(false); setTimeout(() => setMensagem(""), 4000);
@@ -459,7 +460,7 @@ export default function ContasPagarPage() {
               <div><label className="block text-sm font-semibold mb-2 text-[var(--color-text-muted)]">Descrição</label><input type="text" value={descricao} onChange={e => setDescricao(e.target.value)} placeholder="Ex: Boleto mensal" className="w-full px-4 py-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none" /></div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div><label className="block text-sm font-semibold mb-2 text-[var(--color-text-muted)]">Valor (R$)</label><input type="text" value={valor} onChange={e => setValor(e.target.value)} placeholder="0,00" required className="w-full px-4 py-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none" /></div>
+              <div><label className="block text-sm font-semibold mb-2 text-[var(--color-text-muted)]">Valor (R$)</label><CurrencyInput value={valor} onChange={setValor} required className="w-full px-4 py-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none" /></div>
               <div><label className="block text-sm font-semibold mb-2 text-[var(--color-text-muted)]">Vencimento</label><input type="date" value={dataVencimento} onChange={e => setDataVencimento(e.target.value)} required className="w-full px-4 py-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none" /></div>
               <div><label className="block text-sm font-semibold mb-2 text-[var(--color-text-muted)]">Categoria</label><select value={categoriaId} onChange={e => setCategoriaId(e.target.value)} required className="w-full px-4 py-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none">{categorias.map(cat => (<option key={cat.id} value={cat.id}>{cat.nome}</option>))}</select></div>
             </div>

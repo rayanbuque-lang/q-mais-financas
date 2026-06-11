@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { CurrencyInput } from "@/components/currency-input";
 import { registrarLog } from "@/lib/audit";
 import ComprovantePicker from "@/components/comprovante-picker";
 
@@ -24,7 +25,7 @@ export default function MovimentacoesPage() {
 
   const [tipo, setTipo] = useState<"entrada" | "saida">("saida");
   const [data, setData] = useState("");
-  const [valor, setValor] = useState("");
+  const [valor, setValor] = useState(0);
   const [categoriaId, setCategoriaId] = useState("");
   const [observacao, setObservacao] = useState("");
   const [editandoId, setEditandoId] = useState<string | null>(null);
@@ -53,7 +54,7 @@ export default function MovimentacoesPage() {
   function usarTemplate(t: Template) {
     setTipo(t.tipo);
     setCategoriaId(t.categoria_id);
-    setValor(t.valor.toFixed(2).replace(".", ","));
+    setValor(t.valor);
     setObservacao(t.observacao || "");
     setData(new Date().toISOString().split("T")[0]);
     setEditandoId(null);
@@ -69,9 +70,8 @@ export default function MovimentacoesPage() {
 
   async function salvarTemplate() {
     if (!nomeTemplate.trim() || !categoriaId || !valor) return;
-    const valorNum = parseFloat(valor.replace(",", "."));
-    if (isNaN(valorNum) || valorNum <= 0) return;
-    await supabase.from("movimentacao_templates").insert({ nome: nomeTemplate.trim(), tipo, valor: valorNum, categoria_id: categoriaId, observacao });
+    if (valor <= 0) return;
+    await supabase.from("movimentacao_templates").insert({ nome: nomeTemplate.trim(), tipo, valor, categoria_id: categoriaId, observacao });
     setNomeTemplate("");
     setSalvandoTemplate(false);
     carregarTemplates();
@@ -164,7 +164,7 @@ export default function MovimentacoesPage() {
   }, [tipo, catEntrada, catSaida, showForm]);
 
   function resetForm() {
-    setTipo("saida"); setData(""); setValor(""); setCategoriaId("");
+    setTipo("saida"); setData(""); setValor(0); setCategoriaId("");
     setObservacao(""); setEditandoId(null);
     setShowSomatoria(false); setItensTemp([]); setItemInput("");
     setComprovanteUrl(null);
@@ -190,12 +190,12 @@ export default function MovimentacoesPage() {
     if (itensExistentes && itensExistentes.length > 0) {
       const valores = itensExistentes.map(i => i.valor);
       setItensTemp(valores);
-      setValor(valores.reduce((a, b) => a + b, 0).toFixed(2).replace(".", ","));
+      setValor(valores.reduce((a, b) => a + b, 0));
       setShowSomatoria(true);
     } else {
       setItensTemp([]);
       setShowSomatoria(false);
-      setValor(m.valor.toFixed(2).replace(".", ","));
+      setValor(m.valor);
     }
 
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -222,14 +222,14 @@ export default function MovimentacoesPage() {
 
     const atualizados = [...itensTemp, ...novos];
     setItensTemp(atualizados);
-    setValor(atualizados.reduce((a, b) => a + b, 0).toFixed(2).replace(".", ","));
+    setValor(atualizados.reduce((a, b) => a + b, 0));
     setItemInput("");
   }
 
   function removeItem(index: number) {
     const novos = itensTemp.filter((_, i) => i !== index);
     setItensTemp(novos);
-    setValor(novos.length > 0 ? novos.reduce((a, b) => a + b, 0).toFixed(2).replace(".", ",") : "");
+    setValor(novos.reduce((a, b) => a + b, 0));
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -237,9 +237,7 @@ export default function MovimentacoesPage() {
     setLoading(true);
     setMensagem("");
 
-    const valorNum = itensTemp.length > 0
-      ? itensTemp.reduce((a, b) => a + b, 0)
-      : parseFloat(valor.replace(",", "."));
+    const valorNum = itensTemp.length > 0 ? itensTemp.reduce((a, b) => a + b, 0) : valor;
 
     if (isNaN(valorNum) || valorNum <= 0) {
       setMensagem("Informe um valor válido.");
@@ -510,7 +508,7 @@ export default function MovimentacoesPage() {
 
             <div>
               <label className="block text-xs font-semibold mb-1 text-[var(--color-text-muted)]">Valor Total (R$)</label>
-              <input value={valor} onChange={e => setValor(e.target.value)} placeholder="0,00" required className="w-full px-3 py-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm" />
+              <CurrencyInput value={valor} onChange={setValor} required className="w-full px-3 py-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm" />
             </div>
 
             {/* Somatória */}
