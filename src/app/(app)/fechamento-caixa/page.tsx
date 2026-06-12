@@ -87,6 +87,8 @@ export default function FechamentoCaixaPage() {
   // Colunas do resumo mensal
   const [resumoCols, setResumoCols] = useState<string[]>(() => ls("fechamento_resumo_colunas", RESUMO_PADRAO));
 
+  const [isMobile, setIsMobile] = useState(false);
+
   const supabase = createClient();
 
   useEffect(() => {
@@ -118,6 +120,13 @@ export default function FechamentoCaixaPage() {
   }
 
   useEffect(() => { carregarDados(); setShowDetail(false); }, [mes, ano]);
+
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 768);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
 
   function mesAnterior() { mes === 1 ? (setMes(12), setAno(ano - 1)) : setMes(mes - 1); }
   function mesProximo() { mes === 12 ? (setMes(1), setAno(ano + 1)) : setMes(mes + 1); }
@@ -156,7 +165,7 @@ export default function FechamentoCaixaPage() {
     }
     setDetailData(data);
     setShowDetail(true);
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    if (!isMobile) window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   function closeDetail() { setShowDetail(false); setDetailData(null); setDetailRecord(null); }
@@ -301,7 +310,11 @@ export default function FechamentoCaixaPage() {
 
   return (
     <div className="space-y-6">
-      <style>{`@keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}`}</style>
+      <style>{`
+        @keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+        @keyframes slideUpSheet{from{transform:translateY(100%)}to{transform:translateY(0)}}
+        .sheet-scroll{-webkit-overflow-scrolling:touch;}
+      `}</style>
 
       {/* Cabeçalho */}
       <div className="flex items-center justify-between flex-wrap gap-4">
@@ -339,137 +352,193 @@ export default function FechamentoCaixaPage() {
       {/* Formulário do dia */}
       {showDetail && detailData && (() => {
         const dow = new Date(detailData + "T12:00:00").getDay();
-        return (
-          <div style={{ animation: "fadeUp 0.25s ease", background: "var(--color-surface)", border: "2px solid #3b82f6", borderRadius: 20, overflow: "hidden" }}>
-            {/* Header */}
-            <div style={{ padding: "16px 20px", background: "#eff6ff", borderBottom: "1px solid #bfdbfe", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
-              <div>
-                <h2 style={{ fontWeight: 700, fontSize: 16, margin: 0, textTransform: "capitalize" }}>
-                  {diasSemanaLong[dow]}, {new Date(detailData + "T12:00:00").toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric" })}
-                </h2>
-                {detailRecord?.fechado
-                  ? <span style={{ fontSize: 11, color: "#16a34a", fontWeight: 600, marginTop: 4, display: "block" }}>✅ Fechado em definitivo</span>
-                  : detailRecord?.rascunho
-                  ? <span style={{ fontSize: 11, color: "#d97706", fontWeight: 600, marginTop: 4, display: "block" }}>📝 Rascunho salvo — aguardando revisão</span>
-                  : null}
-              </div>
-              <button onClick={closeDetail} style={{ width: 32, height: 32, borderRadius: 8, border: "none", background: "white", cursor: "pointer", fontSize: 14, color: "#6b7280" }}>✕</button>
+
+        const headerInfo = (
+          <div>
+            <h2 style={{ fontWeight: 700, fontSize: 16, margin: 0, textTransform: "capitalize" }}>
+              {diasSemanaLong[dow]}, {new Date(detailData + "T12:00:00").toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric" })}
+            </h2>
+            {detailRecord?.fechado
+              ? <span style={{ fontSize: 11, color: "#16a34a", fontWeight: 600, marginTop: 3, display: "block" }}>✅ Fechado em definitivo</span>
+              : detailRecord?.rascunho
+              ? <span style={{ fontSize: 11, color: "#d97706", fontWeight: 600, marginTop: 3, display: "block" }}>📝 Rascunho — aguardando revisão</span>
+              : null}
+          </div>
+        );
+
+        const closeBtnStyle: React.CSSProperties = {
+          width: 32, height: 32, borderRadius: 8, border: "none",
+          background: "var(--hover-bg)", cursor: "pointer", fontSize: 14,
+          color: "var(--text-muted)", flexShrink: 0,
+        };
+
+        const formBody = (
+          <>
+            {/* Total Vendas */}
+            <div style={{ background: "#f0f9ff", border: "2px solid #0ea5e9", borderRadius: 12, padding: 14, marginBottom: 12 }}>
+              <label style={{ fontSize: 11, fontWeight: 700, color: "#0369a1", textTransform: "uppercase" }}>💰 VALOR TOTAL DE VENDAS DO DIA</label>
+              <CurrencyInput value={form.valor_total_vendas} onChange={v => setForm(p => ({ ...p, valor_total_vendas: v }))}
+                style={{ width: "100%", marginTop: 6, padding: "10px 12px", borderRadius: 8, border: "1px solid #7dd3fc", background: "white", fontSize: 18, fontWeight: 700, color: "#0369a1", outline: "none" }} />
             </div>
 
-            <div style={{ padding: 20 }}>
-              {/* Total Vendas */}
-              <div style={{ background: "#f0f9ff", border: "2px solid #0ea5e9", borderRadius: 12, padding: 14, marginBottom: 12 }}>
-                <label style={{ fontSize: 11, fontWeight: 700, color: "#0369a1", textTransform: "uppercase" }}>💰 VALOR TOTAL DE VENDAS DO DIA</label>
-                <CurrencyInput value={form.valor_total_vendas} onChange={v => setForm(p => ({ ...p, valor_total_vendas: v }))}
-                  style={{ width: "100%", marginTop: 6, padding: "10px 12px", borderRadius: 8, border: "1px solid #7dd3fc", background: "white", fontSize: 18, fontWeight: 700, color: "#0369a1", outline: "none" }} />
+            {/* Seletor de campos */}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 12, alignItems: "center" }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", letterSpacing: ".05em" }}>Campos:</span>
+              {CAMPOS_CONFIG.map(c => {
+                const ativo = camposAtivos.includes(c.field as CampoKey);
+                return (
+                  <button key={c.field} type="button" onClick={() => toggleCampo(c.field as CampoKey)}
+                    style={{ padding: "3px 9px", borderRadius: 20, fontSize: 11, fontWeight: 600, cursor: "pointer", border: `1px solid ${ativo ? "#16a34a" : "#e5e7eb"}`, background: ativo ? "#dcfce7" : "#f9fafb", color: ativo ? "#15803d" : "#9ca3af", transition: "all 0.15s" }}>
+                    {c.emoji} {c.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Grid de pagamentos */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 10 }}>
+              {camposVisiveis.map(item => (
+                <div key={item.field} style={{ background: item.bg, border: `1px solid ${item.border}`, borderRadius: 12, padding: 12 }}>
+                  <label style={{ fontSize: 10, fontWeight: 700, color: item.color, textTransform: "uppercase" }}>{item.emoji} {item.label}</label>
+                  <CurrencyInput value={form[item.field as keyof CaixaForm]} onChange={v => setForm(p => ({ ...p, [item.field]: v }))}
+                    style={inputBase(item.border, item.color)} />
+                </div>
+              ))}
+
+              {/* Dinheiro (auto) */}
+              <div style={{ background: "#f0fdf4", border: "2px solid #16a34a", borderRadius: 12, padding: 12 }}>
+                <label style={{ fontSize: 10, fontWeight: 700, color: "#16a34a", textTransform: "uppercase" }}>💵 Dinheiro (auto)</label>
+                <div style={{ marginTop: 6, padding: "8px 10px", borderRadius: 8, background: "white", border: "1px solid #bbf7d0", fontSize: 16, fontWeight: 700, color: "#16a34a" }}>
+                  {fmt(dinheiro)}
+                </div>
               </div>
 
-              {/* Seletor de campos */}
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 12, alignItems: "center" }}>
-                <span style={{ fontSize: 10, fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", letterSpacing: ".05em" }}>Campos:</span>
-                {CAMPOS_CONFIG.map(c => {
-                  const ativo = camposAtivos.includes(c.field as CampoKey);
-                  return (
-                    <button key={c.field} type="button" onClick={() => toggleCampo(c.field as CampoKey)}
-                      style={{ padding: "3px 9px", borderRadius: 20, fontSize: 11, fontWeight: 600, cursor: "pointer", border: `1px solid ${ativo ? "#16a34a" : "#e5e7eb"}`, background: ativo ? "#dcfce7" : "#f9fafb", color: ativo ? "#15803d" : "#9ca3af", transition: "all 0.15s" }}>
-                      {c.emoji} {c.label}
+              {/* Sobras e Faltas */}
+              {mostrarSobras && (
+                <div style={{ background: sfSigno > 0 ? "#f0fdf4" : "#fef2f2", border: `2px solid ${sfSigno > 0 ? "#86efac" : "#fca5a5"}`, borderRadius: 12, padding: 12 }}>
+                  <label style={{ fontSize: 10, fontWeight: 700, color: sfSigno > 0 ? "#16a34a" : "#dc2626", textTransform: "uppercase" }}>⚖️ Sobras / Faltas</label>
+                  <p style={{ margin: "2px 0 6px", fontSize: 9, color: "#9ca3af" }}>Apenas registro — não altera o total</p>
+                  <div style={{ display: "flex", gap: 5, marginBottom: 8 }}>
+                    <button type="button" onClick={() => setSfSigno(1)}
+                      style={{ flex: 1, padding: "7px 4px", borderRadius: 8, border: `2px solid ${sfSigno > 0 ? "#16a34a" : "#e5e7eb"}`, background: sfSigno > 0 ? "#16a34a" : "white", color: sfSigno > 0 ? "white" : "#9ca3af", fontWeight: 700, fontSize: 12, cursor: "pointer", transition: "all 0.15s" }}>
+                      ▲ Sobras
                     </button>
-                  );
-                })}
-              </div>
-
-              {/* Grid de pagamentos */}
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px, 1fr))", gap: 10 }}>
-                {camposVisiveis.map(item => (
-                  <div key={item.field} style={{ background: item.bg, border: `1px solid ${item.border}`, borderRadius: 12, padding: 12 }}>
-                    <label style={{ fontSize: 10, fontWeight: 700, color: item.color, textTransform: "uppercase" }}>{item.emoji} {item.label}</label>
-                    <CurrencyInput value={form[item.field as keyof CaixaForm]} onChange={v => setForm(p => ({ ...p, [item.field]: v }))}
-                      style={inputBase(item.border, item.color)} />
+                    <button type="button" onClick={() => setSfSigno(-1)}
+                      style={{ flex: 1, padding: "7px 4px", borderRadius: 8, border: `2px solid ${sfSigno < 0 ? "#dc2626" : "#e5e7eb"}`, background: sfSigno < 0 ? "#dc2626" : "white", color: sfSigno < 0 ? "white" : "#9ca3af", fontWeight: 700, fontSize: 12, cursor: "pointer", transition: "all 0.15s" }}>
+                      ▼ Faltas
+                    </button>
                   </div>
-                ))}
-
-                {/* Dinheiro (auto) */}
-                <div style={{ background: "#f0fdf4", border: "2px solid #16a34a", borderRadius: 12, padding: 12 }}>
-                  <label style={{ fontSize: 10, fontWeight: 700, color: "#16a34a", textTransform: "uppercase" }}>💵 Dinheiro (auto)</label>
-                  <div style={{ marginTop: 6, padding: "8px 10px", borderRadius: 8, background: "white", border: "1px solid #bbf7d0", fontSize: 16, fontWeight: 700, color: "#16a34a" }}>
-                    {fmt(dinheiro)}
-                  </div>
-                </div>
-
-                {/* Sobras e Faltas */}
-                {mostrarSobras && (
-                  <div style={{ background: sfSigno > 0 ? "#f0fdf4" : "#fef2f2", border: `2px solid ${sfSigno > 0 ? "#86efac" : "#fca5a5"}`, borderRadius: 12, padding: 12 }}>
-                    <label style={{ fontSize: 10, fontWeight: 700, color: sfSigno > 0 ? "#16a34a" : "#dc2626", textTransform: "uppercase" }}>⚖️ Sobras / Faltas</label>
-                    <p style={{ margin: "2px 0 6px", fontSize: 9, color: "#9ca3af" }}>Apenas registro — não altera o total</p>
-                    {/* Seletor de modo */}
-                    <div style={{ display: "flex", gap: 5, marginBottom: 8 }}>
-                      <button type="button" onClick={() => setSfSigno(1)}
-                        style={{ flex: 1, padding: "7px 4px", borderRadius: 8, border: `2px solid ${sfSigno > 0 ? "#16a34a" : "#e5e7eb"}`, background: sfSigno > 0 ? "#16a34a" : "white", color: sfSigno > 0 ? "white" : "#9ca3af", fontWeight: 700, fontSize: 12, cursor: "pointer", transition: "all 0.15s" }}>
-                        ▲ Sobras
-                      </button>
-                      <button type="button" onClick={() => setSfSigno(-1)}
-                        style={{ flex: 1, padding: "7px 4px", borderRadius: 8, border: `2px solid ${sfSigno < 0 ? "#dc2626" : "#e5e7eb"}`, background: sfSigno < 0 ? "#dc2626" : "white", color: sfSigno < 0 ? "white" : "#9ca3af", fontWeight: 700, fontSize: 12, cursor: "pointer", transition: "all 0.15s" }}>
-                        ▼ Faltas
-                      </button>
-                    </div>
-                    <CurrencyInput value={sfAbs} onChange={v => setSfAbs(v)}
-                      style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: `1px solid ${sfSigno > 0 ? "#bbf7d0" : "#fecaca"}`, background: "white", fontSize: 14, fontWeight: 700, color: sfSigno > 0 ? "#16a34a" : "#dc2626", outline: "none" }} />
-                    {sfAbs > 0 && (
-                      <p style={{ margin: "5px 0 0", fontSize: 11, fontWeight: 700, color: sfSigno > 0 ? "#16a34a" : "#dc2626", textAlign: "center" }}>
-                        {sfSigno > 0 ? "Sobras: +" : "Faltas: -"}{fmt(sfAbs)}
-                      </p>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* Total */}
-              <div style={{ marginTop: 12, background: dinheiro >= 0 ? "#ecfdf5" : "#fef2f2", border: `2px solid ${dinheiro >= 0 ? "#16a34a" : "#dc2626"}`, borderRadius: 12, padding: 16, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
-                <div>
-                  <p style={{ fontSize: 11, fontWeight: 700, color: "#16a34a", textTransform: "uppercase", margin: 0 }}>📊 TOTAL DO DIA</p>
-                  <p style={{ fontSize: 9, color: "#6b7280", margin: "2px 0 0" }}>Valor em dinheiro do dia</p>
-                </div>
-                <div style={{ textAlign: "right" }}>
-                  <span style={{ fontSize: 24, fontWeight: 800, color: dinheiro >= 0 ? "#16a34a" : "#dc2626", display: "block" }}>{fmt(dinheiro)}</span>
-                  {mostrarSobras && sfAbs > 0 && (
-                    <span style={{ fontSize: 10, color: sfSigno > 0 ? "#16a34a" : "#dc2626", fontWeight: 600 }}>
-                      {sfSigno > 0 ? "Sobras: +" : "Faltas: -"}{fmt(sfAbs)} (registro)
-                    </span>
+                  <CurrencyInput value={sfAbs} onChange={v => setSfAbs(v)}
+                    style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: `1px solid ${sfSigno > 0 ? "#bbf7d0" : "#fecaca"}`, background: "white", fontSize: 14, fontWeight: 700, color: sfSigno > 0 ? "#16a34a" : "#dc2626", outline: "none" }} />
+                  {sfAbs > 0 && (
+                    <p style={{ margin: "5px 0 0", fontSize: 11, fontWeight: 700, color: sfSigno > 0 ? "#16a34a" : "#dc2626", textAlign: "center" }}>
+                      {sfSigno > 0 ? "Sobras: +" : "Faltas: -"}{fmt(sfAbs)}
+                    </p>
                   )}
                 </div>
+              )}
+            </div>
+
+            {/* Total */}
+            <div style={{ marginTop: 12, background: dinheiro >= 0 ? "#ecfdf5" : "#fef2f2", border: `2px solid ${dinheiro >= 0 ? "#16a34a" : "#dc2626"}`, borderRadius: 12, padding: 16, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+              <div>
+                <p style={{ fontSize: 11, fontWeight: 700, color: "#16a34a", textTransform: "uppercase", margin: 0 }}>📊 TOTAL DO DIA</p>
+                <p style={{ fontSize: 9, color: "#6b7280", margin: "2px 0 0" }}>Valor em dinheiro do dia</p>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <span style={{ fontSize: 24, fontWeight: 800, color: dinheiro >= 0 ? "#16a34a" : "#dc2626", display: "block" }}>{fmt(dinheiro)}</span>
+                {mostrarSobras && sfAbs > 0 && (
+                  <span style={{ fontSize: 10, color: sfSigno > 0 ? "#16a34a" : "#dc2626", fontWeight: 600 }}>
+                    {sfSigno > 0 ? "Sobras: +" : "Faltas: -"}{fmt(sfAbs)} (registro)
+                  </span>
+                )}
+              </div>
+            </div>
+          </>
+        );
+
+        const actionButtons = (
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            {!detailRecord?.fechado && (
+              <button onClick={salvarRascunho} disabled={loading}
+                style={{ flex: 1, minWidth: 140, padding: "13px 20px", borderRadius: 12, border: "none", background: "linear-gradient(135deg,#d97706,#f59e0b)", color: "white", fontWeight: 700, fontSize: 14, cursor: "pointer", opacity: loading ? 0.5 : 1 }}>
+                {loading ? "Salvando..." : "📝 Salvar Rascunho"}
+              </button>
+            )}
+            {isAdmin && !detailRecord?.fechado && (
+              <button onClick={fecharDia} disabled={loading}
+                style={{ padding: "13px 20px", borderRadius: 12, border: "none", background: "#16a34a", color: "white", fontWeight: 700, fontSize: 14, cursor: "pointer" }}>
+                ✅ Fechar
+              </button>
+            )}
+            {detailRecord?.fechado && (
+              <button onClick={reabrirDia}
+                style={{ flex: 1, padding: "13px 20px", borderRadius: 12, border: "1px solid var(--border)", background: "var(--hover-bg)", color: "var(--text-muted)", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>
+                ↩️ Reabrir {!isAdmin && "(Admin)"}
+              </button>
+            )}
+            {detailRecord && isAdmin && (
+              <button onClick={excluirDia}
+                style={{ padding: "13px 18px", borderRadius: 12, border: "1px solid #fecaca", background: "#fef2f2", color: "#dc2626", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>
+                🗑️
+              </button>
+            )}
+          </div>
+        );
+
+        /* ── Mobile: bottom sheet ── */
+        if (isMobile) return (
+          <>
+            <div
+              onClick={closeDetail}
+              style={{ position: "fixed", inset: 0, background: "var(--overlay)", zIndex: 100, backdropFilter: "blur(3px)" }}
+            />
+            <div style={{
+              position: "fixed", bottom: 0, left: 0, right: 0, maxHeight: "92dvh",
+              background: "var(--surface)", borderRadius: "22px 22px 0 0",
+              zIndex: 101, display: "flex", flexDirection: "column",
+              animation: "slideUpSheet 0.32s cubic-bezier(0.32,0.72,0,1)",
+              boxShadow: "0 -8px 40px rgba(0,0,0,0.18)",
+            }}>
+              {/* Drag handle */}
+              <div style={{ padding: "12px 0 4px", display: "flex", justifyContent: "center", flexShrink: 0 }}>
+                <div style={{ width: 38, height: 4, borderRadius: 2, background: "var(--border-strong)" }} />
               </div>
 
-              {/* Botões */}
-              <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
-                {/* Salvar Rascunho — disponível para todos enquanto não fechado */}
-                {!detailRecord?.fechado && (
-                  <button onClick={salvarRascunho} disabled={loading}
-                    style={{ flex: 1, minWidth: 150, padding: "12px 20px", borderRadius: 12, border: "none", background: "linear-gradient(135deg,#d97706,#f59e0b)", color: "white", fontWeight: 700, fontSize: 13, cursor: "pointer", opacity: loading ? 0.5 : 1 }}>
-                    {loading ? "Salvando..." : "📝 Salvar Rascunho"}
-                  </button>
-                )}
-                {/* Fechar em Definitivo — apenas admin */}
-                {isAdmin && !detailRecord?.fechado && (
-                  <button onClick={fecharDia} disabled={loading}
-                    style={{ padding: "12px 20px", borderRadius: 12, border: "none", background: "#16a34a", color: "white", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>
-                    ✅ Fechar em Definitivo
-                  </button>
-                )}
-                {/* Reabrir — apenas admin, quando fechado */}
-                {detailRecord?.fechado && (
-                  <button onClick={reabrirDia}
-                    style={{ flex: 1, padding: "12px 20px", borderRadius: 12, border: "1px solid #d1d5db", background: "white", color: "#6b7280", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>
-                    ↩️ Reabrir {!isAdmin && "(Admin)"}
-                  </button>
-                )}
-                {/* Excluir — apenas admin */}
-                {detailRecord && isAdmin && (
-                  <button onClick={excluirDia}
-                    style={{ padding: "12px 20px", borderRadius: 12, border: "1px solid #fecaca", background: "#fef2f2", color: "#dc2626", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>
-                    🗑️
-                  </button>
-                )}
+              {/* Sticky header */}
+              <div style={{ padding: "8px 20px 14px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexShrink: 0 }}>
+                {headerInfo}
+                <button onClick={closeDetail} style={closeBtnStyle}>✕</button>
               </div>
+
+              {/* Scrollable form */}
+              <div className="sheet-scroll" style={{ overflowY: "auto", flex: 1, padding: "16px 16px 8px" }}>
+                {formBody}
+              </div>
+
+              {/* Sticky footer: action buttons */}
+              <div style={{
+                padding: "12px 16px",
+                paddingBottom: "max(14px, env(safe-area-inset-bottom, 14px))",
+                borderTop: "1px solid var(--border)", flexShrink: 0,
+                background: "var(--surface)",
+              }}>
+                {actionButtons}
+              </div>
+            </div>
+          </>
+        );
+
+        /* ── Desktop: inline ── */
+        return (
+          <div style={{ animation: "fadeUp 0.25s ease", background: "var(--color-surface)", border: "2px solid #3b82f6", borderRadius: 20, overflow: "hidden" }}>
+            <div style={{ padding: "16px 20px", background: "#eff6ff", borderBottom: "1px solid #bfdbfe", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+              {headerInfo}
+              <button onClick={closeDetail} style={closeBtnStyle}>✕</button>
+            </div>
+            <div style={{ padding: 20 }}>
+              {formBody}
+              <div style={{ marginTop: 16 }}>{actionButtons}</div>
             </div>
           </div>
         );
