@@ -106,13 +106,15 @@ export default function FechamentoCaixaPage() {
     return e2?.length ? e2[0].id : null;
   }
 
-  async function carregarDados() {
+  async function carregarDados(): Promise<CaixaDia[]> {
     setLoading(true);
     const inicio = `${ano}-${String(mes).padStart(2, "0")}-01`;
     const fim = `${ano}-${String(mes).padStart(2, "0")}-${String(new Date(ano, mes, 0).getDate()).padStart(2, "0")}`;
     const { data } = await supabase.from("fechamento_caixa").select("*").gte("data", inicio).lte("data", fim).order("data");
-    setCaixas((data ?? []) as CaixaDia[]);
+    const fresh = (data ?? []) as CaixaDia[];
+    setCaixas(fresh);
     setLoading(false);
+    return fresh;
   }
 
   useEffect(() => { carregarDados(); setShowDetail(false); }, [mes, ano]);
@@ -198,8 +200,8 @@ export default function FechamentoCaixaPage() {
       await registrarLog({ acao: "criou", tabela: "fechamento_caixa" });
     }
     setMensagem("📝 Rascunho salvo! Aguardando revisão.");
-    await carregarDados();
-    const atualizado = getRecord(detailData);
+    const fresh = await carregarDados();
+    const atualizado = fresh.find(c => c.data === detailData);
     if (atualizado) setFormFromRecord(atualizado);
     setLoading(false); setTimeout(() => setMensagem(""), 4000);
   }
@@ -243,11 +245,14 @@ export default function FechamentoCaixaPage() {
     await registrarLog({ acao: "fechou", tabela: "fechamento_caixa",
       detalhes: `Dia ${detailData} - Bruto: ${fmt(form.valor_total_vendas)} - Total: ${fmt(dinheiro)}` });
 
-    setMensagem(dinheiro > 0 ? `Dia fechado! ${fmt(dinheiro)} lançado em Movimentações.` : "Dia fechado!");
-    await carregarDados();
-    const atualizado = getRecord(detailData);
+    const msg = dinheiro > 0 ? `✅ Dia fechado! ${fmt(dinheiro)} lançado em Movimentações.` : "✅ Dia fechado em definitivo!";
+    setMensagem(msg);
+    const fresh = await carregarDados();
+    const atualizado = fresh.find(c => c.data === detailData);
     if (atualizado) setFormFromRecord(atualizado);
-    setLoading(false); setTimeout(() => setMensagem(""), 5000);
+    setLoading(false);
+    // Fecha o formulário automaticamente após confirmar o sucesso
+    setTimeout(() => { closeDetail(); setMensagem(""); }, 2000);
   }
 
   async function reabrirDia() {
@@ -257,11 +262,11 @@ export default function FechamentoCaixaPage() {
     if (catId) await supabase.from("movimentacoes").delete().eq("data", detailRecord.data).eq("categoria_id", catId);
     await supabase.from("fechamento_caixa").update({ fechado: false, rascunho: true, fechado_por: null, fechado_em: null }).eq("id", detailRecord.id);
     await registrarLog({ acao: "reabriu", tabela: "fechamento_caixa", registroId: detailRecord.id });
-    setMensagem("Dia reaberto.");
-    await carregarDados();
-    const atualizado = getRecord(detailRecord.data);
+    setMensagem("↩️ Dia reaberto — edite e salve rascunho ou feche novamente.");
+    const fresh = await carregarDados();
+    const atualizado = fresh.find(c => c.data === detailRecord.data);
     if (atualizado) setFormFromRecord(atualizado);
-    setLoading(false); setTimeout(() => setMensagem(""), 3000);
+    setLoading(false); setTimeout(() => setMensagem(""), 4000);
   }
 
   async function excluirDia() {
