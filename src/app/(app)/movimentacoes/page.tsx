@@ -42,6 +42,7 @@ export default function MovimentacoesPage() {
   const [showTemplates, setShowTemplates] = useState(false);
   const [salvandoTemplate, setSalvandoTemplate] = useState(false);
   const [nomeTemplate, setNomeTemplate] = useState("");
+  const [filtroCatNome, setFiltroCatNome] = useState<string | null>(null);
 
   const supabase = createClient();
   const cats = tipo === "entrada" ? catEntrada : catSaida;
@@ -90,7 +91,7 @@ export default function MovimentacoesPage() {
     const inicio = `${ano}-${String(mes + 1).padStart(2, "0")}-01`;
     const ultimoDia = new Date(ano, mes + 1, 0).getDate();
     const fim = `${ano}-${String(mes + 1).padStart(2, "0")}-${String(ultimoDia).padStart(2, "0")}`;
-    const { data: resultado } = await supabase.from("movimentacoes").select("*").gte("data", inicio).lte("data", fim).order("data", { ascending: false });
+    const { data: resultado } = await supabase.from("movimentacoes").select("*").gte("data", inicio).lte("data", fim).order("data", { ascending: true });
     if (!resultado) return;
     setMovs(resultado as Movimentacao[]);
 
@@ -353,7 +354,8 @@ export default function MovimentacoesPage() {
     return "💰";
   }
 
-  const movsFiltrados = movs.filter(m => {
+  // 1º nível: filtro de texto (base para os totais das chips)
+  const movsBusca = movs.filter(m => {
     if (!busca) return true;
     const termo = busca.toLowerCase();
     const nome = getCategoriaNome(m.categoria_id).toLowerCase();
@@ -362,6 +364,26 @@ export default function MovimentacoesPage() {
     const obs = (m.observacao || "").toLowerCase();
     return nome.includes(termo) || valorStr.includes(termo) || dataFmt.includes(termo) || obs.includes(termo) || m.data.includes(termo);
   });
+
+  // 2º nível: filtro por categoria (aplica sobre o resultado da busca)
+  const movsFiltrados = filtroCatNome
+    ? movsBusca.filter(m => getCategoriaNome(m.categoria_id) === filtroCatNome)
+    : movsBusca;
+
+  // Totais dos chips calculados sempre sobre movsBusca (sem filtro de categoria)
+  const entradasBusca = movsBusca.filter(m => m.tipo === "entrada");
+  const saidasBusca = movsBusca.filter(m => m.tipo === "saida");
+
+  const entryCatTotais = (() => {
+    const acc: Record<string, number> = {};
+    entradasBusca.forEach(m => { const n = getCategoriaNome(m.categoria_id); acc[n] = (acc[n] || 0) + m.valor; });
+    return Object.entries(acc).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+  })();
+  const saidaCatTotais = (() => {
+    const acc: Record<string, number> = {};
+    saidasBusca.forEach(m => { const n = getCategoriaNome(m.categoria_id); acc[n] = (acc[n] || 0) + m.valor; });
+    return Object.entries(acc).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+  })();
 
   const entradas = movsFiltrados.filter(m => m.tipo === "entrada");
   const saidas = movsFiltrados.filter(m => m.tipo === "saida");
@@ -455,27 +477,59 @@ export default function MovimentacoesPage() {
         ))}
       </div>
 
-      {/* Totais por categoria */}
-      {entradas.length > 0 && (() => {
-        const fpTotals: Record<string, number> = {};
-        entradas.forEach(m => { const n = getCategoriaNome(m.categoria_id); fpTotals[n] = (fpTotals[n] || 0) + m.valor; });
-        const ativos = Object.entries(fpTotals).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
-        if (ativos.length === 0) return null;
-        return (
-          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-4">
-            <p className="text-sm font-bold mb-3">Entradas por Categoria</p>
-            <div className="flex flex-wrap gap-3">
-              {ativos.map(([nome, val]) => (
-                <div key={nome} className="flex items-center gap-2 px-3 py-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)]">
-                  <span>{getCatIcon(nome)}</span>
-                  <span className="text-xs font-medium">{nome}</span>
-                  <span className="text-xs font-bold text-emerald-600">{fmt(val)}</span>
-                </div>
-              ))}
+      {/* Filtros por categoria */}
+      {(entryCatTotais.length > 0 || saidaCatTotais.length > 0) && (
+        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-4 space-y-4">
+          {filtroCatNome && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 10 }}>
+              <span style={{ fontSize: 12, color: "#1d4ed8", fontWeight: 600 }}>Filtrando: {filtroCatNome}</span>
+              <button onClick={() => setFiltroCatNome(null)} style={{ marginLeft: "auto", fontSize: 11, color: "#6b7280", background: "none", border: "none", cursor: "pointer", fontWeight: 600 }}>✕ Limpar</button>
             </div>
-          </div>
-        );
-      })()}
+          )}
+          {entryCatTotais.length > 0 && (
+            <div>
+              <p className="text-xs font-bold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">Entradas por Categoria</p>
+              <div className="flex flex-wrap gap-2">
+                {entryCatTotais.map(([nome, val]) => {
+                  const ativo = filtroCatNome === nome;
+                  return (
+                    <button key={nome} type="button" onClick={() => setFiltroCatNome(ativo ? null : nome)}
+                      style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", borderRadius: 12, cursor: "pointer", transition: "all 0.15s",
+                        border: `2px solid ${ativo ? "#16a34a" : "#e5e7eb"}`,
+                        background: ativo ? "#dcfce7" : "var(--color-bg)" }}>
+                      <span style={{ fontSize: 13 }}>{getCatIcon(nome)}</span>
+                      <span style={{ fontSize: 12, fontWeight: 500, color: ativo ? "#15803d" : "var(--color-text)" }}>{nome}</span>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: "#16a34a" }}>{fmt(val)}</span>
+                      {ativo && <span style={{ fontSize: 10, color: "#16a34a" }}>✓</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          {saidaCatTotais.length > 0 && (
+            <div>
+              <p className="text-xs font-bold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">Saídas por Categoria</p>
+              <div className="flex flex-wrap gap-2">
+                {saidaCatTotais.map(([nome, val]) => {
+                  const ativo = filtroCatNome === nome;
+                  return (
+                    <button key={nome} type="button" onClick={() => setFiltroCatNome(ativo ? null : nome)}
+                      style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", borderRadius: 12, cursor: "pointer", transition: "all 0.15s",
+                        border: `2px solid ${ativo ? "#dc2626" : "#e5e7eb"}`,
+                        background: ativo ? "#fee2e2" : "var(--color-bg)" }}>
+                      <span style={{ fontSize: 13 }}>{getCatIcon(nome)}</span>
+                      <span style={{ fontSize: 12, fontWeight: 500, color: ativo ? "#b91c1c" : "var(--color-text)" }}>{nome}</span>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: "#dc2626" }}>{fmt(val)}</span>
+                      {ativo && <span style={{ fontSize: 10, color: "#dc2626" }}>✓</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {mensagem && <div className={`p-3 rounded-xl text-sm font-medium text-center ${mensagem.includes("Erro") ? "bg-red-50 text-red-600" : mensagem.includes("⚠️") ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700"}`}>{mensagem}</div>}
 
