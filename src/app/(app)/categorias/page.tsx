@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
+import EmptyState from "@/components/empty-state";
 
 interface Categoria {
   id: string;
@@ -219,9 +220,8 @@ export default function CategoriasPage() {
         </div>
 
         {ativas.length === 0 ? (
-          <div className="p-8 text-center text-[var(--color-text-muted)] text-sm">
-            Nenhuma categoria ativa.
-          </div>
+          <EmptyState variant="categories" title="Nenhuma categoria ainda"
+            description="Crie categorias para organizar suas entradas e saídas." />
         ) : (
           <div className="divide-y divide-[var(--color-border)]">
             {ativas.map((cat) => (

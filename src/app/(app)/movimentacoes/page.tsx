@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/client";
 import { CurrencyInput } from "@/components/currency-input";
 import { registrarLog } from "@/lib/audit";
 import ComprovantePicker from "@/components/comprovante-picker";
+import EmptyState from "@/components/empty-state";
 
 interface Movimentacao { id: string; tipo: string; data: string; valor: number; categoria_id: string; observacao: string; revisar: boolean; comprovante_url?: string; }
 interface Cat { id: string; nome: string; }
@@ -658,8 +659,13 @@ export default function MovimentacoesPage() {
 
       {/* Lista */}
       {movsFiltrados.length === 0 ? (
-        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-12 text-center text-[var(--color-text-muted)] text-sm">
-          {busca ? `Nenhum resultado para "${busca}"` : `Nenhuma movimentação em ${mesesNomes[mes]}/${ano}.`}
+        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
+          <EmptyState
+            variant={busca || filtroCatNome ? "search" : "movements"}
+            title={busca ? `Sem resultados para "${busca}"` : filtroCatNome ? `Nenhuma movimentação em "${filtroCatNome}"` : `Nenhuma movimentação em ${mesesNomes[mes]}/${ano}`}
+            description={busca || filtroCatNome ? "Tente outros termos ou remova o filtro." : "Registre sua primeira movimentação deste mês."}
+            action={!busca && !filtroCatNome ? { label: "+ Nova movimentação", onClick: () => {} } : undefined}
+          />
         </div>
       ) : (
         <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">

@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
+import EmptyState from "@/components/empty-state";
 
 interface Maquina {
   id: string;
@@ -173,8 +174,9 @@ export default function MaquinasPage() {
 
       {/* Lista */}
       {maquinas.length === 0 ? (
-        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-12 text-center text-[var(--color-text-muted)] text-sm">
-          Nenhuma máquina cadastrada. Clique em "+ Nova Máquina".
+        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
+          <EmptyState variant="machines" title="Nenhuma máquina cadastrada"
+            description='Clique em "+ Nova Máquina" para adicionar sua maquininha ou conta bancária.' />
         </div>
       ) : (
         <div className="space-y-3">

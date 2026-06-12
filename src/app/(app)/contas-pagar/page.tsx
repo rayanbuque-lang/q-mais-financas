@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/client";
 import { registrarLog, verificarMesFechado, verificarAdmin } from "@/lib/audit";
 import ComprovantePicker from "@/components/comprovante-picker";
 import { CurrencyInput } from "@/components/currency-input";
+import EmptyState from "@/components/empty-state";
 
 interface ContaPagar {
   id: string;
@@ -505,7 +506,11 @@ export default function ContasPagarPage() {
 
       {visualizacao === "semanal" && (
         <div className="space-y-4">
-          {semanas.length === 0 ? (<div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-12 text-center text-[var(--color-text-muted)] text-sm">Nenhuma conta em {mesesNomes[mes - 1]}/{ano}.</div>) : (
+          {semanas.length === 0 ? (
+            <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
+              <EmptyState variant="accounts" title={`Sem contas em ${mesesNomes[mes - 1]}/${ano}`} description="Nenhuma conta a pagar registrada neste mês." />
+            </div>
+          ) : (
             semanas.map((semana, i) => (
               <div key={i} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
                 <div className={`p-4 border-b border-[var(--color-border)] flex items-center justify-between ${semana.label.includes("Vencidas") ? "bg-red-50" : "bg-[var(--color-bg)]"}`}>
@@ -521,7 +526,9 @@ export default function ContasPagarPage() {
 
       {visualizacao === "lista" && (
         <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
-          {contasFiltradas.length === 0 ? (<div className="p-12 text-center text-[var(--color-text-muted)] text-sm">Nenhuma conta em {mesesNomes[mes - 1]}/{ano}.</div>) : (
+          {contasFiltradas.length === 0 ? (
+            <EmptyState variant="accounts" title={`Sem contas em ${mesesNomes[mes - 1]}/${ano}`} description="Nenhuma conta a pagar registrada neste mês." compact />
+          ) : (
             <div className="divide-y divide-[var(--color-border)]">{contasFiltradas.map(c => renderConta(c))}</div>
           )}
         </div>

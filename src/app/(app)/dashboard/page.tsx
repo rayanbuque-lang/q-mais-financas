@@ -3,37 +3,301 @@
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import Link from "next/link";
+import EmptyState from "@/components/empty-state";
 
 interface Movimentacao {
-  id: string;
-  tipo: string;
-  data: string;
-  valor: number;
-  categoria_id: string;
-  observacao: string;
-  revisar: boolean;
-  created_at: string;
+  id: string; tipo: string; data: string; valor: number;
+  categoria_id: string; observacao: string; revisar: boolean; created_at: string;
+}
+interface MesGrafico { nome: string; entradas: number; saidas: number; }
+interface ContaPendente { id: string; fornecedor: string; valor: number; data_vencimento: string; }
+
+/* ─── Sparkline ──────────────────────────────────────────────── */
+function Sparkline({ data, color }: { data: number[]; color: string }) {
+  if (data.length < 2) return null;
+  const W = 80, H = 24;
+  const max = Math.max(...data, 0.001);
+  const min = Math.min(...data, 0);
+  const range = max - min || 0.001;
+  const pts = data.map((v, i) => ({
+    x: (i / (data.length - 1)) * W,
+    y: H - 2 - ((v - min) / range) * (H - 6),
+  }));
+  const line = pts.map(p => `${p.x},${p.y}`).join(" ");
+  const fill = `M${pts[0].x},${H} ${pts.map(p => `L${p.x},${p.y}`).join(" ")} L${pts[pts.length - 1].x},${H} Z`;
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: W, height: H, display: "block" }}>
+      <path d={fill} fill={color} fillOpacity={0.15} />
+      <polyline points={line} fill="none" stroke={color} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
 }
 
-interface MesGrafico {
-  nome: string;
-  entradas: number;
-  saidas: number;
+/* ─── Bar+Area Chart (6 months) ──────────────────────────────── */
+function BarAreaChart({ data, fmtBRL }: { data: MesGrafico[]; fmtBRL: (v: number) => string }) {
+  const [hovered, setHovered] = useState<number | null>(null);
+  if (!data.length) return null;
+
+  const VW = 520, VH = 180;
+  const ML = 50, MR = 8, MT = 14, MB = 28;
+  const cW = VW - ML - MR, cH = VH - MT - MB;
+  const maxVal = Math.max(...data.flatMap(g => [g.entradas, g.saidas]), 1);
+  const gW = cW / data.length;
+  const bW = Math.min(gW * 0.28, 22);
+
+  const gx = (i: number) => ML + i * gW + gW / 2;
+  const gy = (v: number) => MT + cH - (v / maxVal) * cH;
+  const gh = (v: number) => (v / maxVal) * cH;
+
+  const ticks = [0, 0.25, 0.5, 0.75, 1];
+  function fmtTick(t: number) {
+    const n = maxVal * t;
+    if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
+    if (n >= 1e3) return `${(n / 1e3).toFixed(n >= 1e4 ? 0 : 1)}k`;
+    return n.toFixed(0);
+  }
+
+  const areaFill = `M${ML},${MT + cH} ${data.map((g, i) => `L${gx(i)},${gy(g.entradas)}`).join(" ")} L${VW - MR},${MT + cH} Z`;
+  const areaLine = data.map((g, i) => `${i === 0 ? "M" : "L"}${gx(i)},${gy(g.entradas)}`).join(" ");
+
+  return (
+    <div style={{ position: "relative" }}>
+      <svg viewBox={`0 0 ${VW} ${VH}`} style={{ width: "100%", overflow: "visible" }}>
+        {/* Grid */}
+        {ticks.map(t => {
+          const y = MT + cH * (1 - t);
+          return (
+            <g key={t}>
+              <line x1={ML} y1={y} x2={VW - MR} y2={y}
+                stroke="var(--border)" strokeWidth={t === 0 ? 1.5 : 0.8}
+                strokeDasharray={t === 0 ? undefined : "3,3"} />
+              <text x={ML - 6} y={y + 4} textAnchor="end" fill="var(--text-muted)" fontSize={9}>
+                {fmtTick(t)}
+              </text>
+            </g>
+          );
+        })}
+
+        {/* Area fill + line */}
+        <path d={areaFill} fill="var(--green)" fillOpacity={0.06} />
+        <path d={areaLine} fill="none" stroke="var(--green)" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" opacity={0.35} />
+
+        {/* Bars */}
+        {data.map((g, i) => {
+          const x = gx(i);
+          const hot = hovered === i;
+          return (
+            <g key={i} onMouseEnter={() => setHovered(i)} onMouseLeave={() => setHovered(null)} style={{ cursor: "default" }}>
+              <rect x={ML + i * gW} y={MT} width={gW} height={cH} fill="transparent" />
+              {g.entradas > 0 && (
+                <rect x={x - bW - 2} y={gy(g.entradas)} width={bW} height={gh(g.entradas)}
+                  rx={3} fill={hot ? "var(--green)" : "var(--green-border)"} style={{ transition: "fill 0.15s" }} />
+              )}
+              {g.saidas > 0 && (
+                <rect x={x + 2} y={gy(g.saidas)} width={bW} height={gh(g.saidas)}
+                  rx={3} fill={hot ? "var(--red)" : "var(--red-border)"} style={{ transition: "fill 0.15s" }} />
+              )}
+              <circle cx={x} cy={gy(g.entradas)} r={hot ? 4 : 2.5}
+                fill="var(--surface)" stroke="var(--green)" strokeWidth={1.5}
+                style={{ transition: "r 0.15s" }} />
+              <text x={x} y={VH - 5} textAnchor="middle"
+                fill={hot ? "var(--text)" : "var(--text-muted)"}
+                fontSize={10} fontWeight={hot ? "600" : "400"}>
+                {g.nome}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+
+      {/* Tooltip */}
+      {hovered !== null && (
+        <div style={{
+          position: "absolute", top: 8,
+          left: `${((hovered + 0.5) / data.length) * 100}%`,
+          transform: `translateX(${hovered >= data.length - 2 ? "-105%" : "-5%"})`,
+          background: "var(--surface-raised)", border: "1px solid var(--border)",
+          borderRadius: "var(--radius)", padding: "10px 14px",
+          boxShadow: "var(--shadow)", minWidth: 152, zIndex: 10, pointerEvents: "none",
+        }}>
+          <p style={{ fontWeight: 700, fontSize: 12, color: "var(--text)", marginBottom: 7, textTransform: "capitalize" }}>
+            {data[hovered].nome}
+          </p>
+          {[
+            { label: "Entrada", val: data[hovered].entradas, color: "var(--green)" },
+            { label: "Saída", val: data[hovered].saidas, color: "var(--red)" },
+          ].map(({ label, val, color }) => (
+            <div key={label} style={{ display: "flex", justifyContent: "space-between", gap: 16, marginBottom: 3 }}>
+              <span style={{ fontSize: 11, color }}>{label}</span>
+              <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text)" }}>{fmtBRL(val)}</span>
+            </div>
+          ))}
+          <div style={{ borderTop: "1px solid var(--border)", paddingTop: 6, marginTop: 4, display: "flex", justifyContent: "space-between" }}>
+            <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Saldo</span>
+            <span style={{ fontSize: 11, fontWeight: 700, color: data[hovered].entradas - data[hovered].saidas >= 0 ? "var(--green)" : "var(--red)" }}>
+              {fmtBRL(data[hovered].entradas - data[hovered].saidas)}
+            </span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
-interface ContaPendente {
-  id: string;
-  fornecedor: string;
-  valor: number;
-  data_vencimento: string;
+/* ─── Waterfall Chart ────────────────────────────────────────── */
+function WaterfallChart({ receita, saidas, fmtBRL }: { receita: number; saidas: number; fmtBRL: (v: number) => string }) {
+  const saldo = receita - saidas;
+  if (receita === 0 && saidas === 0) return (
+    <p style={{ textAlign: "center", fontSize: 12, color: "var(--text-muted)", padding: "24px 0" }}>Nenhum dado neste mês</p>
+  );
+
+  const W = 300, H = 160;
+  const ML = 6, MR = 6, MT = 36, MB = 28;
+  const cW = W - ML - MR, cH = H - MT - MB;
+  const maxVal = Math.max(receita, 1);
+  const bW = cW * 0.18;
+  const sp = cW / 3;
+
+  const x0 = ML + sp * 0.5 - bW / 2;
+  const x1 = ML + sp * 1.5 - bW / 2;
+  const x2 = ML + sp * 2.5 - bW / 2;
+  const cx = (x: number) => x + bW / 2;
+
+  const baseY = MT + cH;
+  const rH = (receita / maxVal) * cH;
+  const sH = (saidas / maxVal) * cH;
+  const salH = (Math.abs(saldo) / maxVal) * cH;
+
+  const rTopY = baseY - rH;
+  const sTopY = rTopY;
+  const salTopY = saldo >= 0 ? baseY - salH : baseY;
+
+  function fmtK(v: number) {
+    if (v >= 1e6) return `R$${(v / 1e6).toFixed(1)}M`;
+    if (v >= 1e3) return `${(v / 1e3).toFixed(1)}k`;
+    return `R$${v.toFixed(0)}`;
+  }
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%" }}>
+      <line x1={ML} y1={baseY} x2={W - MR} y2={baseY} stroke="var(--border)" strokeWidth={1.5} />
+
+      {/* Receita */}
+      <rect x={x0} y={rTopY} width={bW} height={rH} rx={4} fill="var(--green)" />
+      <line x1={x0 + bW} y1={rTopY} x2={x1} y2={rTopY} stroke="var(--border-strong)" strokeWidth={1.5} strokeDasharray="4,3" />
+
+      {/* Saídas (floating) */}
+      <rect x={x1} y={sTopY} width={bW} height={sH} rx={4} fill="var(--red)" />
+      <line x1={x1 + bW} y1={sTopY + sH} x2={x2} y2={sTopY + sH} stroke="var(--border-strong)" strokeWidth={1.5} strokeDasharray="4,3" />
+
+      {/* Saldo */}
+      <rect x={x2} y={salTopY} width={bW} height={Math.max(salH, 4)} rx={4} fill={saldo >= 0 ? "var(--brand)" : "var(--red-muted)"} />
+
+      {/* Labels */}
+      <text x={cx(x0)} y={rTopY - 7} textAnchor="middle" fill="var(--green-strong)" fontSize={9} fontWeight="700">{fmtK(receita)}</text>
+      <text x={cx(x1)} y={sTopY - 7} textAnchor="middle" fill="var(--red-strong)" fontSize={9} fontWeight="700">-{fmtK(saidas)}</text>
+      <text x={cx(x2)} y={salTopY - 7} textAnchor="middle" fill={saldo >= 0 ? "var(--brand-strong)" : "var(--red-strong)"} fontSize={9} fontWeight="700">
+        {saldo < 0 ? "-" : ""}{fmtK(Math.abs(saldo))}
+      </text>
+
+      <text x={cx(x0)} y={H - 4} textAnchor="middle" fill="var(--text-muted)" fontSize={10}>Receita</text>
+      <text x={cx(x1)} y={H - 4} textAnchor="middle" fill="var(--text-muted)" fontSize={10}>Saídas</text>
+      <text x={cx(x2)} y={H - 4} textAnchor="middle" fill="var(--text-muted)" fontSize={10}>Saldo</text>
+    </svg>
+  );
 }
 
+/* ─── Heatmap Calendar ───────────────────────────────────────── */
+function HeatmapCalendar({ movimentos, fmtBRL }: { movimentos: Movimentacao[]; fmtBRL: (v: number) => string }) {
+  const now = new Date();
+  const year = now.getFullYear(), month = now.getMonth(), today = now.getDate();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const firstDow = new Date(year, month, 1).getDay();
+
+  const byDay = new Map<number, { e: number; s: number }>();
+  movimentos.forEach(m => {
+    const d = parseInt(m.data.split("-")[2]);
+    const prev = byDay.get(d) || { e: 0, s: 0 };
+    byDay.set(d, m.tipo === "entrada"
+      ? { ...prev, e: prev.e + m.valor }
+      : { ...prev, s: prev.s + m.valor });
+  });
+
+  const maxTotal = Math.max(...Array.from(byDay.values()).map(d => d.e + d.s), 1);
+  const offset = firstDow === 0 ? 6 : firstDow - 1;
+  const total = offset + daysInMonth;
+  const days = Array.from({ length: Math.ceil(total / 7) * 7 }, (_, i) => {
+    const d = i - offset + 1;
+    return d >= 1 && d <= daysInMonth ? d : null;
+  });
+
+  const CELL = 26, GAP = 3;
+  const DOW = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
+
+  function getBg(day: number | null): string {
+    if (!day) return "transparent";
+    const d = byDay.get(day);
+    if (!d) return "var(--border-subtle)";
+    const intensity = (d.e + d.s) / maxTotal;
+    const net = d.e - d.s;
+    if (net >= 0) {
+      if (intensity < 0.2) return "var(--green-subtle)";
+      if (intensity < 0.55) return "var(--green-muted)";
+      return "var(--green-border)";
+    }
+    return intensity < 0.4 ? "var(--red-subtle)" : "var(--red-muted)";
+  }
+
+  return (
+    <div>
+      <div style={{ display: "grid", gridTemplateColumns: `repeat(7, ${CELL}px)`, gap: GAP, marginBottom: GAP }}>
+        {DOW.map(d => (
+          <div key={d} style={{ width: CELL, textAlign: "center", fontSize: 9, color: "var(--text-placeholder)", fontWeight: 500 }}>{d}</div>
+        ))}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: `repeat(7, ${CELL}px)`, gap: GAP }}>
+        {days.map((day, i) => {
+          if (!day) return <div key={i} style={{ width: CELL, height: CELL }} />;
+          const d = byDay.get(day);
+          const isToday = day === today;
+          return (
+            <div key={i}
+              title={d ? `Dia ${day}: E ${fmtBRL(d.e)} / S ${fmtBRL(d.s)}` : `Dia ${day}`}
+              style={{
+                width: CELL, height: CELL, borderRadius: 5,
+                background: getBg(day),
+                border: isToday ? "2px solid var(--brand)" : "1px solid var(--border-subtle)",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 9, fontWeight: isToday ? 700 : 500,
+                color: d ? "var(--text)" : "var(--text-placeholder)",
+              }}>
+              {day}
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ display: "flex", gap: 14, marginTop: 10, flexWrap: "wrap" }}>
+        {[
+          { bg: "var(--green-muted)", label: "Saldo +" },
+          { bg: "var(--red-muted)", label: "Saldo –" },
+          { bg: "var(--border-subtle)", label: "Sem mov." },
+        ].map(({ bg, label }) => (
+          <div key={label} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <div style={{ width: 10, height: 10, borderRadius: 2, background: bg }} />
+            <span style={{ fontSize: 10, color: "var(--text-muted)" }}>{label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ─── Main ───────────────────────────────────────────────────── */
 export default function DashboardPage() {
   const [movAtual, setMovAtual] = useState<Movimentacao[]>([]);
   const [movAnterior, setMovAnterior] = useState<Movimentacao[]>([]);
   const [movRecentes, setMovRecentes] = useState<Movimentacao[]>([]);
   const [grafico, setGrafico] = useState<MesGrafico[]>([]);
-  const [mesSelecionadoIdx, setMesSelecionadoIdx] = useState<number | null>(null);
   const [contasPendentes, setContasPendentes] = useState<ContaPendente[]>([]);
   const [loading, setLoading] = useState(true);
   const [recentesNomes, setRecentesNomes] = useState<Record<string, string>>({});
@@ -46,26 +310,32 @@ export default function DashboardPage() {
   const mesAtual = now.getMonth();
   const anoAtual = now.getFullYear();
   const hoje = now.toISOString().split("T")[0];
-
   const saudacao = now.getHours() < 12 ? "Bom dia" : now.getHours() < 18 ? "Boa tarde" : "Boa noite";
   const nomeMes = now.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
 
+  function fmt(v: number) {
+    return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  }
+  function variacao(atual: number, anterior: number) {
+    if (anterior === 0) return null;
+    return ((atual - anterior) / anterior) * 100;
+  }
+
   async function carregarDados() {
     setLoading(true);
-    const inicioAtual = `${anoAtual}-${String(mesAtual + 1).padStart(2, "0")}-01`;
-    const fimAtual = `${anoAtual}-${String(mesAtual + 1).padStart(2, "0")}-${String(new Date(anoAtual, mesAtual + 1, 0).getDate()).padStart(2, "0")}`;
-
-    let mesAnt = mesAtual - 1;
-    let anoAnt = anoAtual;
-    if (mesAnt < 0) { mesAnt = 11; anoAnt = anoAtual - 1; }
-    const inicioAnt = `${anoAnt}-${String(mesAnt + 1).padStart(2, "0")}-01`;
-    const fimAnt = `${anoAnt}-${String(mesAnt + 1).padStart(2, "0")}-${String(new Date(anoAnt, mesAnt + 1, 0).getDate()).padStart(2, "0")}`;
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const inicioAtual = `${anoAtual}-${pad(mesAtual + 1)}-01`;
+    const fimAtual = `${anoAtual}-${pad(mesAtual + 1)}-${pad(new Date(anoAtual, mesAtual + 1, 0).getDate())}`;
+    let mesAnt = mesAtual - 1, anoAnt = anoAtual;
+    if (mesAnt < 0) { mesAnt = 11; anoAnt--; }
+    const inicioAnt = `${anoAnt}-${pad(mesAnt + 1)}-01`;
+    const fimAnt = `${anoAnt}-${pad(mesAnt + 1)}-${pad(new Date(anoAnt, mesAnt + 1, 0).getDate())}`;
 
     const [r1, r2, r3, r4, r5, r6] = await Promise.all([
       supabase.from("movimentacoes").select("*").gte("data", inicioAtual).lte("data", fimAtual),
       supabase.from("movimentacoes").select("*").gte("data", inicioAnt).lte("data", fimAnt),
       supabase.from("movimentacoes").select("*").order("created_at", { ascending: false }).limit(5),
-      supabase.from("contas_pagar").select("*").eq("status", "pendente").order("data_vencimento", { ascending: true }),
+      supabase.from("contas_pagar").select("*").eq("status", "pendente").order("data_vencimento"),
       supabase.from("movimentacoes").select("tipo,valor,data"),
       supabase.from("metas").select("valor_meta").eq("mes", mesAtual + 1).eq("ano", anoAtual).maybeSingle(),
     ]);
@@ -76,19 +346,18 @@ export default function DashboardPage() {
     if (r4.data) setContasPendentes(r4.data);
     if (r6.data) setMetaMensal(r6.data.valor_meta);
 
-    const graficoData: MesGrafico[] = [];
     const todosMovs = r5.data || [];
+    const graficoData: MesGrafico[] = [];
     for (let i = 5; i >= 0; i--) {
-      let gMes = mesAtual - i;
-      let gAno = anoAtual;
+      let gMes = mesAtual - i, gAno = anoAtual;
       if (gMes < 0) { gMes += 12; gAno--; }
-      const gInicio = `${gAno}-${String(gMes + 1).padStart(2, "0")}-01`;
-      const gFim = `${gAno}-${String(gMes + 1).padStart(2, "0")}-${String(new Date(gAno, gMes + 1, 0).getDate()).padStart(2, "0")}`;
-      const gMovs = todosMovs.filter((m) => m.data >= gInicio && m.data <= gFim);
+      const gInicio = `${gAno}-${pad(gMes + 1)}-01`;
+      const gFim = `${gAno}-${pad(gMes + 1)}-${pad(new Date(gAno, gMes + 1, 0).getDate())}`;
+      const gMovs = todosMovs.filter(m => m.data >= gInicio && m.data <= gFim);
       graficoData.push({
         nome: new Date(gAno, gMes).toLocaleDateString("pt-BR", { month: "short" }),
-        entradas: gMovs.filter((m) => m.tipo === "entrada").reduce((a, m) => a + m.valor, 0),
-        saidas: gMovs.filter((m) => m.tipo === "saida").reduce((a, m) => a + m.valor, 0),
+        entradas: gMovs.filter(m => m.tipo === "entrada").reduce((a, m) => a + m.valor, 0),
+        saidas: gMovs.filter(m => m.tipo === "saida").reduce((a, m) => a + m.valor, 0),
       });
     }
     setGrafico(graficoData);
@@ -108,99 +377,109 @@ export default function DashboardPage() {
   useEffect(() => { carregarDados(); }, []);
   useEffect(() => { if (movRecentes.length > 0) carregarNomesRecentes(); }, [movRecentes]);
 
-  function fmt(v: number) {
-    return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-  }
-
-  function variacao(atual: number, anterior: number) {
-    if (anterior === 0) return null;
-    return ((atual - anterior) / anterior) * 100;
-  }
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <p className="text-[var(--color-text-muted)]">Carregando dados...</p>
+  if (loading) return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: 320 }}>
+      <div style={{ textAlign: "center" }}>
+        <div style={{ width: 36, height: 36, border: "3px solid var(--brand-muted)", borderTopColor: "var(--brand)", borderRadius: "50%", animation: "spin 0.8s linear infinite", margin: "0 auto 10px" }} />
+        <p style={{ color: "var(--text-muted)", fontSize: 13 }}>Carregando...</p>
+        <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
       </div>
-    );
-  }
+    </div>
+  );
 
-  const eAtual = movAtual.filter((m) => m.tipo === "entrada").reduce((a, m) => a + m.valor, 0);
-  const sAtual = movAtual.filter((m) => m.tipo === "saida").reduce((a, m) => a + m.valor, 0);
+  const eAtual = movAtual.filter(m => m.tipo === "entrada").reduce((a, m) => a + m.valor, 0);
+  const sAtual = movAtual.filter(m => m.tipo === "saida").reduce((a, m) => a + m.valor, 0);
   const lucro = eAtual - sAtual;
   const margem = eAtual > 0 ? (lucro / eAtual) * 100 : 0;
-
-  const eAnterior = movAnterior.filter((m) => m.tipo === "entrada").reduce((a, m) => a + m.valor, 0);
-  const sAnterior = movAnterior.filter((m) => m.tipo === "saida").reduce((a, m) => a + m.valor, 0);
-
+  const eAnterior = movAnterior.filter(m => m.tipo === "entrada").reduce((a, m) => a + m.valor, 0);
+  const sAnterior = movAnterior.filter(m => m.tipo === "saida").reduce((a, m) => a + m.valor, 0);
   const varReceita = variacao(eAtual, eAnterior);
   const varDespesa = variacao(sAtual, sAnterior);
-  const revisaoCount = movAtual.filter((m) => m.revisar).length;
-  const maxGrafico = Math.max(...grafico.map((g) => Math.max(g.entradas, g.saidas)), 1);
-
-  const contasHoje = contasPendentes.filter((c) => c.data_vencimento === hoje);
+  const revisaoCount = movAtual.filter(m => m.revisar).length;
+  const contasHoje = contasPendentes.filter(c => c.data_vencimento === hoje);
   const totalContasHoje = contasHoje.reduce((a, c) => a + c.valor, 0);
-  const contasVencidas = contasPendentes.filter((c) => c.data_vencimento < hoje);
+  const contasVencidas = contasPendentes.filter(c => c.data_vencimento < hoje);
 
-  let resumoTexto = "";
-  if (movAtual.length === 0) {
-    resumoTexto = "Nenhuma movimentação registrada este mês. Comece cadastrando suas entradas e saídas.";
-  } else if (lucro > 0 && varReceita !== null && varReceita > 0) {
-    resumoTexto = `Receita cresceu ${varReceita.toFixed(1)}%. Lucro de ${fmt(lucro)} com margem de ${margem.toFixed(1)}%.`;
-  } else if (lucro > 0) {
-    resumoTexto = `Lucro de ${fmt(lucro)} com margem de ${margem.toFixed(1)}%.`;
-  } else if (lucro < 0) {
-    resumoTexto = `Atenção: despesas superaram receita em ${fmt(Math.abs(lucro))}.`;
-  } else {
-    resumoTexto = "Receita e despesas empatadas.";
-  }
+  // Sparkline data (6 months)
+  const spEntradas = grafico.map(g => g.entradas);
+  const spSaidas = grafico.map(g => g.saidas);
+  const spLucro = grafico.map(g => g.entradas - g.saidas);
+  const spMargem = grafico.map(g => g.entradas > 0 ? (g.entradas - g.saidas) / g.entradas * 100 : 0);
 
-  let saudeCor = "text-emerald-700";
-  let saudeBg = "bg-emerald-50";
-  let saudeLabel = "Excelente";
-  let saudeIcono = "🟢";
-  if (margem < 0) { saudeCor = "text-red-600"; saudeBg = "bg-red-50"; saudeLabel = "Crítica"; saudeIcono = "🔴"; }
-  else if (margem < 10) { saudeCor = "text-amber-600"; saudeBg = "bg-amber-50"; saudeLabel = "Atenção"; saudeIcono = "🟡"; }
-  else if (margem < 20) { saudeCor = "text-emerald-600"; saudeBg = "bg-emerald-50"; saudeLabel = "Boa"; saudeIcono = "🟢"; }
+  // Health
+  let saude = { cor: "var(--green)", bg: "var(--green-subtle)", bdr: "var(--green-border)", label: "Excelente", icon: "🟢" };
+  if (margem < 0) saude = { cor: "var(--red)", bg: "var(--red-subtle)", bdr: "var(--red-border)", label: "Crítica", icon: "🔴" };
+  else if (margem < 10) saude = { cor: "var(--amber)", bg: "var(--amber-subtle)", bdr: "var(--amber-border)", label: "Atenção", icon: "🟡" };
+  else if (margem < 20) saude = { cor: "var(--green)", bg: "var(--green-subtle)", bdr: "var(--green-border)", label: "Boa", icon: "🟢" };
 
-  const cards = [
-    { label: "Receita", valor: fmt(eAtual), cor: "text-emerald-600", bg: "bg-emerald-50", icon: "📈", mudanca: varReceita, ehDespesa: false },
-    { label: "Despesas", valor: fmt(sAtual), cor: "text-red-500", bg: "bg-red-50", icon: "📉", mudanca: varDespesa, ehDespesa: true },
-    { label: "Lucro", valor: fmt(lucro), cor: lucro >= 0 ? "text-emerald-700" : "text-red-600", bg: lucro >= 0 ? "bg-emerald-50" : "bg-red-50", icon: "💰", mudanca: null, ehDespesa: false },
-    { label: "Margem", valor: `${margem.toFixed(1)}%`, cor: margem >= 0 ? "text-emerald-600" : "text-red-600", bg: margem >= 0 ? "bg-emerald-50" : "bg-red-50", icon: "📊", mudanca: null, ehDespesa: false },
-  ];
+  let resumoTexto = movAtual.length === 0
+    ? "Nenhuma movimentação registrada este mês. Comece cadastrando entradas e saídas."
+    : lucro > 0 && varReceita !== null && varReceita > 0
+      ? `Receita cresceu ${varReceita.toFixed(1)}%. Lucro de ${fmt(lucro)} com margem de ${margem.toFixed(1)}%.`
+      : lucro > 0 ? `Lucro de ${fmt(lucro)} com margem de ${margem.toFixed(1)}%.`
+        : lucro < 0 ? `Atenção: despesas superaram receita em ${fmt(Math.abs(lucro))}.`
+          : "Receita e despesas empatadas.";
+
+  const card = (
+    label: string, valor: string, icon: string,
+    color: string, subtle: string,
+    trend: number | null, ehDespesa: boolean,
+    spData: number[], spColor: string
+  ) => (
+    <Link href={`/movimentacoes?mes=${mesAtual + 1}&ano=${anoAtual}`}
+      style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: "18px 20px", display: "block", textDecoration: "none", transition: "box-shadow 0.2s, border-color 0.2s" }}
+      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.boxShadow = "var(--shadow)"; (e.currentTarget as HTMLElement).style.borderColor = "var(--brand-border)"; }}
+      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.boxShadow = ""; (e.currentTarget as HTMLElement).style.borderColor = "var(--border)"; }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--text-muted)" }}>{label}</span>
+        <div style={{ width: 34, height: 34, borderRadius: 9, background: subtle, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>{icon}</div>
+      </div>
+      <p style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.02em", color, margin: 0 }}>{valor}</p>
+      {trend !== null && (
+        <p style={{ fontSize: 11, marginTop: 2, fontWeight: 500, color: ehDespesa ? (trend > 0 ? "var(--red)" : "var(--green)") : (trend > 0 ? "var(--green)" : "var(--red)") }}>
+          {trend > 0 ? "↑" : "↓"} {Math.abs(trend).toFixed(1)}% vs mês anterior
+        </p>
+      )}
+      <div style={{ marginTop: 12 }}>
+        <Sparkline data={spData} color={spColor} />
+      </div>
+    </Link>
+  );
 
   return (
-    <div className="space-y-6">
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      {/* Header */}
       <div className="animate-fade-up">
-        <h1 className="text-2xl font-bold tracking-tight">{saudacao}!</h1>
-        <p className="text-[var(--color-text-muted)] text-sm mt-1 capitalize">{nomeMes}</p>
+        <h1 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.02em", color: "var(--text)", margin: 0 }}>{saudacao}!</h1>
+        <p style={{ color: "var(--text-muted)", fontSize: 13, marginTop: 3, textTransform: "capitalize" }}>{nomeMes}</p>
       </div>
 
-      <div className={`animate-fade-up delay-1 ${saudeBg} border rounded-2xl p-5 flex items-start gap-3`}>
-        <span className="text-2xl">{saudeIcono}</span>
+      {/* Health banner */}
+      <div className="animate-fade-up delay-1" style={{ background: saude.bg, border: `1px solid ${saude.bdr}`, borderRadius: "var(--radius-lg)", padding: "14px 18px", display: "flex", alignItems: "flex-start", gap: 12 }}>
+        <span style={{ fontSize: 20 }}>{saude.icon}</span>
         <div>
-          <p className={`font-bold text-sm ${saudeCor}`}>Saúde Financeira: {saudeLabel}</p>
-          <p className="text-sm text-[var(--color-text)] mt-1">{resumoTexto}</p>
+          <p style={{ fontWeight: 700, fontSize: 13, color: saude.cor, margin: 0 }}>Saúde Financeira: {saude.label}</p>
+          <p style={{ fontSize: 13, color: "var(--text)", margin: "3px 0 0" }}>{resumoTexto}</p>
         </div>
       </div>
 
+      {/* Alerts */}
       {contasHoje.length > 0 && (
-        <div className="animate-fade-up delay-1 bg-blue-50 border border-blue-200 rounded-2xl p-4">
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-2">
+        <div className="animate-fade-up delay-1" style={{ background: "var(--blue-subtle)", border: "1px solid var(--blue-border)", borderRadius: "var(--radius-lg)", padding: "14px 16px" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span>📅</span>
-              <p className="text-sm font-bold text-blue-800">
-                {contasHoje.length} {contasHoje.length === 1 ? "conta vence hoje" : "contas vencem hoje"} — Total: {fmt(totalContasHoje)}
+              <p style={{ fontSize: 13, fontWeight: 700, color: "var(--blue-strong)", margin: 0 }}>
+                {contasHoje.length} {contasHoje.length === 1 ? "conta vence hoje" : "contas vencem hoje"} — {fmt(totalContasHoje)}
               </p>
             </div>
-            <Link href="/contas-pagar" className="text-sm font-semibold text-blue-700 hover:text-blue-900 transition">Ver todas →</Link>
+            <Link href="/contas-pagar" style={{ fontSize: 12, fontWeight: 600, color: "var(--blue)", textDecoration: "none" }}>Ver todas →</Link>
           </div>
-          <div className="space-y-1">
-            {contasHoje.map((conta) => (
-              <div key={conta.id} className="flex justify-between items-center text-sm bg-white/60 rounded-lg px-3 py-2">
-                <span className="text-blue-900 font-medium">{conta.fornecedor}</span>
-                <span className="font-bold text-blue-700">{fmt(conta.valor)}</span>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            {contasHoje.map(c => (
+              <div key={c.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, background: "rgba(255,255,255,0.5)", borderRadius: 8, padding: "6px 12px" }}>
+                <span style={{ color: "var(--blue-strong)", fontWeight: 500 }}>{c.fornecedor}</span>
+                <span style={{ fontWeight: 700, color: "var(--blue)" }}>{fmt(c.valor)}</span>
               </div>
             ))}
           </div>
@@ -208,252 +487,179 @@ export default function DashboardPage() {
       )}
 
       {contasVencidas.length > 0 && (
-        <div className="animate-fade-up delay-1 bg-red-50 border border-red-200 rounded-2xl p-4 flex items-center gap-3">
-          <span className="text-xl">🚨</span>
+        <div style={{ background: "var(--red-subtle)", border: "1px solid var(--red-border)", borderRadius: "var(--radius-lg)", padding: "12px 16px", display: "flex", alignItems: "center", gap: 12 }}>
+          <span style={{ fontSize: 18 }}>🚨</span>
           <div>
-            <p className="text-sm font-bold text-red-800">{contasVencidas.length} contas vencidas!</p>
-            <p className="text-xs text-red-600">Total: {fmt(contasVencidas.reduce((a, c) => a + c.valor, 0))}</p>
+            <p style={{ fontSize: 13, fontWeight: 700, color: "var(--red)", margin: 0 }}>{contasVencidas.length} contas vencidas!</p>
+            <p style={{ fontSize: 11, color: "var(--red-strong)", margin: 0 }}>Total: {fmt(contasVencidas.reduce((a, c) => a + c.valor, 0))}</p>
           </div>
         </div>
       )}
 
       {revisaoCount > 0 && (
-        <div className="animate-fade-up delay-1 bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-center justify-between">
-          <div className="flex items-center gap-2">
+        <div style={{ background: "var(--amber-subtle)", border: "1px solid var(--amber-border)", borderRadius: "var(--radius-lg)", padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span>⚠️</span>
-            <p className="text-sm font-medium text-amber-800">{revisaoCount} para revisar</p>
+            <p style={{ fontSize: 13, fontWeight: 500, color: "var(--amber)", margin: 0 }}>{revisaoCount} para revisar</p>
           </div>
-          <Link href="/movimentacoes" className="text-sm font-semibold text-amber-700 hover:text-amber-900 transition">Ver →</Link>
+          <Link href="/movimentacoes" style={{ fontSize: 12, fontWeight: 600, color: "var(--amber)", textDecoration: "none" }}>Ver →</Link>
         </div>
       )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {cards.map((card) => (
-          <Link key={card.label} href={`/movimentacoes?mes=${mesAtual + 1}&ano=${anoAtual}`} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-5 hover:shadow-md hover:border-emerald-200 transition-all duration-200 block">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">{card.label}</span>
-              <div className={`${card.bg} w-9 h-9 rounded-xl flex items-center justify-center text-base`}>{card.icon}</div>
-            </div>
-            <p className={`text-2xl font-bold ${card.cor} tracking-tight`}>{card.valor}</p>
-            {card.mudanca !== null && (
-              <p className={`text-xs mt-1 font-medium ${
-                card.ehDespesa
-                  ? card.mudanca > 0 ? "text-red-500" : "text-emerald-600"
-                  : card.mudanca > 0 ? "text-emerald-600" : "text-red-500"
-              }`}>
-                {card.mudanca > 0 ? "↑" : "↓"} {Math.abs(card.mudanca).toFixed(1)}% vs mês anterior
-              </p>
-            )}
-          </Link>
-        ))}
+      {/* KPI Cards */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14 }}>
+        {card("Receita", fmt(eAtual), "📈", "var(--green)", "var(--green-subtle)", varReceita, false, spEntradas, "var(--green)")}
+        {card("Despesas", fmt(sAtual), "📉", "var(--red)", "var(--red-subtle)", varDespesa, true, spSaidas, "var(--red)")}
+        {card("Lucro", fmt(lucro), "💰", lucro >= 0 ? "var(--green)" : "var(--red)", lucro >= 0 ? "var(--green-subtle)" : "var(--red-subtle)", null, false, spLucro, lucro >= 0 ? "var(--green)" : "var(--red)")}
+        {card("Margem", `${margem.toFixed(1)}%`, "📊", margem >= 20 ? "var(--green)" : margem >= 10 ? "var(--amber)" : "var(--red)", margem >= 10 ? "var(--green-subtle)" : "var(--red-subtle)", null, false, spMargem, margem >= 10 ? "var(--green)" : "var(--red)")}
       </div>
 
-      {/* Meta mensal de receita */}
-      <div className="animate-fade-up bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-5">
-        <div className="flex items-center justify-between mb-3">
+      {/* Meta mensal */}
+      <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: "18px 20px" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Meta de Receita</p>
+            <p style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--text-muted)", margin: 0 }}>Meta de Receita</p>
             {metaMensal > 0 ? (
-              <p className="text-sm font-bold mt-0.5">
-                {fmt(eAtual)} <span className="text-[var(--color-text-muted)] font-normal">de {fmt(metaMensal)}</span>
+              <p style={{ fontSize: 13, fontWeight: 700, margin: "3px 0 0", color: "var(--text)" }}>
+                {fmt(eAtual)} <span style={{ color: "var(--text-muted)", fontWeight: 400 }}>de {fmt(metaMensal)}</span>
               </p>
             ) : (
-              <p className="text-sm text-[var(--color-text-muted)] mt-0.5">Nenhuma meta definida</p>
+              <p style={{ fontSize: 13, color: "var(--text-muted)", margin: "3px 0 0" }}>Nenhuma meta definida</p>
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             {metaMensal > 0 && (
-              <span className={`text-lg font-bold ${eAtual >= metaMensal ? "text-emerald-600" : "text-amber-500"}`}>
+              <span style={{ fontSize: 18, fontWeight: 800, color: eAtual >= metaMensal ? "var(--green)" : "var(--amber)" }}>
                 {Math.min(Math.round((eAtual / metaMensal) * 100), 100)}%
               </span>
             )}
             <button
               onClick={() => { setEditandoMeta(true); setInputMeta(metaMensal > 0 ? metaMensal.toFixed(2) : ""); }}
-              className="text-xs px-3 py-1.5 rounded-lg bg-[var(--color-bg)] border border-[var(--color-border)] hover:bg-[var(--color-border)] transition font-medium"
-            >
+              style={{ fontSize: 12, padding: "6px 14px", borderRadius: "var(--radius-sm)", background: "var(--hover-bg)", border: "1px solid var(--border)", cursor: "pointer", color: "var(--text)", fontWeight: 500 }}>
               {metaMensal > 0 ? "Editar" : "Definir meta"}
             </button>
           </div>
         </div>
         {metaMensal > 0 && (
           <>
-            <div className="w-full h-3 bg-gray-100 rounded-full overflow-hidden">
-              <div
-                className={`h-full rounded-full transition-all duration-700 ${eAtual >= metaMensal ? "bg-emerald-500" : "bg-amber-400"}`}
-                style={{ width: `${Math.min((eAtual / metaMensal) * 100, 100)}%` }}
-              />
+            <div style={{ width: "100%", height: 8, background: "var(--hover-bg)", borderRadius: 99, overflow: "hidden" }}>
+              <div style={{ height: "100%", width: `${Math.min((eAtual / metaMensal) * 100, 100)}%`, background: eAtual >= metaMensal ? "var(--green)" : "var(--amber)", borderRadius: 99, transition: "width 0.7s ease" }} />
             </div>
-            <p className="text-xs text-[var(--color-text-muted)] mt-2">
-              {eAtual >= metaMensal ? "Meta atingida!" : `Faltam ${fmt(metaMensal - eAtual)} para atingir a meta`}
+            <p style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 6 }}>
+              {eAtual >= metaMensal ? "✓ Meta atingida!" : `Faltam ${fmt(metaMensal - eAtual)} para a meta`}
             </p>
           </>
         )}
         {editandoMeta && (
-          <div className="mt-4 flex gap-2 items-center">
-            <input
-              type="number"
-              step="0.01"
-              placeholder="Valor da meta (R$)"
-              value={inputMeta}
-              onChange={(e) => setInputMeta(e.target.value)}
-              className="flex-1 px-3 py-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none"
-            />
-            <button
-              onClick={async () => {
-                const v = parseFloat(inputMeta.replace(",", "."));
-                if (isNaN(v) || v <= 0) return;
-                await supabase.from("metas").upsert({ mes: mesAtual + 1, ano: anoAtual, valor_meta: v }, { onConflict: "mes,ano" });
-                setMetaMensal(v);
-                setEditandoMeta(false);
-              }}
-              className="px-4 py-2 bg-emerald-600 text-white rounded-xl text-sm font-semibold hover:bg-emerald-700 transition"
-            >Salvar</button>
-            <button onClick={() => setEditandoMeta(false)} className="px-3 py-2 rounded-xl border border-[var(--color-border)] text-sm hover:bg-[var(--color-bg)] transition">✕</button>
+          <div style={{ marginTop: 14, display: "flex", gap: 8, alignItems: "center" }}>
+            <input type="number" step="0.01" placeholder="Valor da meta (R$)" value={inputMeta}
+              onChange={e => setInputMeta(e.target.value)}
+              style={{ flex: 1, padding: "8px 12px", borderRadius: "var(--radius)", border: "1px solid var(--border)", background: "var(--input-bg)", fontSize: 13, color: "var(--text)" }} />
+            <button onClick={async () => {
+              const v = parseFloat(inputMeta.replace(",", "."));
+              if (isNaN(v) || v <= 0) return;
+              await supabase.from("metas").upsert({ mes: mesAtual + 1, ano: anoAtual, valor_meta: v }, { onConflict: "mes,ano" });
+              setMetaMensal(v); setEditandoMeta(false);
+            }} style={{ padding: "8px 16px", background: "var(--brand)", color: "#fff", border: "none", borderRadius: "var(--radius)", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+              Salvar
+            </button>
+            <button onClick={() => setEditandoMeta(false)}
+              style={{ padding: "8px 12px", border: "1px solid var(--border)", borderRadius: "var(--radius)", fontSize: 13, cursor: "pointer", background: "var(--hover-bg)", color: "var(--text)" }}>✕</button>
           </div>
         )}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-6">
-          <h2 className="font-bold text-sm uppercase tracking-wider text-[var(--color-text-muted)] mb-1">Últimos 6 Meses</h2>
-          <p className="text-[10px] text-[var(--color-text-muted)] mb-4">Clique em um mês para ver os detalhes</p>
-          <div className="flex items-end gap-2 h-52">
-            {grafico.map((g, i) => {
-              const selecionado = mesSelecionadoIdx === i;
-              return (
-                <div
-                  key={i}
-                  className="flex-1 flex flex-col items-center gap-1.5 h-full justify-end cursor-pointer group"
-                  onClick={() => setMesSelecionadoIdx(selecionado ? null : i)}
-                >
-                  <div className="flex gap-1.5 items-end w-full h-full">
-                    <div
-                      className={`flex-1 rounded-t-lg transition-all duration-300 ${selecionado ? "bg-emerald-600" : "bg-emerald-400 group-hover:bg-emerald-500"}`}
-                      style={{ height: `${maxGrafico > 0 ? (g.entradas / maxGrafico) * 100 : 0}%`, minHeight: g.entradas > 0 ? "6px" : "0" }}
-                    />
-                    <div
-                      className={`flex-1 rounded-t-lg transition-all duration-300 ${selecionado ? "bg-red-600" : "bg-red-400 group-hover:bg-red-500"}`}
-                      style={{ height: `${maxGrafico > 0 ? (g.saidas / maxGrafico) * 100 : 0}%`, minHeight: g.saidas > 0 ? "6px" : "0" }}
-                    />
+      {/* Charts row */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+        {/* 6-month bar+area chart */}
+        <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: "20px 20px 14px" }}>
+          <p style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--text-muted)", margin: "0 0 2px" }}>Últimos 6 Meses</p>
+          <p style={{ fontSize: 10, color: "var(--text-placeholder)", margin: "0 0 14px" }}>Passe o mouse sobre os meses</p>
+          {movAtual.length === 0 && grafico.every(g => g.entradas === 0 && g.saidas === 0) ? (
+            <EmptyState variant="movements" title="Sem dados ainda" description="Lance suas primeiras movimentações para ver o histórico." compact />
+          ) : (
+            <>
+              <BarAreaChart data={grafico} fmtBRL={fmt} />
+              <div style={{ display: "flex", justifyContent: "center", gap: 20, marginTop: 10 }}>
+                {[{ color: "var(--green-border)", label: "Entradas" }, { color: "var(--red-border)", label: "Saídas" }].map(({ color, label }) => (
+                  <div key={label} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <div style={{ width: 10, height: 10, borderRadius: 2, background: color }} />
+                    <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{label}</span>
                   </div>
-                  <span className={`text-[10px] font-medium capitalize transition-colors ${selecionado ? "text-[var(--color-text)] font-bold" : "text-[var(--color-text-muted)]"}`}>
-                    {g.nome}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-          <div className="flex justify-center gap-6 mt-4">
-            <div className="flex items-center gap-2"><div className="w-3 h-3 rounded bg-emerald-400" /><span className="text-xs text-[var(--color-text-muted)]">Entradas</span></div>
-            <div className="flex items-center gap-2"><div className="w-3 h-3 rounded bg-red-400" /><span className="text-xs text-[var(--color-text-muted)]">Saídas</span></div>
-          </div>
-
-          {mesSelecionadoIdx !== null && grafico[mesSelecionadoIdx] && (() => {
-            const g = grafico[mesSelecionadoIdx];
-            const saldo = g.entradas - g.saidas;
-            return (
-              <div className="mt-4 p-4 bg-[var(--color-bg)] rounded-xl border border-[var(--color-border)]">
-                <div className="flex items-center justify-between mb-3">
-                  <p className="text-xs font-bold capitalize text-[var(--color-text)]">{g.nome}</p>
-                  <button onClick={() => setMesSelecionadoIdx(null)} className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition">✕</button>
-                </div>
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="text-center p-2 bg-emerald-50 rounded-lg">
-                    <p className="text-[10px] text-emerald-700 font-semibold uppercase">Entradas</p>
-                    <p className="text-sm font-bold text-emerald-600 mt-0.5">{fmt(g.entradas)}</p>
-                  </div>
-                  <div className="text-center p-2 bg-red-50 rounded-lg">
-                    <p className="text-[10px] text-red-700 font-semibold uppercase">Saídas</p>
-                    <p className="text-sm font-bold text-red-500 mt-0.5">{fmt(g.saidas)}</p>
-                  </div>
-                  <div className={`text-center p-2 rounded-lg ${saldo >= 0 ? "bg-emerald-50" : "bg-red-50"}`}>
-                    <p className={`text-[10px] font-semibold uppercase ${saldo >= 0 ? "text-emerald-700" : "text-red-700"}`}>Saldo</p>
-                    <p className={`text-sm font-bold mt-0.5 ${saldo >= 0 ? "text-emerald-700" : "text-red-600"}`}>{fmt(saldo)}</p>
-                  </div>
-                </div>
+                ))}
               </div>
-            );
-          })()}
+            </>
+          )}
         </div>
 
-        <div className="space-y-4">
-          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-6">
-            <h2 className="font-bold text-sm uppercase tracking-wider text-[var(--color-text-muted)] mb-5">Fluxo de Caixa</h2>
-            <div className="space-y-4">
-              <div className="flex justify-between items-center">
-                <span className="text-sm text-[var(--color-text-muted)]">Entradas</span>
-                <span className="font-semibold text-emerald-600">{fmt(eAtual)}</span>
-              </div>
-              <div className="w-full h-2 bg-emerald-100 rounded-full overflow-hidden">
-                <div className="h-full bg-emerald-500 rounded-full" style={{ width: "100%" }} />
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-sm text-[var(--color-text-muted)]">Saídas</span>
-                <span className="font-semibold text-red-500">{fmt(sAtual)}</span>
-              </div>
-              <div className="w-full h-2 bg-red-100 rounded-full overflow-hidden">
-                <div className="h-full bg-red-500 rounded-full" style={{ width: `${eAtual > 0 ? (sAtual / eAtual) * 100 : 0}%` }} />
-              </div>
-              <div className="border-t border-[var(--color-border)] pt-4 flex justify-between items-center">
-                <span className="font-bold">Saldo</span>
-                <span className={`font-bold text-lg ${lucro >= 0 ? "text-emerald-700" : "text-red-600"}`}>{fmt(lucro)}</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-6">
-            <h2 className="font-bold text-sm uppercase tracking-wider text-[var(--color-text-muted)] mb-5">Comparativo</h2>
-            <div className="space-y-3">
+        {/* Right column: waterfall + heatmap */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {/* Waterfall */}
+          <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: "20px" }}>
+            <p style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--text-muted)", margin: "0 0 14px" }}>Fluxo do Mês</p>
+            <WaterfallChart receita={eAtual} saidas={sAtual} fmtBRL={fmt} />
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--border)" }}>
               {[
-                { label: "vs. Mês Anterior (Receita)", valor: varReceita, ehDespesa: false },
-                { label: "vs. Mês Anterior (Despesa)", valor: varDespesa, ehDespesa: true },
-              ].map((item) => (
-                <div key={item.label} className="flex justify-between items-center">
-                  <span className="text-sm text-[var(--color-text-muted)]">{item.label}</span>
-                  {item.valor !== null ? (
-                    <span className={`text-sm font-semibold ${
-                      item.ehDespesa
-                        ? item.valor > 0 ? "text-red-500" : "text-emerald-600"
-                        : item.valor > 0 ? "text-emerald-600" : "text-red-500"
-                    }`}>
-                      {item.valor > 0 ? "↑" : "↓"} {Math.abs(item.valor).toFixed(1)}%
-                    </span>
-                  ) : (
-                    <span className="text-sm text-[var(--color-text-muted)]">—</span>
-                  )}
+                { label: "vs Mês (Receita)", val: varReceita, ehDespesa: false },
+                { label: "vs Mês (Despesa)", val: varDespesa, ehDespesa: true },
+              ].map(({ label, val, ehDespesa }) => (
+                <div key={label}>
+                  <p style={{ fontSize: 10, color: "var(--text-muted)", margin: "0 0 2px" }}>{label}</p>
+                  {val !== null ? (
+                    <p style={{ fontSize: 12, fontWeight: 700, margin: 0, color: ehDespesa ? (val > 0 ? "var(--red)" : "var(--green)") : (val > 0 ? "var(--green)" : "var(--red)") }}>
+                      {val > 0 ? "↑" : "↓"} {Math.abs(val).toFixed(1)}%
+                    </p>
+                  ) : <p style={{ fontSize: 12, color: "var(--text-muted)", margin: 0 }}>—</p>}
                 </div>
               ))}
             </div>
           </div>
+
+          {/* Heatmap */}
+          <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: "20px" }}>
+            <p style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--text-muted)", margin: "0 0 14px" }}>Atividade do Mês</p>
+            {movAtual.length === 0 ? (
+              <EmptyState variant="default" title="Sem atividade" compact />
+            ) : (
+              <HeatmapCalendar movimentos={movAtual} fmtBRL={fmt} />
+            )}
+          </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
-          <div className="p-5 border-b border-[var(--color-border)] flex items-center justify-between">
-            <h2 className="font-bold text-sm uppercase tracking-wider text-[var(--color-text-muted)]">Atividade Recente</h2>
-            <Link href="/movimentacoes" className="text-sm font-medium text-emerald-600 hover:text-emerald-700 transition">Ver todas →</Link>
+      {/* Bottom row */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+        {/* Recent activity */}
+        <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", overflow: "hidden" }}>
+          <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <p style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--text-muted)", margin: 0 }}>Atividade Recente</p>
+            <Link href="/movimentacoes" style={{ fontSize: 12, fontWeight: 600, color: "var(--brand)", textDecoration: "none" }}>Ver todas →</Link>
           </div>
           {movRecentes.length === 0 ? (
-            <div className="p-8 text-center text-[var(--color-text-muted)] text-sm">Nenhuma movimentação ainda.</div>
+            <EmptyState variant="movements" title="Sem movimentações" description="Nenhuma movimentação registrada ainda." compact
+              action={{ label: "Registrar agora", href: "/movimentacoes" }} />
           ) : (
-            <div className="divide-y divide-[var(--color-border)]">
-              {movRecentes.map((mov) => (
-                <div key={mov.id} className="flex items-center justify-between p-4 hover:bg-[var(--color-bg)] transition-colors">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-sm shrink-0 ${mov.tipo === "entrada" ? "bg-emerald-50 text-emerald-600" : "bg-red-50 text-red-500"}`}>
+            <div>
+              {movRecentes.map(mov => (
+                <div key={mov.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 20px", borderBottom: "1px solid var(--border-subtle)", transition: "background 0.15s" }}
+                  onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = "var(--hover-bg)"}
+                  onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = ""}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+                    <div style={{ width: 34, height: 34, borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, flexShrink: 0, background: mov.tipo === "entrada" ? "var(--green-subtle)" : "var(--red-subtle)", color: mov.tipo === "entrada" ? "var(--green)" : "var(--red)" }}>
                       {mov.tipo === "entrada" ? "▲" : "▼"}
                     </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold truncate">{recentesNomes[mov.id] || "..."}</p>
-                      <p className="text-xs text-[var(--color-text-muted)]">
+                    <div style={{ minWidth: 0 }}>
+                      <p style={{ fontSize: 13, fontWeight: 600, margin: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--text)" }}>
+                        {recentesNomes[mov.id] || "..."}
+                      </p>
+                      <p style={{ fontSize: 11, color: "var(--text-muted)", margin: 0 }}>
                         {new Date(mov.data + "T12:00:00").toLocaleDateString("pt-BR")}
                         {mov.observacao && ` · ${mov.observacao}`}
                       </p>
                     </div>
                   </div>
-                  <span className={`font-bold text-sm shrink-0 ${mov.tipo === "entrada" ? "text-emerald-600" : "text-red-500"}`}>
-                    {mov.tipo === "entrada" ? "+" : "-"} {fmt(mov.valor)}
+                  <span style={{ fontSize: 13, fontWeight: 700, flexShrink: 0, color: mov.tipo === "entrada" ? "var(--green)" : "var(--red)" }}>
+                    {mov.tipo === "entrada" ? "+" : "–"} {fmt(mov.valor)}
                   </span>
                 </div>
               ))}
@@ -461,21 +667,26 @@ export default function DashboardPage() {
           )}
         </div>
 
-        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-6">
-          <h2 className="font-bold text-sm uppercase tracking-wider text-[var(--color-text-muted)] mb-5">Ações Rápidas</h2>
-          <div className="grid grid-cols-2 gap-3">
-            <Link href="/movimentacoes" className="flex flex-col items-center gap-2 p-5 rounded-xl bg-emerald-50 hover:bg-emerald-100 transition-colors">
-              <span className="text-2xl">💰</span><span className="text-sm font-semibold text-emerald-800">Nova Entrada</span>
-            </Link>
-            <Link href="/movimentacoes" className="flex flex-col items-center gap-2 p-5 rounded-xl bg-red-50 hover:bg-red-100 transition-colors">
-              <span className="text-2xl">📤</span><span className="text-sm font-semibold text-red-700">Nova Saída</span>
-            </Link>
-            <Link href="/contas-pagar" className="flex flex-col items-center gap-2 p-5 rounded-xl bg-amber-50 hover:bg-amber-100 transition-colors">
-              <span className="text-2xl">📋</span><span className="text-sm font-semibold text-amber-800">Contas a Pagar</span>
-            </Link>
-            <Link href="/analise" className="flex flex-col items-center gap-2 p-5 rounded-xl bg-purple-50 hover:bg-purple-100 transition-colors">
-              <span className="text-2xl">🧠</span><span className="text-sm font-semibold text-purple-800">Análise</span>
-            </Link>
+        {/* Quick actions */}
+        <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: "20px" }}>
+          <p style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--text-muted)", margin: "0 0 16px" }}>Ações Rápidas</p>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            {[
+              { href: "/movimentacoes", icon: "💰", label: "Nova Entrada", bg: "var(--green-subtle)", color: "var(--green-strong)", hbg: "var(--green-muted)" },
+              { href: "/movimentacoes", icon: "📤", label: "Nova Saída", bg: "var(--red-subtle)", color: "var(--red-strong)", hbg: "var(--red-muted)" },
+              { href: "/contas-pagar", icon: "📋", label: "Contas a Pagar", bg: "var(--amber-subtle)", color: "var(--amber-strong)", hbg: "var(--amber-muted)" },
+              { href: "/analise", icon: "🧠", label: "Análise IA", bg: "var(--purple-subtle)", color: "var(--purple)", hbg: "var(--purple-muted)" },
+              { href: "/fechamento-caixa", icon: "🧮", label: "Fechamento", bg: "var(--cyan-subtle)", color: "var(--cyan)", hbg: "var(--cyan-border)" },
+              { href: "/relatorios", icon: "📄", label: "Relatórios", bg: "var(--blue-subtle)", color: "var(--blue-strong)", hbg: "var(--blue-muted)" },
+            ].map(({ href, icon, label, bg, color, hbg }) => (
+              <Link key={href + label} href={href}
+                style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, padding: "14px 10px", borderRadius: "var(--radius)", background: bg, textDecoration: "none", transition: "background 0.2s" }}
+                onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = hbg}
+                onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = bg}>
+                <span style={{ fontSize: 22 }}>{icon}</span>
+                <span style={{ fontSize: 11, fontWeight: 600, color, textAlign: "center", lineHeight: 1.2 }}>{label}</span>
+              </Link>
+            ))}
           </div>
         </div>
       </div>
