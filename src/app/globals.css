@@ -1,68 +1,268 @@
 @import "tailwindcss";
 
+/* ═══════════════════════════════════════════════════════════
+   DESIGN TOKENS — Light Mode
+═══════════════════════════════════════════════════════════ */
 :root {
-  --color-primary: #16a34a;
-  --color-primary-dark: #15803d;
-  --color-primary-light: #dcfce7;
-  --color-bg: #f4f6f4;
-  --color-surface: #ffffff;
-  --color-text: #1a1a1a;
-  --color-text-muted: #6b7280;
-  --color-border: #e2e8e2;
-  --color-danger: #dc2626;
-  --color-danger-light: #fef2f2;
+  /* Backward-compat aliases (código existente continua funcionando) */
+  --color-primary:       #10b981;
+  --color-primary-dark:  #059669;
+  --color-primary-light: #d1fae5;
+  --color-bg:            var(--bg);
+  --color-surface:       var(--surface);
+  --color-text:          var(--text);
+  --color-text-muted:    var(--text-muted);
+  --color-border:        var(--border);
+  --color-danger:        var(--red);
+  --color-danger-light:  var(--red-subtle);
+
+  /* ── Surfaces ── */
+  --bg:              #f4f6f4;
+  --surface:         #ffffff;
+  --surface-raised:  #ffffff;
+  --input-bg:        #ffffff;
+  --hover-bg:        #f3f4f6;
+  --overlay:         rgba(0, 0, 0, 0.45);
+
+  /* ── Borders ── */
+  --border:          #e2e8e2;
+  --border-subtle:   #f0f2f0;
+  --border-strong:   #c8d0c8;
+
+  /* ── Text ── */
+  --text:            #111827;
+  --text-muted:      #6b7280;
+  --text-placeholder:#9ca3af;
+  --text-inverse:    #ffffff;
+  --text-link:       #2563eb;
+
+  /* ── Brand (Emerald) — Ações primárias ── */
+  --brand-subtle:    #ecfdf5;
+  --brand-muted:     #d1fae5;
+  --brand-border:    #6ee7b7;
+  --brand:           #10b981;
+  --brand-strong:    #059669;
+  --brand-stronger:  #047857;
+
+  /* ── Green — Entrada, Sucesso, Fechado ── */
+  --green-subtle:    #f0fdf4;
+  --green-muted:     #dcfce7;
+  --green-border:    #86efac;
+  --green:           #16a34a;
+  --green-strong:    #15803d;
+
+  /* ── Amber — Rascunho, Atenção ── */
+  --amber-subtle:    #fffbeb;
+  --amber-muted:     #fef3c7;
+  --amber-border:    #fde68a;
+  --amber:           #d97706;
+  --amber-strong:    #b45309;
+
+  /* ── Red — Saída, Perigo, Faltas ── */
+  --red-subtle:      #fef2f2;
+  --red-muted:       #fee2e2;
+  --red-border:      #fecaca;
+  --red:             #dc2626;
+  --red-strong:      #b91c1c;
+
+  /* ── Blue — Info, Seleção, Foco ── */
+  --blue-subtle:     #eff6ff;
+  --blue-muted:      #dbeafe;
+  --blue-border:     #bfdbfe;
+  --blue:            #3b82f6;
+  --blue-strong:     #1d4ed8;
+
+  /* ── Purple ── */
+  --purple-subtle:   #f5f3ff;
+  --purple-muted:    #ede9fe;
+  --purple-border:   #ddd6fe;
+  --purple:          #7c3aed;
+
+  /* ── Cyan ── */
+  --cyan-subtle:     #ecfeff;
+  --cyan-border:     #a5f3fc;
+  --cyan:            #0891b2;
+
+  /* ── Orange ── */
+  --orange-subtle:   #fff7ed;
+  --orange-border:   #fed7aa;
+  --orange:          #ea580c;
+
+  /* ── Shadows ── */
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  --shadow:    0 4px 12px rgba(0,0,0,0.08), 0 2px 4px rgba(0,0,0,0.04);
+  --shadow-lg: 0 10px 30px rgba(0,0,0,0.12), 0 4px 8px rgba(0,0,0,0.04);
+
+  /* ── Radius ── */
+  --radius-sm:  6px;
+  --radius:     10px;
+  --radius-lg:  16px;
+  --radius-xl:  20px;
+  --radius-full: 9999px;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   DARK MODE TOKENS
+═══════════════════════════════════════════════════════════ */
+[data-theme="dark"] {
+  /* ── Surfaces ── */
+  --bg:              #0d1117;
+  --surface:         #161b27;
+  --surface-raised:  #1e2433;
+  --input-bg:        #1e2433;
+  --hover-bg:        #1e2433;
+  --overlay:         rgba(0, 0, 0, 0.65);
+
+  /* ── Borders ── */
+  --border:          #1e2433;
+  --border-subtle:   #131720;
+  --border-strong:   #2d3748;
+
+  /* ── Text ── */
+  --text:            #e2e8f0;
+  --text-muted:      #64748b;
+  --text-placeholder:#475569;
+  --text-inverse:    #0d1117;
+  --text-link:       #60a5fa;
+
+  /* ── Brand ── */
+  --brand-subtle:    #022c22;
+  --brand-muted:     #064e3b;
+  --brand-border:    #065f46;
+  --brand:           #10b981;
+  --brand-strong:    #34d399;
+  --brand-stronger:  #6ee7b7;
+
+  /* ── Green ── */
+  --green-subtle:    #052e16;
+  --green-muted:     #064e3b;
+  --green-border:    #166534;
+  --green:           #22c55e;
+  --green-strong:    #4ade80;
+
+  /* ── Amber ── */
+  --amber-subtle:    #1c1204;
+  --amber-muted:     #451a03;
+  --amber-border:    #78350f;
+  --amber:           #fbbf24;
+  --amber-strong:    #fcd34d;
+
+  /* ── Red ── */
+  --red-subtle:      #1f0909;
+  --red-muted:       #450a0a;
+  --red-border:      #7f1d1d;
+  --red:             #ef4444;
+  --red-strong:      #f87171;
+
+  /* ── Blue ── */
+  --blue-subtle:     #0c1445;
+  --blue-muted:      #1e3a8a;
+  --blue-border:     #1d4ed8;
+  --blue:            #60a5fa;
+  --blue-strong:     #93c5fd;
+
+  /* ── Purple ── */
+  --purple-subtle:   #1e1b4b;
+  --purple-muted:    #2e1065;
+  --purple-border:   #4c1d95;
+  --purple:          #a78bfa;
+
+  /* ── Cyan ── */
+  --cyan-subtle:     #0c2d2d;
+  --cyan-border:     #164e63;
+  --cyan:            #22d3ee;
+
+  /* ── Orange ── */
+  --orange-subtle:   #1f0f03;
+  --orange-border:   #7c2d12;
+  --orange:          #fb923c;
+
+  /* ── Shadows (mais intensos no dark) ── */
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.4);
+  --shadow:    0 4px 12px rgba(0,0,0,0.5), 0 2px 4px rgba(0,0,0,0.3);
+  --shadow-lg: 0 10px 30px rgba(0,0,0,0.6), 0 4px 8px rgba(0,0,0,0.3);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   BASE STYLES
+═══════════════════════════════════════════════════════════ */
+
+/* Transição suave ao trocar tema */
+html {
+  transition: background-color 0.25s ease, color 0.25s ease;
 }
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: var(--color-border) transparent;
+  scrollbar-color: var(--border) transparent;
 }
 
 body {
-  background-color: var(--color-bg);
-  color: var(--color-text);
+  background-color: var(--bg);
+  color: var(--text);
   font-family: "DM Sans", sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
-input,
-select,
-textarea {
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+input, select, textarea {
+  background-color: var(--input-bg);
+  color: var(--text);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.25s ease;
 }
 
-input:focus,
-select:focus,
-textarea:focus {
-  border-color: var(--color-primary) !important;
-  box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.1) !important;
+input:focus, select:focus, textarea:focus {
+  border-color: var(--brand) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 15%, transparent) !important;
 }
 
+/* Inputs no dark mode */
+[data-theme="dark"] input,
+[data-theme="dark"] select,
+[data-theme="dark"] textarea {
+  color-scheme: dark;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   ANIMATIONS
+═══════════════════════════════════════════════════════════ */
 @keyframes fadeUp {
-  from {
-    opacity: 0;
-    transform: translateY(12px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
-.animate-fade-up {
-  animation: fadeUp 0.4s ease forwards;
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(20px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes shimmer {
+  from { background-position: -200% 0; }
+  to   { background-position: 200% 0; }
+}
+
+.animate-fade-up { animation: fadeUp 0.4s ease forwards; }
+.animate-fade-in { animation: fadeIn 0.3s ease forwards; }
+.animate-slide-up { animation: slideUp 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; }
 
 .delay-1 { animation-delay: 0.05s; }
 .delay-2 { animation-delay: 0.1s; }
 .delay-3 { animation-delay: 0.15s; }
 .delay-4 { animation-delay: 0.2s; }
 
+/* Skeleton loading */
+.skeleton {
+  background: linear-gradient(90deg, var(--hover-bg) 25%, var(--border-subtle) 50%, var(--hover-bg) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease infinite;
+  border-radius: var(--radius);
+}
+
 @media print {
-  body {
-    background: white !important;
-  }
-  .no-print {
-    display: none !important;
-  }
+  body { background: white !important; }
+  .no-print { display: none !important; }
 }

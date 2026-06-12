@@ -7,6 +7,7 @@ import { Logo } from "@/components/logo";
 import { createClient } from "@/lib/supabase/client";
 import NotificacoesBell from "@/components/notificacoes-bell";
 import ChatWidget from "@/components/chat-widget";
+import { useTheme } from "@/components/theme-provider";
 
 interface Profile {
   id: string;
@@ -71,6 +72,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
   const supabase = createClient();
+  const { effective, toggle } = useTheme();
 
   useEffect(() => {
     async function loadProfile() {
@@ -92,10 +94,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   if (loading) {
     return (
-      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#f8f8f8" }}>
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg)" }}>
         <div style={{ textAlign: "center" }}>
-          <div style={{ width: 40, height: 40, border: "4px solid #d1fae5", borderTopColor: "#059669", borderRadius: "50%", animation: "spin 0.8s linear infinite", margin: "0 auto 12px" }} />
-          <p style={{ color: "#6b7280", fontSize: 14 }}>Carregando...</p>
+          <div style={{ width: 40, height: 40, border: "4px solid var(--brand-muted)", borderTopColor: "var(--brand-strong)", borderRadius: "50%", animation: "spin 0.8s linear infinite", margin: "0 auto 12px" }} />
+          <p style={{ color: "var(--text-muted)", fontSize: 14 }}>Carregando...</p>
           <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
         </div>
       </div>
@@ -110,31 +112,33 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       <style>{`
         @keyframes spin { to { transform: rotate(360deg); } }
         * { box-sizing: border-box; }
-        .sidebar-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); backdrop-filter: blur(4px); z-index: 40; display: none; }
+        .sidebar-overlay { position: fixed; inset: 0; background: var(--overlay); backdrop-filter: blur(4px); z-index: 40; display: none; }
         .sidebar-overlay.active { display: block; }
-        .sidebar { position: fixed; top: 0; left: 0; bottom: 0; width: 260px; min-width: 260px; background: #ffffff; border-right: 1px solid #e2e8e2; display: flex; flex-direction: column; z-index: 50; transform: translateX(-100%); transition: transform 0.3s ease; }
+        .sidebar { position: fixed; top: 0; left: 0; bottom: 0; width: 260px; min-width: 260px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; z-index: 50; transform: translateX(-100%); transition: transform 0.3s ease, background-color 0.25s ease, border-color 0.25s ease; }
         .sidebar.open { transform: translateX(0); }
-        .topbar { display: none; position: sticky; top: 0; z-index: 30; padding: 12px 16px; background: #ffffff; border-bottom: 1px solid #e2e8e2; align-items: center; justify-content: space-between; }
+        .topbar { display: none; position: sticky; top: 0; z-index: 30; padding: 12px 16px; background: var(--surface); border-bottom: 1px solid var(--border); align-items: center; justify-content: space-between; transition: background-color 0.25s ease; }
         .main-content { flex: 1; min-width: 0; padding: 24px 16px; }
         @media (min-width: 768px) { .sidebar { position: sticky; top: 0; transform: translateX(0); } .sidebar-overlay.active { display: none; } .topbar { display: none !important; } .main-content { padding: 32px; } }
         @media (max-width: 767px) { .topbar { display: flex; } .desktop-notif { display: none !important; } }
-        .nav-link { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 10px; font-size: 13px; font-weight: 500; text-decoration: none; margin-bottom: 2px; transition: all 0.2s; color: #6b7280; }
-        .nav-link:hover { background: #f3f4f6; color: #374151; }
-        .nav-link.active { background: #dcfce7; color: #166534; }
-        .user-btn { width: 100%; text-align: left; padding: 10px 14px; border-radius: 10px; font-size: 13px; color: #6b7280; background: transparent; border: none; cursor: pointer; font-weight: 500; transition: all 0.2s; }
-        .user-btn:hover { background: #fef2f2; color: #dc2626; }
-        .hamburger { background: none; border: none; cursor: pointer; padding: 8px; border-radius: 8px; transition: background 0.2s; }
-        .hamburger:hover { background: #f3f4f6; }
+        .nav-link { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 10px; font-size: 13px; font-weight: 500; text-decoration: none; margin-bottom: 2px; transition: background 0.15s, color 0.15s; color: var(--text-muted); }
+        .nav-link:hover { background: var(--hover-bg); color: var(--text); }
+        .nav-link.active { background: var(--green-muted); color: var(--green-strong); }
+        .user-btn { width: 100%; text-align: left; padding: 10px 14px; border-radius: 10px; font-size: 13px; color: var(--text-muted); background: transparent; border: none; cursor: pointer; font-weight: 500; transition: all 0.2s; }
+        .user-btn:hover { background: var(--red-subtle); color: var(--red); }
+        .theme-btn { background: none; border: 1px solid var(--border); cursor: pointer; padding: 6px 8px; border-radius: 8px; transition: background 0.2s, border-color 0.2s; font-size: 15px; line-height: 1; color: var(--text-muted); }
+        .theme-btn:hover { background: var(--hover-bg); border-color: var(--border-strong); }
+        .hamburger { background: none; border: none; cursor: pointer; padding: 8px; border-radius: 8px; transition: background 0.2s; color: var(--text); }
+        .hamburger:hover { background: var(--hover-bg); }
       `}</style>
 
       <div style={{ display: "flex", minHeight: "100vh" }}>
         <div className={`sidebar-overlay ${sidebarOpen ? "active" : ""}`} onClick={() => setSidebarOpen(false)} />
 
         <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
-          <div style={{ padding: "16px 20px", borderBottom: "1px solid #e2e8e2", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <Logo />
             {isReadOnly && (
-              <span style={{ fontSize: 10, background: "#fef3c7", color: "#92400e", padding: "2px 8px", borderRadius: 6, fontWeight: 600 }}>👁️ Leitura</span>
+              <span style={{ fontSize: 10, background: "var(--amber-muted)", color: "var(--amber-strong)", padding: "2px 8px", borderRadius: 6, fontWeight: 600 }}>👁️ Leitura</span>
             )}
           </div>
 
@@ -145,23 +149,30 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 <Link key={item.href} href={item.href} className={`nav-link ${isActive ? "active" : ""}`}>
                   <span style={{ fontSize: 15 }}>{item.icon}</span>
                   {item.label}
-                  {isActive && <span style={{ marginLeft: "auto", width: 6, height: 6, borderRadius: "50%", background: "#16a34a" }} />}
+                  {isActive && <span style={{ marginLeft: "auto", width: 6, height: 6, borderRadius: "50%", background: "var(--green)" }} />}
                 </Link>
               );
             })}
           </nav>
 
-          <div style={{ padding: "12px 14px", borderTop: "1px solid #e2e8e2" }}>
+          <div style={{ padding: "12px 14px", borderTop: "1px solid var(--border)" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, padding: "0 6px" }}>
-              <div style={{ width: 30, height: 30, borderRadius: 8, background: "#dcfce7", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: "bold", color: "#16a34a" }}>
+              <div style={{ width: 30, height: 30, borderRadius: 8, background: "var(--green-muted)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: "bold", color: "var(--green)" }}>
                 {(profile?.nome || "U").charAt(0).toUpperCase()}
               </div>
-              <div style={{ minWidth: 0 }}>
-                <p style={{ fontSize: 12, fontWeight: 600, margin: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{profile?.nome || profile?.email}</p>
-                <p style={{ fontSize: 10, color: "#6b7280", margin: 0 }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <p style={{ fontSize: 12, fontWeight: 600, margin: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--text)" }}>{profile?.nome || profile?.email}</p>
+                <p style={{ fontSize: 10, color: "var(--text-muted)", margin: 0 }}>
                   {profile?.role === "master" ? "Administrador" : profile?.role === "leitura" ? "Somente Leitura" : "Funcionário"}
                 </p>
               </div>
+              <button
+                onClick={toggle}
+                className="theme-btn"
+                title={effective === "dark" ? "Modo claro" : "Modo escuro"}
+              >
+                {effective === "dark" ? "☀️" : "🌙"}
+              </button>
             </div>
             <button onClick={handleLogout} className="user-btn">🚪 Sair</button>
           </div>
@@ -186,9 +197,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
           {/* Banner de leitura */}
           {isReadOnly && (
-            <div style={{ padding: "8px 32px", background: "#fef3c7", borderBottom: "1px solid #fde68a", display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ padding: "8px 32px", background: "var(--amber-subtle)", borderBottom: "1px solid var(--amber-border)", display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ fontSize: 14 }}>👁️</span>
-              <span style={{ fontSize: 12, color: "#92400e", fontWeight: 500 }}>Modo somente leitura — você pode visualizar mas não editar</span>
+              <span style={{ fontSize: 12, color: "var(--amber-strong)", fontWeight: 500 }}>Modo somente leitura — você pode visualizar mas não editar</span>
             </div>
           )}
 
