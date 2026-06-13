@@ -302,6 +302,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [recentesNomes, setRecentesNomes] = useState<Record<string, string>>({});
   const [metaMensal, setMetaMensal] = useState(0);
+  const [metaId, setMetaId] = useState<string | null>(null);
   const [editandoMeta, setEditandoMeta] = useState(false);
   const [inputMeta, setInputMeta] = useState("");
   const supabase = createClient();
@@ -337,14 +338,14 @@ export default function DashboardPage() {
       supabase.from("movimentacoes").select("*").order("created_at", { ascending: false }).limit(5),
       supabase.from("contas_pagar").select("*").eq("status", "pendente").order("data_vencimento"),
       supabase.from("movimentacoes").select("tipo,valor,data"),
-      supabase.from("metas").select("valor_meta").eq("mes", mesAtual + 1).eq("ano", anoAtual).maybeSingle(),
+      supabase.from("metas").select("id,valor_meta").eq("tipo", "receita").eq("mes", mesAtual + 1).eq("ano", anoAtual).maybeSingle(),
     ]);
 
     if (r1.data) setMovAtual(r1.data);
     if (r2.data) setMovAnterior(r2.data);
     if (r3.data) setMovRecentes(r3.data);
     if (r4.data) setContasPendentes(r4.data);
-    if (r6.data) setMetaMensal(r6.data.valor_meta);
+    if (r6.data) { setMetaMensal(r6.data.valor_meta); setMetaId(r6.data.id); }
 
     const todosMovs = r5.data || [];
     const graficoData: MesGrafico[] = [];
@@ -558,7 +559,12 @@ export default function DashboardPage() {
             <button onClick={async () => {
               const v = parseFloat(inputMeta.replace(",", "."));
               if (isNaN(v) || v <= 0) return;
-              await supabase.from("metas").upsert({ mes: mesAtual + 1, ano: anoAtual, valor_meta: v }, { onConflict: "mes,ano" });
+              if (metaId) {
+                await supabase.from("metas").update({ valor_meta: v }).eq("id", metaId);
+              } else {
+                const { data } = await supabase.from("metas").insert({ tipo: "receita", categoria_id: null, mes: mesAtual + 1, ano: anoAtual, valor_meta: v }).select("id").single();
+                if (data) setMetaId(data.id);
+              }
               setMetaMensal(v); setEditandoMeta(false);
             }} style={{ padding: "8px 16px", background: "var(--brand)", color: "#fff", border: "none", borderRadius: "var(--radius)", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
               Salvar

@@ -20,6 +20,7 @@ interface Profile {
 
 const menuItems = [
   { label: "Dashboard", href: "/dashboard", icon: "📊", modulo: "dashboard" },
+  { label: "Metas e Orçamento", href: "/metas", icon: "🎯", modulo: "metas" },
   { label: "Painel do CEO", href: "/painel-ceo", icon: "👔", modulo: "painel-ceo", masterOnly: true },
   { label: "Movimentações", href: "/movimentacoes", icon: "💰", modulo: "movimentacoes" },
   { label: "Captura por Foto", href: "/captura", icon: "📸", modulo: "captura" },

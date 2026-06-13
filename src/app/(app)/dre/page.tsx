@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/client";
 interface Movimentacao {
   tipo: string; valor: number; data: string; categoria_id: string;
 }
+interface Meta { categoria_id: string; valor_meta: number; }
 
 interface Categoria { id: string; nome: string; }
 
@@ -36,6 +37,7 @@ export default function DrePage() {
   const [movAnterior, setMovAnterior] = useState<Movimentacao[]>([]);
   const [movMesmoAnoPassado, setMovMesmoAnoPassado] = useState<Movimentacao[]>([]);
   const [todasCats, setTodasCats] = useState<Categoria[]>([]);
+  const [metasCat, setMetasCat] = useState<Meta[]>([]);
 
   const supabase = createClient();
 
@@ -47,17 +49,20 @@ export default function DrePage() {
     const { inicio: inicioAnt, fim: fimAnt } = getPeriodo(mesAnt, anoAnt);
     const { inicio: inicioAP, fim: fimAP } = getPeriodo(mes, ano - 1);
 
-    const [r1, r2, r3, r4, r5] = await Promise.all([
+    const mesSup = mes + 1;
+    const [r1, r2, r3, r4, r5, r6] = await Promise.all([
       supabase.from("movimentacoes").select("*").gte("data", inicio).lte("data", fim),
       supabase.from("movimentacoes").select("*").gte("data", inicioAnt).lte("data", fimAnt),
       supabase.from("movimentacoes").select("*").gte("data", inicioAP).lte("data", fimAP),
       supabase.from("categorias_entrada").select("id,nome").eq("ativo", true),
       supabase.from("categorias_saida").select("id,nome").eq("ativo", true),
+      supabase.from("metas").select("categoria_id,valor_meta").eq("tipo", "despesa_categoria").eq("mes", mesSup).eq("ano", ano),
     ]);
 
     if (r1.data) setMovAtual(r1.data);
     if (r2.data) setMovAnterior(r2.data);
     if (r3.data) setMovMesmoAnoPassado(r3.data);
+    if (r6.data) setMetasCat(r6.data as Meta[]);
     const cats: Categoria[] = [...(r4.data || []), ...(r5.data || [])];
     setTodasCats(cats);
   }
@@ -87,12 +92,15 @@ export default function DrePage() {
   ).map(([nome, total]) => ({ nome, total })).sort((a, b) => b.total - a.total);
 
   const saidasPorCategoria = Object.entries(
-    saidas.reduce((acc: Record<string, number>, m) => {
+    saidas.reduce((acc: Record<string, { total: number; catId: string }>, m) => {
       const nome = getNomeCategoria(m.categoria_id);
-      acc[nome] = (acc[nome] || 0) + m.valor;
+      if (!acc[nome]) acc[nome] = { total: 0, catId: m.categoria_id };
+      acc[nome].total += m.valor;
       return acc;
     }, {})
-  ).map(([nome, total]) => ({ nome, total })).sort((a, b) => b.total - a.total);
+  ).map(([nome, { total, catId }]) => ({ nome, total, catId })).sort((a, b) => b.total - a.total);
+
+  const metasByCatId = Object.fromEntries(metasCat.map(m => [m.categoria_id, m.valor_meta]));
 
   let mesAnt = mes - 1, anoAnt = ano;
   if (mesAnt < 0) { mesAnt = 11; anoAnt = ano - 1; }
@@ -192,15 +200,39 @@ export default function DrePage() {
                 <div className="p-6 text-center text-sm text-[var(--color-text-muted)]">Nenhuma despesa neste mês</div>
               ) : (
                 <div className="divide-y divide-[var(--color-border)]">
-                  {saidasPorCategoria.map(cat => (
-                    <div key={cat.nome} className="flex justify-between items-center p-4">
-                      <span className="text-sm">{cat.nome}</span>
-                      <div className="text-right">
-                        <span className="text-sm font-semibold text-red-500">{fmt(cat.total)}</span>
-                        <span className="text-xs text-[var(--color-text-muted)] ml-2">({pct(cat.total, totalSaidas)})</span>
+                  {saidasPorCategoria.map(cat => {
+                    const metaValor = metasByCatId[cat.catId];
+                    const pctUsado = metaValor ? (cat.total / metaValor) * 100 : null;
+                    const acima = pctUsado !== null && pctUsado > 100;
+                    return (
+                      <div key={cat.nome} className="p-4">
+                        <div className="flex justify-between items-center">
+                          <span className="text-sm">{cat.nome}</span>
+                          <div className="flex items-center gap-2">
+                            {pctUsado !== null && (
+                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${acima ? "bg-red-100 text-red-700" : "bg-emerald-50 text-emerald-700"}`}>
+                                {acima ? "⚠️" : "✓"} {pctUsado.toFixed(0)}% do orçamento
+                              </span>
+                            )}
+                            <div className="text-right">
+                              <span className="text-sm font-semibold text-red-500">{fmt(cat.total)}</span>
+                              <span className="text-xs text-[var(--color-text-muted)] ml-2">({pct(cat.total, totalSaidas)})</span>
+                            </div>
+                          </div>
+                        </div>
+                        {metaValor && (
+                          <div className="mt-2">
+                            <div className="w-full h-1.5 rounded-full overflow-hidden" style={{ background: "var(--hover-bg)" }}>
+                              <div className="h-full rounded-full transition-all" style={{ width: `${Math.min(pctUsado!, 100)}%`, background: acima ? "var(--red)" : "var(--green)" }} />
+                            </div>
+                            <p className="text-[10px] text-[var(--color-text-muted)] mt-1">
+                              {fmt(cat.total)} de {fmt(metaValor)} · {acima ? `R$${(cat.total - metaValor).toFixed(0)} acima` : `R$${(metaValor - cat.total).toFixed(0)} disponível`}
+                            </p>
+                          </div>
+                        )}
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                   <div className="flex justify-between items-center p-4 bg-[var(--color-bg)]">
                     <span className="text-sm font-bold">Total Despesas</span>
                     <span className="text-sm font-bold text-red-500">{fmt(totalSaidas)}</span>
