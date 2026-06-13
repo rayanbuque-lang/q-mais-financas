@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
+import EmptyState from "@/components/empty-state";
 
 interface Movimentacao {
   id: string;
@@ -292,9 +293,9 @@ export default function FluxoDeCaixaPage() {
           </div>
 
           {movimentacoes.length === 0 ? (
-            <div className="p-8 text-center text-[var(--color-text-muted)] text-sm">
-              Nenhuma movimentação neste mês.
-            </div>
+            <EmptyState variant="movements" title="Nenhuma movimentação neste mês"
+              description="Registre entradas e saídas para ver o fluxo diário." compact
+              action={{ label: "Registrar", href: "/movimentacoes" }} />
           ) : (
             <div className="divide-y divide-[var(--color-border)]">
               {dadosDiariosAcumulados
@@ -355,9 +356,9 @@ export default function FluxoDeCaixaPage() {
           </div>
 
           {dadosSemanais.length === 0 ? (
-            <div className="p-8 text-center text-[var(--color-text-muted)] text-sm">
-              Nenhuma movimentação neste mês.
-            </div>
+            <EmptyState variant="movements" title="Nenhuma movimentação neste mês"
+              description="Registre entradas e saídas para ver o fluxo semanal." compact
+              action={{ label: "Registrar", href: "/movimentacoes" }} />
           ) : (
             <div className="divide-y divide-[var(--color-border)]">
               {dadosSemanais.map((semana, index) => (

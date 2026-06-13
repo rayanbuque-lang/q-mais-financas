@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
+import EmptyState from "@/components/empty-state";
 
 interface Conciliacao {
   id: string;
@@ -445,8 +446,9 @@ export default function ConciliacaoPage() {
       {loading && conciliacoes.length === 0 ? (
         <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-12 text-center text-[var(--color-text-muted)] text-sm">Carregando...</div>
       ) : conciliacoes.length === 0 ? (
-        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-12 text-center text-[var(--color-text-muted)] text-sm">
-          Nenhuma conciliação em {ano}. Clique em "+ Nova Conciliação".
+        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
+          <EmptyState variant="accounts" title={`Nenhuma conciliação em ${ano}`}
+            description='Clique em "+ Nova Conciliação" para reconciliar os bancos com suas movimentações.' />
         </div>
       ) : (
         <div className="space-y-3">

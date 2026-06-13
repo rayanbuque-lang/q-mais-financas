@@ -355,7 +355,7 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
                   <span className="text-xs font-bold">{pctMeta.toFixed(1)}%</span>
                 </div>
                 <div className="w-full bg-gray-200 rounded-full h-4 mb-3">
-                  <div className="h-4 rounded-full transition-all duration-500" style={{ width: `${Math.min(pctMeta, 100)}%`, background: pctMeta >= 100 ? "linear-gradient(90deg, #059669, #10b981)" : pctMeta >= 70 ? "linear-gradient(90deg, #d97706, #f59e0b)" : "linear-gradient(90deg, #dc2626, #f87171)" }} />
+                  <div className="h-4 rounded-full transition-all duration-500" style={{ width: `${Math.min(pctMeta, 100)}%`, background: pctMeta >= 100 ? "linear-gradient(90deg,var(--brand-strong),var(--brand))" : pctMeta >= 70 ? "linear-gradient(90deg,var(--amber),var(--amber-strong))" : "linear-gradient(90deg,var(--red),var(--red-strong))" }} />
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="text-center p-2 bg-[var(--color-bg)] rounded-lg"><p className="text-[10px] text-[var(--color-text-muted)]">Vendido</p><p className="font-bold text-sm text-emerald-600">{fmt(totalVendido)}</p></div>

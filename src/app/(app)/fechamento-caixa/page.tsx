@@ -304,7 +304,7 @@ export default function FechamentoCaixaPage() {
 
   const inputBase = (border: string, color: string): React.CSSProperties => ({
     width: "100%", marginTop: 4, padding: "8px 10px", borderRadius: 8,
-    border: `1px solid ${border}`, background: "white",
+    border: `1px solid ${border}`, background: "var(--input-bg)",
     fontSize: 14, fontWeight: 600, color, outline: "none",
   });
 
@@ -461,7 +461,7 @@ export default function FechamentoCaixaPage() {
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             {!detailRecord?.fechado && (
               <button onClick={salvarRascunho} disabled={loading}
-                style={{ flex: 1, minWidth: 140, padding: "13px 20px", borderRadius: 12, border: "none", background: "linear-gradient(135deg,#d97706,#f59e0b)", color: "white", fontWeight: 700, fontSize: 14, cursor: "pointer", opacity: loading ? 0.5 : 1 }}>
+                style={{ flex: 1, minWidth: 140, padding: "13px 20px", borderRadius: 12, border: "none", background: "linear-gradient(135deg,var(--amber),var(--amber-strong))", color: "var(--text-inverse)", fontWeight: 700, fontSize: 14, cursor: "pointer", opacity: loading ? 0.5 : 1 }}>
                 {loading ? "Salvando..." : "📝 Salvar Rascunho"}
               </button>
             )}
