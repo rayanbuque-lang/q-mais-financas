@@ -77,16 +77,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     async function loadProfile() {
-      // --- DEBUG TEMP ---
-      try {
-        const raw = localStorage.getItem("qmais-session");
-        console.log("[Auth] localStorage qmais-session:", raw ? "ENCONTRADO (" + raw.length + " chars)" : "VAZIO/NULL");
-        const canWrite = (() => { try { localStorage.setItem("_t","1"); localStorage.removeItem("_t"); return true; } catch(e) { return false; } })();
-        console.log("[Auth] localStorage gravável:", canWrite);
-      } catch (e) { console.log("[Auth] localStorage BLOQUEADO:", e); }
-      // --- FIM DEBUG ---
       const { data: { session } } = await supabase.auth.getSession();
-      console.log("[Auth] getSession resultado:", session ? "SESSÃO OK (user: " + session.user.email + ")" : "SEM SESSÃO");
       if (!session) { router.push("/login"); return; }
       const { data } = await supabase.from("profiles").select("*").eq("id", session.user.id).single();
       if (data) setProfile(data as Profile);

@@ -183,7 +183,7 @@ export async function gerarNotificacoes() {
       .select("status")
       .eq("mes", mesVerificar)
       .eq("ano", anoVerificar)
-      .single();
+      .maybeSingle();
 
     if (!fechamento || fechamento.status !== "fechado") {
       const mesesNomes = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];

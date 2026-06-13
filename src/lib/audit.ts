@@ -41,7 +41,7 @@ export async function verificarMesFechado(data: string): Promise<{ fechado: bool
     .select("status")
     .eq("mes", mes)
     .eq("ano", ano)
-    .single();
+    .maybeSingle();
 
   return {
     fechado: fechamento?.status === "fechado",
