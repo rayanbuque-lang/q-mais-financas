@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
+import EmptyState from "@/components/empty-state";
 
 interface Maquina {
   id: string;
@@ -409,8 +410,9 @@ export default function VendasPage() {
 
       {/* Lista de vendas */}
       {vendasFiltradas.length === 0 ? (
-        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-12 text-center text-[var(--color-text-muted)] text-sm">
-          Nenhuma venda neste período.
+        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
+          <EmptyState variant="movements" title="Nenhuma venda neste período"
+            description="Registre as vendas das maquininhas para controlar recebimentos e taxas." />
         </div>
       ) : (
         <div className="space-y-2">

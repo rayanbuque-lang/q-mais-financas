@@ -162,9 +162,9 @@ export default function UsuariosPage() {
   }
 
   function getRoleLabel(role: string) {
-    if (role === "master") return { label: "Administrador", bg: "#dcfce7", color: "#166534", icon: "👑" };
-    if (role === "leitura") return { label: "Somente Leitura", bg: "#fef3c7", color: "#92400e", icon: "👁️" };
-    return { label: "Funcionário", bg: "#dbeafe", color: "#1e40af", icon: "👤" };
+    if (role === "master") return { label: "Administrador", bg: "var(--green-muted)", color: "var(--green-strong)", icon: "👑" };
+    if (role === "leitura") return { label: "Somente Leitura", bg: "var(--amber-muted)", color: "var(--amber-strong)", icon: "👁️" };
+    return { label: "Funcionário", bg: "var(--blue-muted)", color: "var(--blue-strong)", icon: "👤" };
   }
 
   return (
@@ -190,9 +190,9 @@ export default function UsuariosPage() {
         <p className="text-xs font-bold text-[var(--color-text-muted)] mb-2">Tipos de acesso:</p>
         <div className="flex flex-wrap gap-3">
           {[
-            { icon: "👑", label: "Administrador", desc: "Acesso total, pode editar tudo", bg: "#dcfce7" },
-            { icon: "👤", label: "Funcionário", desc: "Acesso de escrita nos módulos selecionados (sem seleção = acesso total)", bg: "#dbeafe" },
-            { icon: "👁️", label: "Somente Leitura", desc: "Apenas visualiza módulos permitidos, sem editar", bg: "#fef3c7" },
+            { icon: "👑", label: "Administrador", desc: "Acesso total, pode editar tudo", bg: "var(--green-muted)" },
+            { icon: "👤", label: "Funcionário", desc: "Acesso de escrita nos módulos selecionados (sem seleção = acesso total)", bg: "var(--blue-muted)" },
+            { icon: "👁️", label: "Somente Leitura", desc: "Apenas visualiza módulos permitidos, sem editar", bg: "var(--amber-muted)" },
           ].map(r => (
             <div key={r.label} className="flex items-center gap-2 px-3 py-2 rounded-lg" style={{ background: r.bg }}>
               <span>{r.icon}</span>
@@ -241,9 +241,9 @@ export default function UsuariosPage() {
               <label className="block text-xs font-semibold mb-2 text-[var(--color-text-muted)]">Tipo de Acesso</label>
               <div className="flex gap-3">
                 {[
-                  { id: "master", label: "👑 Administrador", bg: "#dcfce7", border: "#86efac" },
-                  { id: "funcionario", label: "👤 Funcionário", bg: "#dbeafe", border: "#93c5fd" },
-                  { id: "leitura", label: "👁️ Somente Leitura", bg: "#fef3c7", border: "#fde68a" },
+                  { id: "master", label: "👑 Administrador", bg: "var(--green-muted)", border: "var(--green-border)" },
+                  { id: "funcionario", label: "👤 Funcionário", bg: "var(--blue-muted)", border: "var(--blue-border)" },
+                  { id: "leitura", label: "👁️ Somente Leitura", bg: "var(--amber-muted)", border: "var(--amber-border)" },
                 ].map(r => (
                   <button key={r.id} type="button" onClick={() => setRole(r.id)}
                     className={`flex-1 py-3 rounded-xl font-semibold text-xs transition-all ${role === r.id ? "shadow-md" : "opacity-60"}`}

@@ -200,9 +200,9 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
             <div class="kpi"><div class="kpi-label">Total Vendido</div><div class="kpi-value" style="color: #059669;">${fmt(totalVendido)}</div></div>
             <div class="kpi"><div class="kpi-label">Média Diária</div><div class="kpi-value" style="color: #2563eb;">${fmt(mediaDiaria)}</div></div>
             <div class="kpi"><div class="kpi-label">Meta Mensal</div><div class="kpi-value" style="color: #d97706;">${meta.meta_mensal > 0 ? fmt(meta.meta_mensal) : "—"}</div></div>
-            <div class="kpi"><div class="kpi-label">% Meta</div><div class="kpi-value" style="color: ${pctMeta >= 100 ? "#059669" : "#d97706"};">${meta.meta_mensal > 0 ? pctMeta.toFixed(1) + "%" : "—"}</div></div>
+            <div class="kpi"><div class="kpi-label">% Meta</div><div class="kpi-value" style="color: ${pctMeta >= 100 ? "var(--brand-strong)" : "var(--amber)"};">${meta.meta_mensal > 0 ? pctMeta.toFixed(1) + "%" : "—"}</div></div>
             <div class="kpi"><div class="kpi-label">Despesas</div><div class="kpi-value" style="color: #dc2626;">${fmt(totalSaidasMov)}</div></div>
-            <div class="kpi"><div class="kpi-label">Resultado</div><div class="kpi-value" style="color: ${resultado >= 0 ? "#059669" : "#dc2626"};">${fmt(resultado)}</div></div>
+            <div class="kpi"><div class="kpi-label">Resultado</div><div class="kpi-value" style="color: ${resultado >= 0 ? "var(--brand-strong)" : "var(--red)"};">${fmt(resultado)}</div></div>
           </div>
 
           <h2>Formas de Pagamento</h2>
@@ -225,7 +225,7 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
           </table>
 
           <h2>Alertas</h2>
-          <div style="padding: 8px 12px; border-radius: 8px; background: ${contasVencidas > 0 ? "#fef2f2" : "#ecfdf5"}; color: ${contasVencidas > 0 ? "#dc2626" : "#059669"}; font-size: 12px;">
+          <div style="padding: 8px 12px; border-radius: 8px; background: ${contasVencidas > 0 ? "var(--red-subtle)" : "var(--brand-subtle)"}; color: ${contasVencidas > 0 ? "var(--red)" : "var(--brand-strong)"}; font-size: 12px;">
             Contas Vencidas: ${contasVencidas} | Pendentes: ${contasPendentes} | Dias Conferidos: ${diasFechados}/${totalDiasComDados}
           </div>
 
@@ -287,10 +287,10 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
 
   const fpTotal = totalDinheiro + totalCartao + totalPix + totalOutros;
   const fpDados = [
-    { nome: "Dinheiro", valor: totalDinheiro, pct: fpTotal > 0 ? (totalDinheiro / fpTotal * 100) : 0, cor: "#16a34a" },
-    { nome: "Cartao", valor: totalCartao, pct: fpTotal > 0 ? (totalCartao / fpTotal * 100) : 0, cor: "#2563eb" },
-    { nome: "Pix", valor: totalPix, pct: fpTotal > 0 ? (totalPix / fpTotal * 100) : 0, cor: "#f97316" },
-    { nome: "Outros", valor: totalOutros, pct: fpTotal > 0 ? (totalOutros / fpTotal * 100) : 0, cor: "#7c3aed" },
+    { nome: "Dinheiro", valor: totalDinheiro, pct: fpTotal > 0 ? (totalDinheiro / fpTotal * 100) : 0, cor: "var(--green)" },
+    { nome: "Cartao", valor: totalCartao, pct: fpTotal > 0 ? (totalCartao / fpTotal * 100) : 0, cor: "var(--blue)" },
+    { nome: "Pix", valor: totalPix, pct: fpTotal > 0 ? (totalPix / fpTotal * 100) : 0, cor: "var(--orange)" },
+    { nome: "Outros", valor: totalOutros, pct: fpTotal > 0 ? (totalOutros / fpTotal * 100) : 0, cor: "var(--purple)" },
   ].filter(f => f.valor > 0);
 
   return (

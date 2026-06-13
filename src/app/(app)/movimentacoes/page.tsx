@@ -415,10 +415,10 @@ export default function MovimentacoesPage() {
       {/* Busca */}
       <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-4">
         <div className="relative">
-          <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", fontSize: 16, color: "#9ca3af" }}>🔍</span>
+          <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", fontSize: 16, color: "var(--text-placeholder)" }}>🔍</span>
           <input type="text" value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar por categoria, valor, data, observação..."
             className="w-full pl-10 pr-10 py-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none" />
-          {busca && <button onClick={() => setBusca("")} style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#9ca3af" }}>✕</button>}
+          {busca && <button onClick={() => setBusca("")} style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "var(--text-placeholder)" }}>✕</button>}
         </div>
         {busca && <p className="text-xs text-[var(--color-text-muted)] mt-2">{movsFiltrados.length} resultado{movsFiltrados.length !== 1 ? "s" : ""}</p>}
       </div>
@@ -482,9 +482,9 @@ export default function MovimentacoesPage() {
       {(entryCatTotais.length > 0 || saidaCatTotais.length > 0) && (
         <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-4 space-y-4">
           {filtroCatNome && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 10 }}>
-              <span style={{ fontSize: 12, color: "#1d4ed8", fontWeight: 600 }}>Filtrando: {filtroCatNome}</span>
-              <button onClick={() => setFiltroCatNome(null)} style={{ marginLeft: "auto", fontSize: 11, color: "#6b7280", background: "none", border: "none", cursor: "pointer", fontWeight: 600 }}>✕ Limpar</button>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", background: "var(--blue-subtle)", border: "1px solid var(--blue-border)", borderRadius: 10 }}>
+              <span style={{ fontSize: 12, color: "var(--blue-strong)", fontWeight: 600 }}>Filtrando: {filtroCatNome}</span>
+              <button onClick={() => setFiltroCatNome(null)} style={{ marginLeft: "auto", fontSize: 11, color: "var(--text-muted)", background: "none", border: "none", cursor: "pointer", fontWeight: 600 }}>✕ Limpar</button>
             </div>
           )}
           {entryCatTotais.length > 0 && (
@@ -496,12 +496,12 @@ export default function MovimentacoesPage() {
                   return (
                     <button key={nome} type="button" onClick={() => setFiltroCatNome(ativo ? null : nome)}
                       style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", borderRadius: 12, cursor: "pointer", transition: "all 0.15s",
-                        border: `2px solid ${ativo ? "#16a34a" : "#e5e7eb"}`,
-                        background: ativo ? "#dcfce7" : "var(--color-bg)" }}>
+                        border: `2px solid ${ativo ? "var(--green)" : "var(--border)"}`,
+                        background: ativo ? "var(--green-muted)" : "var(--color-bg)" }}>
                       <span style={{ fontSize: 13 }}>{getCatIcon(nome)}</span>
-                      <span style={{ fontSize: 12, fontWeight: 500, color: ativo ? "#15803d" : "var(--color-text)" }}>{nome}</span>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: "#16a34a" }}>{fmt(val)}</span>
-                      {ativo && <span style={{ fontSize: 10, color: "#16a34a" }}>✓</span>}
+                      <span style={{ fontSize: 12, fontWeight: 500, color: ativo ? "var(--green-strong)" : "var(--color-text)" }}>{nome}</span>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: "var(--green)" }}>{fmt(val)}</span>
+                      {ativo && <span style={{ fontSize: 10, color: "var(--green)" }}>✓</span>}
                     </button>
                   );
                 })}
@@ -517,12 +517,12 @@ export default function MovimentacoesPage() {
                   return (
                     <button key={nome} type="button" onClick={() => setFiltroCatNome(ativo ? null : nome)}
                       style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", borderRadius: 12, cursor: "pointer", transition: "all 0.15s",
-                        border: `2px solid ${ativo ? "#dc2626" : "#e5e7eb"}`,
-                        background: ativo ? "#fee2e2" : "var(--color-bg)" }}>
+                        border: `2px solid ${ativo ? "var(--red)" : "var(--border)"}`,
+                        background: ativo ? "var(--red-muted)" : "var(--color-bg)" }}>
                       <span style={{ fontSize: 13 }}>{getCatIcon(nome)}</span>
-                      <span style={{ fontSize: 12, fontWeight: 500, color: ativo ? "#b91c1c" : "var(--color-text)" }}>{nome}</span>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: "#dc2626" }}>{fmt(val)}</span>
-                      {ativo && <span style={{ fontSize: 10, color: "#dc2626" }}>✓</span>}
+                      <span style={{ fontSize: 12, fontWeight: 500, color: ativo ? "var(--red-strong)" : "var(--color-text)" }}>{nome}</span>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: "var(--red)" }}>{fmt(val)}</span>
+                      {ativo && <span style={{ fontSize: 10, color: "var(--red)" }}>✓</span>}
                     </button>
                   );
                 })}

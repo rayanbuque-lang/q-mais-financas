@@ -10,14 +10,14 @@ const diasSemana = ["Dom","Seg","Ter","Qua","Qui","Sex","Sáb"];
 const diasSemanaLong = ["Domingo","Segunda-feira","Terça-feira","Quarta-feira","Quinta-feira","Sexta-feira","Sábado"];
 
 const CAMPOS_CONFIG = [
-  { field: "cartao",        label: "Cartão",          emoji: "💳", bg: "#eff6ff", border: "#bfdbfe", color: "#1d4ed8" },
-  { field: "pix_santander", label: "Pix Santander",   emoji: "📱", bg: "#fef2f2", border: "#fecaca", color: "#dc2626" },
-  { field: "pix_inter",     label: "Pix Inter",       emoji: "📱", bg: "#fff7ed", border: "#fed7aa", color: "#ea580c" },
-  { field: "rom_card",      label: "Rom Card",        emoji: "💳", bg: "#f5f3ff", border: "#ddd6fe", color: "#7c3aed" },
-  { field: "app",           label: "App",             emoji: "📲", bg: "#ecfdf5", border: "#a7f3d0", color: "#059669" },
-  { field: "prefeitura",    label: "Prefeitura",      emoji: "🏛️", bg: "#ecfeff", border: "#a5f3fc", color: "#0891b2" },
-  { field: "compras_prazo", label: "Compras à Prazo", emoji: "🛒", bg: "#fef2f2", border: "#fecaca", color: "#dc2626" },
-  { field: "sobras_faltas", label: "Sobras/Faltas",   emoji: "⚖️", bg: "",        border: "",         color: ""        },
+  { field: "cartao",        label: "Cartão",          emoji: "💳", bg: "var(--blue-subtle)",   border: "var(--blue-border)",   color: "var(--blue-strong)" },
+  { field: "pix_santander", label: "Pix Santander",   emoji: "📱", bg: "var(--red-subtle)",    border: "var(--red-border)",    color: "var(--red)" },
+  { field: "pix_inter",     label: "Pix Inter",       emoji: "📱", bg: "var(--orange-subtle)", border: "var(--orange-border)", color: "var(--orange)" },
+  { field: "rom_card",      label: "Rom Card",        emoji: "💳", bg: "var(--purple-subtle)", border: "var(--purple-border)", color: "var(--purple)" },
+  { field: "app",           label: "App",             emoji: "📲", bg: "var(--brand-subtle)",  border: "var(--brand-border)",  color: "var(--brand-strong)" },
+  { field: "prefeitura",    label: "Prefeitura",      emoji: "🏛️", bg: "var(--cyan-subtle)",   border: "var(--cyan-border)",   color: "var(--cyan)" },
+  { field: "compras_prazo", label: "Compras à Prazo", emoji: "🛒", bg: "var(--red-subtle)",    border: "var(--red-border)",    color: "var(--red)" },
+  { field: "sobras_faltas", label: "Sobras/Faltas",   emoji: "⚖️", bg: "",                     border: "",                     color: ""        },
 ] as const;
 type CampoKey = typeof CAMPOS_CONFIG[number]["field"];
 
@@ -359,9 +359,9 @@ export default function FechamentoCaixaPage() {
               {diasSemanaLong[dow]}, {new Date(detailData + "T12:00:00").toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric" })}
             </h2>
             {detailRecord?.fechado
-              ? <span style={{ fontSize: 11, color: "#16a34a", fontWeight: 600, marginTop: 3, display: "block" }}>✅ Fechado em definitivo</span>
+              ? <span style={{ fontSize: 11, color: "var(--green)", fontWeight: 600, marginTop: 3, display: "block" }}>✅ Fechado em definitivo</span>
               : detailRecord?.rascunho
-              ? <span style={{ fontSize: 11, color: "#d97706", fontWeight: 600, marginTop: 3, display: "block" }}>📝 Rascunho — aguardando revisão</span>
+              ? <span style={{ fontSize: 11, color: "var(--amber)", fontWeight: 600, marginTop: 3, display: "block" }}>📝 Rascunho — aguardando revisão</span>
               : null}
           </div>
         );
@@ -375,20 +375,20 @@ export default function FechamentoCaixaPage() {
         const formBody = (
           <>
             {/* Total Vendas */}
-            <div style={{ background: "#f0f9ff", border: "2px solid #0ea5e9", borderRadius: 12, padding: 14, marginBottom: 12 }}>
-              <label style={{ fontSize: 11, fontWeight: 700, color: "#0369a1", textTransform: "uppercase" }}>💰 VALOR TOTAL DE VENDAS DO DIA</label>
+            <div style={{ background: "var(--blue-subtle)", border: "2px solid var(--blue)", borderRadius: 12, padding: 14, marginBottom: 12 }}>
+              <label style={{ fontSize: 11, fontWeight: 700, color: "var(--blue-strong)", textTransform: "uppercase" }}>💰 VALOR TOTAL DE VENDAS DO DIA</label>
               <CurrencyInput value={form.valor_total_vendas} onChange={v => setForm(p => ({ ...p, valor_total_vendas: v }))}
-                style={{ width: "100%", marginTop: 6, padding: "10px 12px", borderRadius: 8, border: "1px solid #7dd3fc", background: "white", fontSize: 18, fontWeight: 700, color: "#0369a1", outline: "none" }} />
+                style={{ width: "100%", marginTop: 6, padding: "10px 12px", borderRadius: 8, border: "1px solid var(--blue-border)", background: "var(--input-bg)", fontSize: 18, fontWeight: 700, color: "var(--blue-strong)", outline: "none" }} />
             </div>
 
             {/* Seletor de campos */}
             <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 12, alignItems: "center" }}>
-              <span style={{ fontSize: 10, fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", letterSpacing: ".05em" }}>Campos:</span>
+              <span style={{ fontSize: 10, fontWeight: 700, color: "var(--text-placeholder)", textTransform: "uppercase", letterSpacing: ".05em" }}>Campos:</span>
               {CAMPOS_CONFIG.map(c => {
                 const ativo = camposAtivos.includes(c.field as CampoKey);
                 return (
                   <button key={c.field} type="button" onClick={() => toggleCampo(c.field as CampoKey)}
-                    style={{ padding: "3px 9px", borderRadius: 20, fontSize: 11, fontWeight: 600, cursor: "pointer", border: `1px solid ${ativo ? "#16a34a" : "#e5e7eb"}`, background: ativo ? "#dcfce7" : "#f9fafb", color: ativo ? "#15803d" : "#9ca3af", transition: "all 0.15s" }}>
+                    style={{ padding: "3px 9px", borderRadius: 20, fontSize: 11, fontWeight: 600, cursor: "pointer", border: `1px solid ${ativo ? "var(--green)" : "var(--border)"}`, background: ativo ? "var(--green-muted)" : "var(--hover-bg)", color: ativo ? "var(--green-strong)" : "var(--text-placeholder)", transition: "all 0.15s" }}>
                     {c.emoji} {c.label}
                   </button>
                 );
@@ -406,32 +406,32 @@ export default function FechamentoCaixaPage() {
               ))}
 
               {/* Dinheiro (auto) */}
-              <div style={{ background: "#f0fdf4", border: "2px solid #16a34a", borderRadius: 12, padding: 12 }}>
-                <label style={{ fontSize: 10, fontWeight: 700, color: "#16a34a", textTransform: "uppercase" }}>💵 Dinheiro (auto)</label>
-                <div style={{ marginTop: 6, padding: "8px 10px", borderRadius: 8, background: "white", border: "1px solid #bbf7d0", fontSize: 16, fontWeight: 700, color: "#16a34a" }}>
+              <div style={{ background: "var(--green-subtle)", border: "2px solid var(--green)", borderRadius: 12, padding: 12 }}>
+                <label style={{ fontSize: 10, fontWeight: 700, color: "var(--green)", textTransform: "uppercase" }}>💵 Dinheiro (auto)</label>
+                <div style={{ marginTop: 6, padding: "8px 10px", borderRadius: 8, background: "var(--input-bg)", border: "1px solid var(--green-border)", fontSize: 16, fontWeight: 700, color: "var(--green)" }}>
                   {fmt(dinheiro)}
                 </div>
               </div>
 
               {/* Sobras e Faltas */}
               {mostrarSobras && (
-                <div style={{ background: sfSigno > 0 ? "#f0fdf4" : "#fef2f2", border: `2px solid ${sfSigno > 0 ? "#86efac" : "#fca5a5"}`, borderRadius: 12, padding: 12 }}>
-                  <label style={{ fontSize: 10, fontWeight: 700, color: sfSigno > 0 ? "#16a34a" : "#dc2626", textTransform: "uppercase" }}>⚖️ Sobras / Faltas</label>
-                  <p style={{ margin: "2px 0 6px", fontSize: 9, color: "#9ca3af" }}>Apenas registro — não altera o total</p>
+                <div style={{ background: sfSigno > 0 ? "var(--green-subtle)" : "var(--red-subtle)", border: `2px solid ${sfSigno > 0 ? "var(--green-border)" : "var(--red-border)"}`, borderRadius: 12, padding: 12 }}>
+                  <label style={{ fontSize: 10, fontWeight: 700, color: sfSigno > 0 ? "var(--green)" : "var(--red)", textTransform: "uppercase" }}>⚖️ Sobras / Faltas</label>
+                  <p style={{ margin: "2px 0 6px", fontSize: 9, color: "var(--text-placeholder)" }}>Apenas registro — não altera o total</p>
                   <div style={{ display: "flex", gap: 5, marginBottom: 8 }}>
                     <button type="button" onClick={() => setSfSigno(1)}
-                      style={{ flex: 1, padding: "7px 4px", borderRadius: 8, border: `2px solid ${sfSigno > 0 ? "#16a34a" : "#e5e7eb"}`, background: sfSigno > 0 ? "#16a34a" : "white", color: sfSigno > 0 ? "white" : "#9ca3af", fontWeight: 700, fontSize: 12, cursor: "pointer", transition: "all 0.15s" }}>
+                      style={{ flex: 1, padding: "7px 4px", borderRadius: 8, border: `2px solid ${sfSigno > 0 ? "var(--green)" : "var(--border)"}`, background: sfSigno > 0 ? "var(--green)" : "var(--surface)", color: sfSigno > 0 ? "var(--text-inverse)" : "var(--text-placeholder)", fontWeight: 700, fontSize: 12, cursor: "pointer", transition: "all 0.15s" }}>
                       ▲ Sobras
                     </button>
                     <button type="button" onClick={() => setSfSigno(-1)}
-                      style={{ flex: 1, padding: "7px 4px", borderRadius: 8, border: `2px solid ${sfSigno < 0 ? "#dc2626" : "#e5e7eb"}`, background: sfSigno < 0 ? "#dc2626" : "white", color: sfSigno < 0 ? "white" : "#9ca3af", fontWeight: 700, fontSize: 12, cursor: "pointer", transition: "all 0.15s" }}>
+                      style={{ flex: 1, padding: "7px 4px", borderRadius: 8, border: `2px solid ${sfSigno < 0 ? "var(--red)" : "var(--border)"}`, background: sfSigno < 0 ? "var(--red)" : "var(--surface)", color: sfSigno < 0 ? "var(--text-inverse)" : "var(--text-placeholder)", fontWeight: 700, fontSize: 12, cursor: "pointer", transition: "all 0.15s" }}>
                       ▼ Faltas
                     </button>
                   </div>
                   <CurrencyInput value={sfAbs} onChange={v => setSfAbs(v)}
-                    style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: `1px solid ${sfSigno > 0 ? "#bbf7d0" : "#fecaca"}`, background: "white", fontSize: 14, fontWeight: 700, color: sfSigno > 0 ? "#16a34a" : "#dc2626", outline: "none" }} />
+                    style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: `1px solid ${sfSigno > 0 ? "var(--green-border)" : "var(--red-border)"}`, background: "var(--input-bg)", fontSize: 14, fontWeight: 700, color: sfSigno > 0 ? "var(--green)" : "var(--red)", outline: "none" }} />
                   {sfAbs > 0 && (
-                    <p style={{ margin: "5px 0 0", fontSize: 11, fontWeight: 700, color: sfSigno > 0 ? "#16a34a" : "#dc2626", textAlign: "center" }}>
+                    <p style={{ margin: "5px 0 0", fontSize: 11, fontWeight: 700, color: sfSigno > 0 ? "var(--green)" : "var(--red)", textAlign: "center" }}>
                       {sfSigno > 0 ? "Sobras: +" : "Faltas: -"}{fmt(sfAbs)}
                     </p>
                   )}
@@ -440,15 +440,15 @@ export default function FechamentoCaixaPage() {
             </div>
 
             {/* Total */}
-            <div style={{ marginTop: 12, background: dinheiro >= 0 ? "#ecfdf5" : "#fef2f2", border: `2px solid ${dinheiro >= 0 ? "#16a34a" : "#dc2626"}`, borderRadius: 12, padding: 16, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+            <div style={{ marginTop: 12, background: dinheiro >= 0 ? "var(--brand-subtle)" : "var(--red-subtle)", border: `2px solid ${dinheiro >= 0 ? "var(--green)" : "var(--red)"}`, borderRadius: 12, padding: 16, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
               <div>
-                <p style={{ fontSize: 11, fontWeight: 700, color: "#16a34a", textTransform: "uppercase", margin: 0 }}>📊 TOTAL DO DIA</p>
-                <p style={{ fontSize: 9, color: "#6b7280", margin: "2px 0 0" }}>Valor em dinheiro do dia</p>
+                <p style={{ fontSize: 11, fontWeight: 700, color: "var(--green)", textTransform: "uppercase", margin: 0 }}>📊 TOTAL DO DIA</p>
+                <p style={{ fontSize: 9, color: "var(--text-muted)", margin: "2px 0 0" }}>Valor em dinheiro do dia</p>
               </div>
               <div style={{ textAlign: "right" }}>
-                <span style={{ fontSize: 24, fontWeight: 800, color: dinheiro >= 0 ? "#16a34a" : "#dc2626", display: "block" }}>{fmt(dinheiro)}</span>
+                <span style={{ fontSize: 24, fontWeight: 800, color: dinheiro >= 0 ? "var(--green)" : "var(--red)", display: "block" }}>{fmt(dinheiro)}</span>
                 {mostrarSobras && sfAbs > 0 && (
-                  <span style={{ fontSize: 10, color: sfSigno > 0 ? "#16a34a" : "#dc2626", fontWeight: 600 }}>
+                  <span style={{ fontSize: 10, color: sfSigno > 0 ? "var(--green)" : "var(--red)", fontWeight: 600 }}>
                     {sfSigno > 0 ? "Sobras: +" : "Faltas: -"}{fmt(sfAbs)} (registro)
                   </span>
                 )}
@@ -467,7 +467,7 @@ export default function FechamentoCaixaPage() {
             )}
             {isAdmin && !detailRecord?.fechado && (
               <button onClick={fecharDia} disabled={loading}
-                style={{ padding: "13px 20px", borderRadius: 12, border: "none", background: "#16a34a", color: "white", fontWeight: 700, fontSize: 14, cursor: "pointer" }}>
+                style={{ padding: "13px 20px", borderRadius: 12, border: "none", background: "var(--green)", color: "white", fontWeight: 700, fontSize: 14, cursor: "pointer" }}>
                 ✅ Fechar
               </button>
             )}
@@ -479,7 +479,7 @@ export default function FechamentoCaixaPage() {
             )}
             {detailRecord && isAdmin && (
               <button onClick={excluirDia}
-                style={{ padding: "13px 18px", borderRadius: 12, border: "1px solid #fecaca", background: "#fef2f2", color: "#dc2626", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>
+                style={{ padding: "13px 18px", borderRadius: 12, border: "1px solid #fecaca", background: "var(--red-subtle)", color: "var(--red)", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>
                 🗑️
               </button>
             )}
@@ -532,7 +532,7 @@ export default function FechamentoCaixaPage() {
         /* ── Desktop: inline ── */
         return (
           <div style={{ animation: "fadeUp 0.25s ease", background: "var(--color-surface)", border: "2px solid #3b82f6", borderRadius: 20, overflow: "hidden" }}>
-            <div style={{ padding: "16px 20px", background: "#eff6ff", borderBottom: "1px solid #bfdbfe", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+            <div style={{ padding: "16px 20px", background: "var(--blue-subtle)", borderBottom: "1px solid #bfdbfe", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
               {headerInfo}
               <button onClick={closeDetail} style={closeBtnStyle}>✕</button>
             </div>
@@ -555,23 +555,23 @@ export default function FechamentoCaixaPage() {
             <button key={d} type="button" onClick={() => handleDayClick(dataStr)}
               style={{
                 display: "block", width: "100%", textAlign: "left", borderRadius: 12, padding: "10px 12px", cursor: "pointer", transition: "all 0.2s",
-                border: `2px solid ${rec?.fechado ? "#16a34a" : rec?.rascunho ? "#f59e0b" : isSelected ? "#3b82f6" : "#e5e7eb"}`,
-                background: rec?.fechado ? "#f0fdf4" : rec?.rascunho ? "#fffbeb" : isSelected ? "#eff6ff" : "white",
+                border: `2px solid ${rec?.fechado ? "var(--green)" : rec?.rascunho ? "var(--amber)" : isSelected ? "var(--blue)" : "var(--border)"}`,
+                background: rec?.fechado ? "var(--green-subtle)" : rec?.rascunho ? "var(--amber-subtle)" : isSelected ? "var(--blue-subtle)" : "var(--surface)",
               }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
                 <div>
                   <span style={{ fontWeight: 800, fontSize: 18, lineHeight: 1 }}>{d}</span>
-                  <span style={{ fontSize: 9, color: dow === 0 ? "#dc2626" : "#9ca3af", marginLeft: 3, fontWeight: dow === 0 ? 700 : 400 }}>{diasSemana[dow]}</span>
+                  <span style={{ fontSize: 9, color: dow === 0 ? "var(--red)" : "var(--text-placeholder)", marginLeft: 3, fontWeight: dow === 0 ? 700 : 400 }}>{diasSemana[dow]}</span>
                 </div>
                 {rec?.fechado ? <span style={{ fontSize: 12 }}>✅</span> : rec?.rascunho ? <span style={{ fontSize: 10 }}>📝</span> : null}
               </div>
               {rec ? (
                 <div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: rec.fechado ? "#059669" : "#d97706", lineHeight: 1.2 }}>{fmt(rec.total)}</div>
-                  <div style={{ fontSize: 8, color: rec.rascunho && !rec.fechado ? "#d97706" : "#9ca3af", marginTop: 2 }}>{rec.rascunho && !rec.fechado ? "Rascunho" : fmt(rec.dinheiro)}</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: rec.fechado ? "var(--brand-strong)" : "var(--amber)", lineHeight: 1.2 }}>{fmt(rec.total)}</div>
+                  <div style={{ fontSize: 8, color: rec.rascunho && !rec.fechado ? "var(--amber)" : "var(--text-placeholder)", marginTop: 2 }}>{rec.rascunho && !rec.fechado ? "Rascunho" : fmt(rec.dinheiro)}</div>
                 </div>
               ) : (
-                <div style={{ fontSize: 9, color: "#0ea5e9", padding: "6px 0", fontWeight: 600 }}>+ Abrir</div>
+                <div style={{ fontSize: 9, color: "var(--blue)", padding: "6px 0", fontWeight: 600 }}>+ Abrir</div>
               )}
             </button>
           );
@@ -588,7 +588,7 @@ export default function FechamentoCaixaPage() {
                 const ativo = resumoCols.includes(c.key);
                 return (
                   <button key={c.key} type="button" onClick={() => toggleResumoCol(c.key)}
-                    style={{ padding: "3px 9px", borderRadius: 20, fontSize: 11, fontWeight: 600, cursor: "pointer", border: `1px solid ${ativo ? "#3b82f6" : "#e5e7eb"}`, background: ativo ? "#eff6ff" : "#f9fafb", color: ativo ? "#1d4ed8" : "#9ca3af", transition: "all 0.15s" }}>
+                    style={{ padding: "3px 9px", borderRadius: 20, fontSize: 11, fontWeight: 600, cursor: "pointer", border: `1px solid ${ativo ? "var(--blue)" : "var(--border)"}`, background: ativo ? "var(--blue-subtle)" : "var(--hover-bg)", color: ativo ? "var(--blue-strong)" : "var(--text-placeholder)", transition: "all 0.15s" }}>
                     {c.label}
                   </button>
                 );
@@ -598,10 +598,10 @@ export default function FechamentoCaixaPage() {
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead>
-                <tr style={{ background: "#f9fafb" }}>
-                  <th style={{ padding: "10px 14px", textAlign: "left", fontWeight: 700, color: "#6b7280", borderBottom: "1px solid #e5e7eb", whiteSpace: "nowrap" }}>Dia</th>
+                <tr style={{ background: "var(--hover-bg)" }}>
+                  <th style={{ padding: "10px 14px", textAlign: "left", fontWeight: 700, color: "var(--text-muted)", borderBottom: "1px solid var(--border)", whiteSpace: "nowrap" }}>Dia</th>
                   {resumoColsAtivas.map(c => (
-                    <th key={c.key} style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, color: "#6b7280", borderBottom: "1px solid #e5e7eb", whiteSpace: "nowrap" }}>{c.label}</th>
+                    <th key={c.key} style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, color: "var(--text-muted)", borderBottom: "1px solid var(--border)", whiteSpace: "nowrap" }}>{c.label}</th>
                   ))}
                 </tr>
               </thead>
@@ -610,18 +610,18 @@ export default function FechamentoCaixaPage() {
                   const dt = new Date(r.data + "T12:00:00");
                   const dow = dt.getDay();
                   return (
-                    <tr key={r.id} style={{ background: i % 2 === 0 ? "white" : "#fafafa", cursor: "pointer" }}
+                    <tr key={r.id} style={{ background: i % 2 === 0 ? "var(--surface)" : "var(--bg)", cursor: "pointer" }}
                       onClick={() => handleDayClick(r.data)}>
-                      <td style={{ padding: "9px 14px", borderBottom: "1px solid #f3f4f6", fontWeight: 600, whiteSpace: "nowrap" }}>
-                        <span style={{ color: dow === 0 ? "#dc2626" : "#374151" }}>
+                      <td style={{ padding: "9px 14px", borderBottom: "1px solid var(--border-subtle)", fontWeight: 600, whiteSpace: "nowrap" }}>
+                        <span style={{ color: dow === 0 ? "var(--red)" : "var(--text)" }}>
                           {dt.toLocaleDateString("pt-BR", { day: "2-digit", weekday: "short" })}
                         </span>
                       </td>
                       {resumoColsAtivas.map(c => {
                         const v = r[c.key as keyof CaixaDia] as number;
                         return (
-                          <td key={c.key} style={{ padding: "9px 12px", textAlign: "right", borderBottom: "1px solid #f3f4f6", color: c.key === "total" ? "#059669" : c.key === "sobras_faltas" ? (v >= 0 ? "#16a34a" : "#dc2626") : "#374151", fontWeight: c.key === "total" ? 700 : 400 }}>
-                            {v !== 0 ? fmt(v) : <span style={{ color: "#d1d5db" }}>—</span>}
+                          <td key={c.key} style={{ padding: "9px 12px", textAlign: "right", borderBottom: "1px solid var(--border-subtle)", color: c.key === "total" ? "var(--brand-strong)" : c.key === "sobras_faltas" ? (v >= 0 ? "var(--green)" : "var(--red)") : "var(--text)", fontWeight: c.key === "total" ? 700 : 400 }}>
+                            {v !== 0 ? fmt(v) : <span style={{ color: "var(--border-strong)" }}>—</span>}
                           </td>
                         );
                       })}
@@ -630,12 +630,12 @@ export default function FechamentoCaixaPage() {
                 })}
               </tbody>
               <tfoot>
-                <tr style={{ background: "#f0fdf4", borderTop: "2px solid #16a34a" }}>
-                  <td style={{ padding: "10px 14px", fontWeight: 700, color: "#16a34a", fontSize: 12 }}>TOTAL</td>
+                <tr style={{ background: "var(--green-subtle)", borderTop: "2px solid var(--green)" }}>
+                  <td style={{ padding: "10px 14px", fontWeight: 700, color: "var(--green)", fontSize: 12 }}>TOTAL</td>
                   {resumoColsAtivas.map(c => {
                     const total = registros.reduce((a, r) => a + ((r[c.key as keyof CaixaDia] as number) ?? 0), 0);
                     return (
-                      <td key={c.key} style={{ padding: "10px 12px", textAlign: "right", fontWeight: 800, color: "#16a34a" }}>
+                      <td key={c.key} style={{ padding: "10px 12px", textAlign: "right", fontWeight: 800, color: "var(--green)" }}>
                         {fmt(total)}
                       </td>
                     );

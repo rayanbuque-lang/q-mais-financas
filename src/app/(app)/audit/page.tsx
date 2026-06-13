@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
+import EmptyState from "@/components/empty-state";
 
 const tabelasRoutes: Record<string, string> = {
   movimentacoes: "/movimentacoes",
@@ -381,8 +382,9 @@ export default function AuditPage() {
       {loading ? (
         <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-12 text-center text-[var(--color-text-muted)] text-sm">Carregando...</div>
       ) : logsPagina.length === 0 ? (
-        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-12 text-center text-[var(--color-text-muted)] text-sm">
-          Nenhum registro encontrado.
+        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
+          <EmptyState variant="search" title="Nenhum registro encontrado"
+            description="Tente ajustar os filtros ou ampliar o período de busca." />
         </div>
       ) : (
         <div className="space-y-2">

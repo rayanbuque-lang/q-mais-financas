@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { registrarLog } from "@/lib/audit";
+import EmptyState from "@/components/empty-state";
 
 interface Recorrente {
   id: string;
@@ -392,7 +393,11 @@ export default function RecorrentesPage() {
 
       {/* Lista */}
       {recorrentes.length === 0 ? (
-        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-12 text-center text-[var(--color-text-muted)] text-sm">Nenhum lançamento recorrente.</div>
+        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
+          <EmptyState variant="recurring" title="Nenhum lançamento recorrente"
+            description="Configure assinaturas, mensalidades e despesas fixas para geração automática."
+            action={{ label: "Novo Recorrente", onClick: abrirNovo }} />
+        </div>
       ) : (
         <div className="space-y-3">
           {recorrentes.map((r) => (
