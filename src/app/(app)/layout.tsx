@@ -77,13 +77,18 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     async function loadProfile() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { router.push("/login"); return; }
-      const { data } = await supabase.from("profiles").select("*").eq("id", user.id).single();
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) { router.push("/login"); return; }
+      const { data } = await supabase.from("profiles").select("*").eq("id", session.user.id).single();
       if (data) setProfile(data as Profile);
       setLoading(false);
     }
     loadProfile();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_OUT") router.push("/login");
+    });
+    return () => subscription.unsubscribe();
   }, []);
 
   useEffect(() => { setSidebarOpen(false); }, [pathname]);
