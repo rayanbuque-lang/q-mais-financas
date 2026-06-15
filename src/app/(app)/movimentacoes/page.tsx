@@ -71,11 +71,14 @@ export default function MovimentacoesPage() {
   }
 
   async function salvarTemplate() {
-    if (!nomeTemplate.trim() || !categoriaId || !valor) return;
-    if (valor <= 0) return;
-    await supabase.from("movimentacao_templates").insert({ nome: nomeTemplate.trim(), tipo, valor, categoria_id: categoriaId, observacao });
+    if (!nomeTemplate.trim()) { setMensagem("Dê um nome ao template."); setTimeout(() => setMensagem(""), 3000); return; }
+    if (!categoriaId || !valor || valor <= 0) { setMensagem("Preencha o valor e a categoria antes de salvar o template."); setTimeout(() => setMensagem(""), 3000); return; }
+    const { error } = await supabase.from("movimentacao_templates").insert({ nome: nomeTemplate.trim(), tipo, valor, categoria_id: categoriaId, observacao });
+    if (error) { setMensagem("Erro ao salvar template: " + error.message); setTimeout(() => setMensagem(""), 4000); return; }
     setNomeTemplate("");
     setSalvandoTemplate(false);
+    setMensagem("⚡ Template salvo com sucesso!");
+    setTimeout(() => setMensagem(""), 3000);
     carregarTemplates();
   }
 
