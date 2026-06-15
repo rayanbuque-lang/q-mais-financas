@@ -90,6 +90,10 @@ export default function ContasPagarPage() {
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const [comprovanteUrl, setComprovanteUrl] = useState<string | null>(null);
 
+  // Filtros avançados
+  const [filtroCategoria, setFiltroCategoria] = useState("");
+  const [filtroBusca, setFiltroBusca] = useState("");
+
   const supabase = createClient();
 
   async function carregarDados() {
@@ -279,6 +283,19 @@ export default function ContasPagarPage() {
     else { setSelecionadas(new Set(pendentes.map((c) => c.id))); }
   }
 
+  function selecionarPorData(data: string) {
+    const ids = contasDoMes
+      .filter(c => c.status === "pendente" && c.data_vencimento === data)
+      .map(c => c.id);
+    setSelecionadas(prev => {
+      const todasJaSelecionadas = ids.every(id => prev.has(id));
+      const novo = new Set(prev);
+      if (todasJaSelecionadas) { ids.forEach(id => novo.delete(id)); }
+      else { ids.forEach(id => novo.add(id)); }
+      return novo;
+    });
+  }
+
   async function pagarLote() {
     if (selecionadas.size === 0) return;
     const contasSelecionadas = contas.filter((c) => selecionadas.has(c.id));
@@ -329,6 +346,8 @@ export default function ContasPagarPage() {
   const contasFiltradas = contasDoMes.filter(c => {
     if (filtroStatus === "pendentes" && c.status !== "pendente") return false;
     if (filtroStatus === "pagos" && c.status !== "pago") return false;
+    if (filtroCategoria && c.categoria_id !== filtroCategoria) return false;
+    if (filtroBusca && !c.fornecedor.toLowerCase().includes(filtroBusca.toLowerCase())) return false;
     return true;
   });
 
@@ -380,6 +399,21 @@ export default function ContasPagarPage() {
     return diff > 0 && diff <= 2;
   });
 
+  // Datas únicas com pendências (para seleção por data no lote)
+  const datasPendentesMes = [...new Set(
+    contasDoMes.filter(c => c.status === "pendente").map(c => c.data_vencimento)
+  )].sort();
+
+  // Projeção por categoria (pendentes)
+  const projecaoCategoria = categorias.map(cat => {
+    const total = contasDoMes.filter(c => c.status === "pendente" && c.categoria_id === cat.id).reduce((a, c) => a + c.valor, 0);
+    const qtd = contasDoMes.filter(c => c.status === "pendente" && c.categoria_id === cat.id).length;
+    return { ...cat, total, qtd };
+  }).filter(c => c.total > 0).sort((a, b) => b.total - a.total);
+
+  // Comprovantes em falta (pagas sem anexo)
+  const contasSemComprovante = contasDoMes.filter(c => c.status === "pago" && !c.comprovante_url).length;
+
   // Agrupamento para cronograma
   function agruparPorDia(lista: ContaPagar[]) {
     const mapa: Record<string, ContaPagar[]> = {};
@@ -427,12 +461,17 @@ export default function ContasPagarPage() {
                 </span>
                 {conta.descricao && <span className="text-xs text-[var(--color-text-muted)]">· {conta.descricao}</span>}
                 {conta.data_pagamento && <span className="text-xs text-emerald-600">· Pago {new Date(conta.data_pagamento + "T12:00:00").toLocaleDateString("pt-BR")}</span>}
-                {conta.comprovante_url && (
+                {conta.status === "pago" && conta.comprovante_url && (
                   <a href={conta.comprovante_url} target="_blank" rel="noopener noreferrer"
                     onClick={e => e.stopPropagation()}
-                    className="text-xs text-blue-500 hover:text-blue-700 hover:underline inline-flex items-center gap-0.5">
-                    📎 comprovante
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-50 text-blue-600 border border-blue-200 hover:bg-blue-100 transition">
+                    📎 Comprovante
                   </a>
+                )}
+                {conta.status === "pago" && !conta.comprovante_url && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-orange-50 text-orange-600 border border-orange-200">
+                    ⚠️ Sem comprovante
+                  </span>
                 )}
               </div>
             </div>
@@ -632,21 +671,35 @@ export default function ContasPagarPage() {
 
       {/* Barra de lote */}
       {modoLote && (
-        <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 flex items-center justify-between flex-wrap gap-3">
-          <div className="flex items-center gap-3">
-            <button onClick={selecionarTodasPendentes} className="px-3 py-2 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700 transition">
-              {selecionadas.size === contasDoMes.filter((c) => c.status === "pendente").length ? "Desmarcar Todas" : "Selecionar Todas Pendentes"}
-            </button>
-            <span className="text-sm text-blue-800 font-medium">
-              {selecionadas.size} selecionada{selecionadas.size !== 1 ? "s" : ""} — Total: {fmt(totalSelecionadoLote)}
+        <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 space-y-3">
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div className="flex items-center gap-2 flex-wrap">
+              <button onClick={selecionarTodasPendentes} className="px-3 py-2 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700 transition">
+                {selecionadas.size === contasDoMes.filter((c) => c.status === "pendente").length ? "Desmarcar Todas" : "Todas Pendentes"}
+              </button>
+              {datasPendentesMes.map(data => {
+                const d = new Date(data + "T12:00:00");
+                const label = `${diasSemana[d.getDay()]} ${d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })}`;
+                const idsData = contasDoMes.filter(c => c.status === "pendente" && c.data_vencimento === data).map(c => c.id);
+                const todasSel = idsData.every(id => selecionadas.has(id));
+                return (
+                  <button key={data} onClick={() => selecionarPorData(data)}
+                    className={`px-3 py-2 rounded-lg text-xs font-semibold transition border ${todasSel ? "bg-blue-700 text-white border-blue-700" : "bg-white text-blue-700 border-blue-300 hover:bg-blue-100"}`}>
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+            <span className="text-sm text-blue-800 font-semibold">
+              {selecionadas.size} selecionada{selecionadas.size !== 1 ? "s" : ""} · {fmt(totalSelecionadoLote)}
             </span>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 pt-1 border-t border-blue-200 flex-wrap">
             <div>
               <label className="block text-[10px] font-semibold text-blue-700 mb-1">DATA DO PAGAMENTO</label>
               <input type="date" value={loteDataPagamento} onChange={(e) => setLoteDataPagamento(e.target.value)} className="px-3 py-2 rounded-lg border border-blue-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
             </div>
-            <button onClick={pagarLote} disabled={selecionadas.size === 0 || loading} className="px-5 py-3 bg-emerald-600 text-white rounded-xl text-sm font-semibold hover:bg-emerald-700 transition disabled:opacity-40">
+            <button onClick={pagarLote} disabled={selecionadas.size === 0 || loading} className="px-5 py-3 bg-emerald-600 text-white rounded-xl text-sm font-semibold hover:bg-emerald-700 transition disabled:opacity-40 mt-4">
               💳 Pagar Selecionadas ({selecionadas.size})
             </button>
           </div>
@@ -720,12 +773,19 @@ export default function ContasPagarPage() {
         </div>
       </div>
 
-      {/* Barra de progresso */}
+      {/* Barra de progresso + alerta comprovantes */}
       {totalMes > 0 && (
         <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl px-5 py-4">
           <div className="flex items-center justify-between mb-2.5">
             <span className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Progresso de pagamento</span>
-            <span className="text-xs font-bold text-emerald-600">{percPago.toFixed(0)}% pago</span>
+            <div className="flex items-center gap-3">
+              {contasSemComprovante > 0 && (
+                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-orange-50 text-orange-600 border border-orange-200">
+                  ⚠️ {contasSemComprovante} sem comprovante
+                </span>
+              )}
+              <span className="text-xs font-bold text-emerald-600">{percPago.toFixed(0)}% pago</span>
+            </div>
           </div>
           <div className="h-2 rounded-full bg-[var(--color-bg)] overflow-hidden">
             <div
@@ -737,6 +797,37 @@ export default function ContasPagarPage() {
             <span className="text-xs text-[var(--color-text-muted)]">{fmt(totalPago)} pagos</span>
             <span className="text-xs text-[var(--color-text-muted)]">Total: {fmt(totalMes)}</span>
           </div>
+        </div>
+      )}
+
+      {/* Projeção por categoria */}
+      {projecaoCategoria.length > 0 && (
+        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl px-5 py-4">
+          <p className="text-xs font-bold uppercase tracking-widest text-[var(--color-text-muted)] mb-3">Pendente por categoria</p>
+          <div className="space-y-2">
+            {projecaoCategoria.map(cat => {
+              const perc = totalPendente > 0 ? (cat.total / totalPendente) * 100 : 0;
+              return (
+                <div key={cat.id}>
+                  <div className="flex items-center justify-between mb-1">
+                    <button onClick={() => setFiltroCategoria(filtroCategoria === cat.id ? "" : cat.id)}
+                      className={`text-xs font-medium transition ${filtroCategoria === cat.id ? "text-[var(--color-primary)] font-bold" : "text-[var(--color-text)] hover:text-[var(--color-primary)]"}`}>
+                      {cat.nome} <span className="text-[var(--color-text-muted)]">({cat.qtd})</span>
+                    </button>
+                    <span className="text-xs font-bold tabular-nums text-amber-600">{fmt(cat.total)} <span className="text-[var(--color-text-muted)] font-normal">{perc.toFixed(0)}%</span></span>
+                  </div>
+                  <div className="h-1.5 rounded-full bg-[var(--color-bg)] overflow-hidden">
+                    <div className="h-full rounded-full bg-amber-400 transition-all duration-500" style={{ width: `${perc}%` }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {filtroCategoria && (
+            <button onClick={() => setFiltroCategoria("")} className="mt-3 text-xs text-[var(--color-primary)] hover:underline">
+              ✕ Limpar filtro de categoria
+            </button>
+          )}
         </div>
       )}
 
@@ -784,28 +875,51 @@ export default function ContasPagarPage() {
         </div>
       )}
 
-      {/* Controles: filtro + view */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        {/* Filtro de status */}
-        <div className="flex gap-1 bg-[var(--color-bg)] rounded-xl p-1 border border-[var(--color-border)]">
+      {/* Barra de busca e filtros */}
+      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-3 flex items-center gap-3 flex-wrap">
+        <div className="relative flex-1 min-w-[160px]">
+          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] text-sm">🔍</span>
+          <input
+            type="text"
+            value={filtroBusca}
+            onChange={e => setFiltroBusca(e.target.value)}
+            placeholder="Buscar fornecedor..."
+            className="w-full pl-8 pr-3 py-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400"
+          />
+        </div>
+        <select
+          value={filtroCategoria}
+          onChange={e => setFiltroCategoria(e.target.value)}
+          className="px-3 py-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 min-w-[160px]"
+        >
+          <option value="">Todas as categorias</option>
+          {categorias.map(cat => <option key={cat.id} value={cat.id}>{cat.nome}</option>)}
+        </select>
+        {(filtroBusca || filtroCategoria) && (
+          <button onClick={() => { setFiltroBusca(""); setFiltroCategoria(""); }} className="px-3 py-2 rounded-xl text-xs font-semibold text-red-500 hover:bg-red-50 border border-red-200 transition">
+            ✕ Limpar
+          </button>
+        )}
+        <div className="flex gap-1 bg-[var(--color-bg)] rounded-xl p-1 border border-[var(--color-border)] ml-auto">
           {(["pendentes", "pagos", "todos"] as const).map(v => (
-            <button
-              key={v}
-              onClick={() => setFiltroStatus(v)}
-              className={`px-4 py-1.5 rounded-lg text-xs font-semibold capitalize transition ${filtroStatus === v ? "bg-[var(--color-surface)] shadow-sm text-[var(--color-text)]" : "text-[var(--color-text-muted)] hover:text-[var(--color-text)]"}`}
-            >
+            <button key={v} onClick={() => setFiltroStatus(v)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold capitalize transition ${filtroStatus === v ? "bg-[var(--color-surface)] shadow-sm text-[var(--color-text)]" : "text-[var(--color-text-muted)] hover:text-[var(--color-text)]"}`}>
               {v}
             </button>
           ))}
         </div>
-        {/* Seletor de visualização */}
+      </div>
+
+      {/* Seletor de visualização + contagem de resultados */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <p className="text-xs text-[var(--color-text-muted)]">
+          {contasFiltradas.length} {contasFiltradas.length === 1 ? "conta" : "contas"} · {fmt(contasFiltradas.reduce((a,c)=>a+c.valor,0))}
+          {(filtroBusca || filtroCategoria) && <span className="ml-2 text-amber-600 font-semibold">· filtrado</span>}
+        </p>
         <div className="flex gap-1 bg-[var(--color-bg)] rounded-xl p-1 border border-[var(--color-border)]">
           {(["lista", "semanal", "cronograma"] as const).map(v => (
-            <button
-              key={v}
-              onClick={() => setVisualizacao(v)}
-              className={`px-4 py-1.5 rounded-lg text-xs font-semibold capitalize transition ${visualizacao === v ? "bg-[var(--color-surface)] shadow-sm text-[var(--color-text)]" : "text-[var(--color-text-muted)] hover:text-[var(--color-text)]"}`}
-            >
+            <button key={v} onClick={() => setVisualizacao(v)}
+              className={`px-4 py-1.5 rounded-lg text-xs font-semibold capitalize transition ${visualizacao === v ? "bg-[var(--color-surface)] shadow-sm text-[var(--color-text)]" : "text-[var(--color-text-muted)] hover:text-[var(--color-text)]"}`}>
               {v === "lista" ? "Lista" : v === "semanal" ? "Semanal" : "Cronograma"}
             </button>
           ))}
