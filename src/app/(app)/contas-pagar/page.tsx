@@ -46,6 +46,7 @@ export default function ContasPagarPage() {
   const [categoriaId, setCategoriaId] = useState("");
   const [observacao, setObservacao] = useState("");
   const [statusInicial, setStatusInicial] = useState<"pendente" | "pago">("pendente");
+  const [statusOriginal, setStatusOriginal] = useState<"pendente" | "pago">("pendente");
   const [dataPagamento, setDataPagamento] = useState("");
 
   // Pagamento inline
@@ -181,13 +182,13 @@ export default function ContasPagarPage() {
 
 
   function resetarFormulario() {
-    setFornecedor(""); setDescricao(""); setValor(0); setDataVencimento(""); setCategoriaId(""); setObservacao(""); setStatusInicial("pendente"); setDataPagamento(""); setEditandoId(null); setComprovanteUrl(null);
+    setFornecedor(""); setDescricao(""); setValor(0); setDataVencimento(""); setCategoriaId(""); setObservacao(""); setStatusInicial("pendente"); setStatusOriginal("pendente"); setDataPagamento(""); setEditandoId(null); setComprovanteUrl(null);
   }
 
   function abrirNovo() { resetarFormulario(); if (categorias.length > 0) setCategoriaId(categorias[0].id); setShowForm(true); }
 
   function abrirEditar(conta: ContaPagar) {
-    setFornecedor(conta.fornecedor); setDescricao(conta.descricao || ""); setValor(conta.valor); setDataVencimento(conta.data_vencimento); setCategoriaId(conta.categoria_id || ""); setObservacao(conta.observacao || ""); setStatusInicial(conta.status as "pendente" | "pago"); setDataPagamento(conta.data_pagamento || ""); setComprovanteUrl(conta.comprovante_url ?? null); setEditandoId(conta.id); setShowForm(true);
+    setFornecedor(conta.fornecedor); setDescricao(conta.descricao || ""); setValor(conta.valor); setDataVencimento(conta.data_vencimento); setCategoriaId(conta.categoria_id || ""); setObservacao(conta.observacao || ""); setStatusInicial(conta.status as "pendente" | "pago"); setStatusOriginal(conta.status as "pendente" | "pago"); setDataPagamento(conta.data_pagamento || ""); setComprovanteUrl(conta.comprovante_url ?? null); setEditandoId(conta.id); setShowForm(true);
     setPagandoId(null);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -212,12 +213,20 @@ export default function ContasPagarPage() {
     if (editandoId) { const r = await supabase.from("contas_pagar").update(dados).eq("id", editandoId); error = r.error; }
     else { const r = await supabase.from("contas_pagar").insert(dados).select("id").single(); error = r.error; if (r.data) contaId = r.data.id; }
 
-    if (!error && statusInicial === "pago" && contaId && !editandoId) {
+    if (error) {
+      setMensagem("Erro ao salvar.");
+    } else if (statusInicial === "pago" && contaId && !editandoId) {
+      // Nova conta já cadastrada como paga → cria movimentação
       await supabase.from("movimentacoes").insert({ tipo: "saida", data: dados.data_pagamento as string, valor: valor, categoria_id: categoriaId, observacao: `Pagamento: ${fornecedor}${descricao ? ` - ${descricao}` : ""}`, revisar: false });
       await registrarLog({ acao: "criou", tabela: "contas_pagar", registroId: contaId, dadosNovos: dados, detalhes: `${fornecedor} - ${fmt(valor)}` });
-      setMensagem("Cadastrada como paga!");
-    } else if (error) { setMensagem("Erro ao salvar."); }
-    else {
+      setMensagem("Cadastrada como paga e lançada nas movimentações!");
+    } else if (editandoId && statusOriginal === "pendente" && statusInicial === "pago") {
+      // Edição mudou de pendente → pago → cria movimentação
+      const dataPag = dataPagamento || new Date().toISOString().split("T")[0];
+      await supabase.from("movimentacoes").insert({ tipo: "saida", data: dataPag, valor: valor, categoria_id: categoriaId, observacao: `Pagamento: ${fornecedor}${descricao ? ` - ${descricao}` : ""}`, revisar: false });
+      await registrarLog({ acao: "pagou", tabela: "contas_pagar", registroId: editandoId, dadosNovos: dados, detalhes: `${fornecedor} - ${fmt(valor)}` });
+      setMensagem("Paga e lançada nas movimentações!");
+    } else {
       await registrarLog({ acao: editandoId ? "editou" : "criou", tabela: "contas_pagar", registroId: contaId || undefined, dadosNovos: dados, detalhes: `${fornecedor} - ${fmt(valor)}` });
       setMensagem(editandoId ? "Atualizada!" : "Cadastrada!");
     }
