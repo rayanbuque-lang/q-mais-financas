@@ -94,6 +94,9 @@ export default function ContasPagarPage() {
   const [filtroCategoria, setFiltroCategoria] = useState("");
   const [filtroBusca, setFiltroBusca] = useState("");
 
+  // Calendário – dia selecionado para detalhe
+  const [diaSelecionado, setDiaSelecionado] = useState<number | null>(null);
+
   const supabase = createClient();
 
   async function carregarDados() {
@@ -117,7 +120,7 @@ export default function ContasPagarPage() {
     if (r2.data) setCategorias(r2.data);
   }
 
-  useEffect(() => { carregarDados(); gerarRecorrentes(); }, [mes, ano]);
+  useEffect(() => { carregarDados(); gerarRecorrentes(); setDiaSelecionado(null); }, [mes, ano]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -994,96 +997,197 @@ export default function ContasPagarPage() {
           const isHoje = dataStr === hojeStr;
           const isPassado = dataStr < hojeStr;
           const d = porDia[dia];
-          if (d.nPendente + d.nPago === 0) return { bg: "", border: "border-[var(--color-border)]", text: "text-[var(--color-text-muted)]", empty: true };
-          if (isHoje && d.nPendente > 0) return { bg: "bg-orange-50", border: "border-orange-300", text: "text-orange-800", empty: false };
-          if (isPassado && d.nPendente > 0) return { bg: "bg-red-50", border: "border-red-300", text: "text-red-700", empty: false };
-          if (d.nPendente > 0) return { bg: "bg-amber-50", border: "border-amber-200", text: "text-amber-800", empty: false };
-          return { bg: "bg-emerald-50", border: "border-emerald-200", text: "text-emerald-700", empty: false };
+          const isSel = diaSelecionado === dia;
+          if (d.nPendente + d.nPago === 0) return { bg: "bg-[var(--color-bg)]", border: "border-[var(--color-border)]", text: "text-[var(--color-text-muted)]", numText: "text-[var(--color-text-muted)] opacity-50", empty: true };
+          if (isSel) return { bg: "bg-blue-50", border: "border-blue-400 border-2", text: "text-blue-800", numText: "text-blue-900 font-extrabold", empty: false };
+          if (isHoje && d.nPendente > 0) return { bg: "bg-orange-50", border: "border-orange-300", text: "text-orange-800", numText: "text-orange-900 font-extrabold", empty: false };
+          if (isPassado && d.nPendente > 0) return { bg: "bg-red-50", border: "border-red-300", text: "text-red-700", numText: "text-red-900 font-extrabold", empty: false };
+          if (d.nPendente > 0) return { bg: "bg-amber-50", border: "border-amber-200", text: "text-amber-800", numText: "text-amber-900 font-bold", empty: false };
+          return { bg: "bg-emerald-50", border: "border-emerald-200", text: "text-emerald-700", numText: "text-emerald-900 font-bold", empty: false };
         }
 
-        function fmtK(v: number) {
-          if (v >= 1000) return `${(v / 1000).toFixed(1)}k`;
-          return v.toLocaleString("pt-BR", { maximumFractionDigits: 0 });
+        function fmtCal(v: number) {
+          if (v >= 1000) return `R$${(v / 1000).toFixed(1)}k`;
+          return `R$${v.toLocaleString("pt-BR", { maximumFractionDigits: 0 })}`;
         }
 
         const diasComContas = Object.values(porDia).filter(d => d.nPendente + d.nPago > 0).length;
 
+        // Detalhe do dia selecionado
+        const detalheDia = diaSelecionado ? (() => {
+          const dataStr = `${ano}-${String(mes).padStart(2,"0")}-${String(diaSelecionado).padStart(2,"0")}`;
+          const lista = contasDoMes.filter(c => c.data_vencimento === dataStr);
+          const d = new Date(dataStr + "T12:00:00");
+          const nomeDia = d.toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" });
+          const totalDia = lista.reduce((a, c) => a + c.valor, 0);
+          const pendentes = lista.filter(c => c.status === "pendente");
+          const pagos = lista.filter(c => c.status === "pago");
+          return { lista, nomeDia, totalDia, pendentes, pagos, dataStr };
+        })() : null;
+
         return (
-          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
-            <div className="px-5 py-3.5 border-b border-[var(--color-border)] flex items-center justify-between flex-wrap gap-2">
-              <div>
-                <p className="text-xs font-bold uppercase tracking-widest text-[var(--color-text-muted)]">Calendário {mesesNomes[mes - 1]} {ano}</p>
-                <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">Total por dia de vencimento</p>
+          <div className="space-y-3">
+            {/* Grade calendário */}
+            <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
+              <div className="px-5 py-4 border-b border-[var(--color-border)] flex items-center justify-between flex-wrap gap-3">
+                <div>
+                  <p className="text-sm font-bold text-[var(--color-text)]">Calendário {mesesNomes[mes - 1]} {ano}</p>
+                  <p className="text-xs text-[var(--color-text-muted)] mt-0.5">Clique em um dia para ver os detalhes</p>
+                </div>
+                <div className="flex items-center gap-4 flex-wrap">
+                  {[
+                    { color: "bg-red-200 border-red-300", label: "Vencida" },
+                    { color: "bg-orange-200 border-orange-300", label: "Hoje" },
+                    { color: "bg-amber-100 border-amber-300", label: "Pendente" },
+                    { color: "bg-emerald-100 border-emerald-300", label: "Pago" },
+                  ].map(({ color, label }) => (
+                    <div key={label} className="flex items-center gap-1.5">
+                      <div className={`w-3 h-3 rounded border ${color}`} />
+                      <span className="text-xs text-[var(--color-text-muted)] font-medium">{label}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
-              <div className="flex items-center gap-3 text-[10px] flex-wrap">
-                {[
-                  { bg: "bg-red-300", label: "Vencida" },
-                  { bg: "bg-orange-300", label: "Hoje" },
-                  { bg: "bg-amber-200", label: "Pendente" },
-                  { bg: "bg-emerald-200", label: "Pago" },
-                ].map(({ bg, label }) => (
-                  <div key={label} className="flex items-center gap-1.5">
-                    <div className={`w-2.5 h-2.5 rounded-sm ${bg}`} />
-                    <span className="text-[var(--color-text-muted)]">{label}</span>
+
+              <div className="p-4">
+                {/* Cabeçalho dias da semana */}
+                <div className="grid grid-cols-7 gap-2 mb-2">
+                  {DOW.map(d => (
+                    <div key={d} className="text-center text-xs font-bold text-[var(--color-text-muted)] uppercase py-1 tracking-wider">{d}</div>
+                  ))}
+                </div>
+
+                {/* Células dos dias */}
+                {semanas.map((semana, si) => (
+                  <div key={si} className="grid grid-cols-7 gap-2 mb-2">
+                    {semana.map((dia, di) => {
+                      if (!dia) return <div key={di} className="h-20 rounded-xl" />;
+                      const d = porDia[dia];
+                      const dataStr = `${ano}-${String(mes).padStart(2,"0")}-${String(dia).padStart(2,"0")}`;
+                      const isHoje = dataStr === hojeStr;
+                      const isSel = diaSelecionado === dia;
+                      const { bg, border, text, numText, empty } = getDayStyle(dia);
+                      const total = d.pendente + d.pago;
+                      return (
+                        <div key={di}
+                          onClick={() => !empty && setDiaSelecionado(isSel ? null : dia)}
+                          className={`h-20 rounded-xl border ${border} ${bg} p-2 flex flex-col transition-all select-none ${!empty ? "cursor-pointer hover:shadow-md hover:scale-[1.03]" : "cursor-default"} ${isHoje && !isSel ? "ring-2 ring-orange-400 ring-offset-1" : ""} ${isSel ? "shadow-md" : ""}`}
+                        >
+                          <span className={`text-sm leading-none ${numText}`}>{dia}</span>
+                          {!empty ? (
+                            <div className="mt-auto">
+                              <span className={`text-xs font-bold tabular-nums block leading-tight ${text}`}>
+                                {fmtCal(total)}
+                              </span>
+                              <div className="flex gap-1 mt-1 flex-wrap">
+                                {d.nPendente > 0 && (
+                                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-700 border border-amber-200 leading-none">
+                                    {d.nPendente}p
+                                  </span>
+                                )}
+                                {d.nPago > 0 && (
+                                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-md bg-emerald-100 text-emerald-700 border border-emerald-200 leading-none">
+                                    {d.nPago}✓
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-[var(--color-text-muted)] mt-auto opacity-40 font-medium">R$0</span>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 ))}
+
+                {/* Resumo rodapé */}
+                <div className="mt-4 pt-4 border-t border-[var(--color-border)] grid grid-cols-3 gap-4 text-center">
+                  <div>
+                    <p className="text-[10px] font-bold text-[var(--color-text-muted)] uppercase tracking-widest">Dias com contas</p>
+                    <p className="text-base font-bold mt-1">{diasComContas} de {diasNoMes}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-bold text-[var(--color-text-muted)] uppercase tracking-widest">Total pendente</p>
+                    <p className="text-base font-bold mt-1 text-amber-600">{fmt(totalPendente)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-bold text-[var(--color-text-muted)] uppercase tracking-widest">Total pago</p>
+                    <p className="text-base font-bold mt-1 text-emerald-600">{fmt(totalPago)}</p>
+                  </div>
+                </div>
               </div>
             </div>
 
-            <div className="p-4">
-              <div className="grid grid-cols-7 gap-1.5 mb-1.5">
-                {DOW.map(d => (
-                  <div key={d} className="text-center text-[9px] font-semibold text-[var(--color-text-muted)] uppercase py-1">{d}</div>
-                ))}
-              </div>
+            {/* Painel de detalhe do dia */}
+            {detalheDia && (
+              <div className="bg-[var(--color-surface)] border border-blue-200 rounded-2xl overflow-hidden shadow-sm">
+                <div className="px-5 py-4 border-b border-blue-100 flex items-center justify-between bg-blue-50">
+                  <div>
+                    <p className="text-sm font-bold capitalize text-blue-900">{detalheDia.nomeDia}</p>
+                    <p className="text-xs text-blue-600 mt-0.5">
+                      {detalheDia.lista.length} {detalheDia.lista.length === 1 ? "conta" : "contas"} · Total {fmt(detalheDia.totalDia)}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setDiaSelecionado(null)}
+                    className="w-8 h-8 rounded-lg hover:bg-blue-100 flex items-center justify-center text-blue-500 text-sm font-bold transition"
+                  >
+                    ✕
+                  </button>
+                </div>
 
-              {semanas.map((semana, si) => (
-                <div key={si} className="grid grid-cols-7 gap-1.5 mb-1.5">
-                  {semana.map((dia, di) => {
-                    if (!dia) return <div key={di} className="h-16 rounded-xl" />;
-                    const d = porDia[dia];
-                    const dataStr = `${ano}-${String(mes).padStart(2,"0")}-${String(dia).padStart(2,"0")}`;
-                    const isHoje = dataStr === hojeStr;
-                    const { bg, border, text, empty } = getDayStyle(dia);
-                    const total = d.pendente + d.pago;
+                <div className="divide-y divide-[var(--color-border)]">
+                  {detalheDia.lista.map(conta => {
+                    const urg = urgencia(conta.data_vencimento, conta.status);
+                    const badgeClass = urgenciaBadgeClass[urg.cor] || urgenciaBadgeClass.gray;
                     return (
-                      <div key={di}
-                        className={`h-16 rounded-xl border ${border} ${bg} p-1.5 flex flex-col transition-all ${!empty ? "hover:shadow-sm cursor-default" : "opacity-50"} ${isHoje ? "ring-2 ring-orange-400" : ""}`}
-                        title={!empty ? `${dia}/${mes}: ${d.nPendente > 0 ? `${d.nPendente} pendente(s) ${fmt(d.pendente)}` : ""} ${d.nPago > 0 ? `${d.nPago} pago(s) ${fmt(d.pago)}` : ""}`.trim() : `Dia ${dia} — Sem contas`}
+                      <div key={conta.id}
+                        className="flex items-center justify-between px-5 py-3.5 hover:bg-[var(--color-bg)] transition cursor-pointer"
+                        onClick={() => abrirEditar(conta)}
                       >
-                        <span className={`text-[10px] font-bold leading-none ${empty ? "text-[var(--color-text-muted)]" : text}`}>{dia}</span>
-                        {!empty ? (
-                          <>
-                            <span className={`text-[9px] font-bold mt-auto leading-tight tabular-nums ${text}`}>R${fmtK(total)}</span>
-                            <div className="flex gap-0.5 mt-0.5 flex-wrap">
-                              {d.nPendente > 0 && <span className="text-[7px] font-semibold px-1 py-0.5 rounded bg-amber-100 text-amber-700 leading-none">{d.nPendente}p</span>}
-                              {d.nPago > 0 && <span className="text-[7px] font-semibold px-1 py-0.5 rounded bg-emerald-100 text-emerald-700 leading-none">{d.nPago}✓</span>}
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold shrink-0 ${conta.status === "pago" ? "bg-emerald-100 text-emerald-600" : urg.cor === "red" ? "bg-red-50 text-red-500" : "bg-amber-50 text-amber-600"}`}>
+                            {conta.status === "pago" ? "✓" : urg.cor === "red" ? "!" : "·"}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-[var(--color-text)] truncate">{conta.fornecedor}</p>
+                            <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                              {conta.categoria_nome && conta.categoria_nome !== "Sem categoria" && (
+                                <span className="text-xs text-[var(--color-text-muted)]">{conta.categoria_nome}</span>
+                              )}
+                              {conta.descricao && <span className="text-xs text-[var(--color-text-muted)] truncate">· {conta.descricao}</span>}
                             </div>
-                          </>
-                        ) : (
-                          <span className="text-[8px] text-[var(--color-text-muted)] mt-auto opacity-50">R$0</span>
-                        )}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3 shrink-0">
+                          <span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold ${badgeClass}`}>{urg.label}</span>
+                          <span className={`text-sm font-bold tabular-nums ${conta.status === "pago" ? "text-emerald-600" : urg.cor === "red" ? "text-red-500" : "text-[var(--color-text)]"}`}>
+                            {fmt(conta.valor)}
+                          </span>
+                        </div>
                       </div>
                     );
                   })}
                 </div>
-              ))}
 
-              <div className="mt-3 pt-3 border-t border-[var(--color-border)] grid grid-cols-3 gap-3 text-center">
-                <div>
-                  <p className="text-[10px] text-[var(--color-text-muted)] uppercase tracking-wide">Dias com contas</p>
-                  <p className="text-sm font-bold mt-0.5">{diasComContas} de {diasNoMes}</p>
-                </div>
-                <div>
-                  <p className="text-[10px] text-[var(--color-text-muted)] uppercase tracking-wide">Total pendente</p>
-                  <p className="text-sm font-bold mt-0.5 text-amber-600">{fmt(totalPendente)}</p>
-                </div>
-                <div>
-                  <p className="text-[10px] text-[var(--color-text-muted)] uppercase tracking-wide">Total pago</p>
-                  <p className="text-sm font-bold mt-0.5 text-emerald-600">{fmt(totalPago)}</p>
+                <div className="px-5 py-3.5 border-t border-blue-100 bg-blue-50 flex items-center justify-between flex-wrap gap-3">
+                  <div className="flex gap-4 flex-wrap">
+                    {detalheDia.pendentes.length > 0 && (
+                      <span className="text-xs font-semibold text-amber-700">
+                        ⏳ {detalheDia.pendentes.length} pendente{detalheDia.pendentes.length > 1 ? "s" : ""} · {fmt(detalheDia.pendentes.reduce((a, c) => a + c.valor, 0))}
+                      </span>
+                    )}
+                    {detalheDia.pagos.length > 0 && (
+                      <span className="text-xs font-semibold text-emerald-700">
+                        ✓ {detalheDia.pagos.length} pago{detalheDia.pagos.length > 1 ? "s" : ""} · {fmt(detalheDia.pagos.reduce((a, c) => a + c.valor, 0))}
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-sm font-bold text-blue-900">Total: {fmt(detalheDia.totalDia)}</span>
                 </div>
               </div>
-            </div>
+            )}
           </div>
         );
       })()}
