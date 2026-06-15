@@ -26,6 +26,36 @@ interface Categoria { id: string; nome: string; }
 const diasSemana = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
 const mesesNomes = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
 
+function urgencia(dataVencimento: string, status: string) {
+  if (status === "pago") return { label: "Pago", dias: 0, cor: "green" };
+  const hoje = new Date(); hoje.setHours(0,0,0,0);
+  const venc = new Date(dataVencimento + "T00:00:00");
+  const diff = Math.ceil((venc.getTime() - hoje.getTime()) / (1000*60*60*24));
+  if (diff < 0) return { label: `${Math.abs(diff)}d atraso`, dias: diff, cor: "red" };
+  if (diff === 0) return { label: "Vence hoje", dias: 0, cor: "orange" };
+  if (diff === 1) return { label: "Amanhã", dias: 1, cor: "amber" };
+  if (diff <= 7) return { label: `${diff} dias`, dias: diff, cor: "yellow" };
+  return { label: `${diff} dias`, dias: diff, cor: "gray" };
+}
+
+const urgenciaBadgeClass: Record<string, string> = {
+  green:  "bg-emerald-100 text-emerald-700 border border-emerald-200",
+  red:    "bg-red-100 text-red-700 border border-red-200",
+  orange: "bg-orange-100 text-orange-700 border border-orange-200",
+  amber:  "bg-amber-100 text-amber-700 border border-amber-200",
+  yellow: "bg-yellow-100 text-yellow-700 border border-yellow-200",
+  gray:   "bg-gray-100 text-gray-600 border border-gray-200",
+};
+
+const urgenciaIconClass: Record<string, string> = {
+  green:  "bg-emerald-50 text-emerald-600",
+  red:    "bg-red-50 text-red-500",
+  orange: "bg-orange-50 text-orange-500",
+  amber:  "bg-amber-50 text-amber-500",
+  yellow: "bg-yellow-50 text-yellow-600",
+  gray:   "bg-gray-50 text-gray-500",
+};
+
 export default function ContasPagarPage() {
   const [contas, setContas] = useState<ContaPagar[]>([]);
   const [categorias, setCategorias] = useState<Categoria[]>([]);
@@ -34,7 +64,7 @@ export default function ContasPagarPage() {
   const [loading, setLoading] = useState(false);
   const [mensagem, setMensagem] = useState("");
   const [filtroStatus, setFiltroStatus] = useState<"pendentes" | "pagos" | "todos">("pendentes");
-  const [visualizacao, setVisualizacao] = useState<"semanal" | "lista">("lista");
+  const [visualizacao, setVisualizacao] = useState<"lista" | "semanal" | "cronograma">("lista");
   const [mes, setMes] = useState(new Date().getMonth() + 1);
   const [ano, setAno] = useState(new Date().getFullYear());
 
@@ -63,7 +93,6 @@ export default function ContasPagarPage() {
   const supabase = createClient();
 
   async function carregarDados() {
-    // Buscar todas as contas do ano
     const inicioAno = `${ano}-01-01`;
     const fimAno = `${ano}-12-31`;
 
@@ -129,7 +158,6 @@ export default function ContasPagarPage() {
     const ultimoDia = new Date(ano, mes, 0).getDate();
     const fim = `${ano}-${String(mes).padStart(2, "0")}-${String(ultimoDia).padStart(2, "0")}`;
 
-    // Buscar recorrentes ativos que são contas a pagar
     const { data: recorrentes } = await supabase
       .from("lancamentos_recorrentes")
       .select("*")
@@ -139,7 +167,6 @@ export default function ContasPagarPage() {
     if (!recorrentes || recorrentes.length === 0) return;
 
     for (const r of recorrentes) {
-      // Verificar se já existe
       const { data: existente } = await supabase
         .from("contas_pagar")
         .select("id")
@@ -151,7 +178,6 @@ export default function ContasPagarPage() {
 
       if (existente && existente.length > 0) continue;
 
-      // Verificar período
       const dataInicioR = new Date(r.data_inicio + "T12:00:00");
       const dataVenc = new Date(ano, mes - 1, r.dia_vencimento || 1);
       if (dataVenc < dataInicioR) continue;
@@ -161,7 +187,6 @@ export default function ContasPagarPage() {
       const dia = Math.min(r.dia_vencimento || 1, ultimoDia);
       const dataVencimento = `${ano}-${String(mes).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
 
-      // Criar conta a pagar
       await supabase.from("contas_pagar").insert({
         fornecedor: r.descricao,
         descricao: "Recorrente mensal",
@@ -172,14 +197,12 @@ export default function ContasPagarPage() {
         observacao: "Gerado automaticamente - Recorrente",
       });
 
-      // Atualizar parcelas
       await supabase
         .from("lancamentos_recorrentes")
         .update({ parcelas_geradas: (r.parcelas_geradas || 0) + 1 })
         .eq("id", r.id);
     }
   }
-
 
   function resetarFormulario() {
     setFornecedor(""); setDescricao(""); setValor(0); setDataVencimento(""); setCategoriaId(""); setObservacao(""); setStatusInicial("pendente"); setStatusOriginal("pendente"); setDataPagamento(""); setEditandoId(null); setComprovanteUrl(null);
@@ -216,12 +239,10 @@ export default function ContasPagarPage() {
     if (error) {
       setMensagem("Erro ao salvar.");
     } else if (statusInicial === "pago" && contaId && !editandoId) {
-      // Nova conta já cadastrada como paga → cria movimentação
       await supabase.from("movimentacoes").insert({ tipo: "saida", data: dados.data_pagamento as string, valor: valor, categoria_id: categoriaId, observacao: `Pagamento: ${fornecedor}${descricao ? ` - ${descricao}` : ""}`, revisar: false });
       await registrarLog({ acao: "criou", tabela: "contas_pagar", registroId: contaId, dadosNovos: dados, detalhes: `${fornecedor} - ${fmt(valor)}` });
       setMensagem("Cadastrada como paga e lançada nas movimentações!");
     } else if (editandoId && statusOriginal === "pendente" && statusInicial === "pago") {
-      // Edição mudou de pendente → pago → cria movimentação
       const dataPag = dataPagamento || new Date().toISOString().split("T")[0];
       await supabase.from("movimentacoes").insert({ tipo: "saida", data: dataPag, valor: valor, categoria_id: categoriaId, observacao: `Pagamento: ${fornecedor}${descricao ? ` - ${descricao}` : ""}`, revisar: false });
       await registrarLog({ acao: "pagou", tabela: "contas_pagar", registroId: editandoId, dadosNovos: dados, detalhes: `${fornecedor} - ${fmt(valor)}` });
@@ -335,51 +356,98 @@ export default function ContasPagarPage() {
   const semanas = agruparPorSemana(contasFiltradas);
   const totalSelecionadoLote = contas.filter((c) => selecionadas.has(c.id)).reduce((a, c) => a + c.valor, 0);
 
+  // KPI extras
+  const totalMes = totalPendente + totalPago;
+  const percPago = totalMes > 0 ? (totalPago / totalMes) * 100 : 0;
+  const hoje = new Date().toISOString().split("T")[0];
+  const contasHoje = contasDoMes.filter(c => c.status === "pendente" && c.data_vencimento === hoje);
+  const contas7dias = contasDoMes.filter(c => {
+    if (c.status !== "pendente") return false;
+    const agora = new Date(); agora.setHours(0,0,0,0);
+    const venc = new Date(c.data_vencimento + "T00:00:00");
+    const diff = Math.ceil((venc.getTime() - agora.getTime()) / (1000*60*60*24));
+    return diff >= 0 && diff <= 7;
+  });
+
+  // Banner contextual
+  const totalVencidas = contasVencidas.reduce((a, c) => a + c.valor, 0);
+  const totalHoje = contasHoje.reduce((a, c) => a + c.valor, 0);
+  const contas2dias = contasDoMes.filter(c => {
+    if (c.status !== "pendente") return false;
+    const agora = new Date(); agora.setHours(0,0,0,0);
+    const venc = new Date(c.data_vencimento + "T00:00:00");
+    const diff = Math.ceil((venc.getTime() - agora.getTime()) / (1000*60*60*24));
+    return diff > 0 && diff <= 2;
+  });
+
+  // Agrupamento para cronograma
+  function agruparPorDia(lista: ContaPagar[]) {
+    const mapa: Record<string, ContaPagar[]> = {};
+    for (const c of lista) {
+      if (!mapa[c.data_vencimento]) mapa[c.data_vencimento] = [];
+      mapa[c.data_vencimento].push(c);
+    }
+    return Object.entries(mapa).sort(([a], [b]) => a.localeCompare(b));
+  }
+
   function renderConta(conta: ContaPagar) {
-    const isVencida = conta.status === "pendente" && conta.data_vencimento < new Date().toISOString().split("T")[0];
+    const urg = urgencia(conta.data_vencimento, conta.status);
     const isPagando = pagandoId === conta.id;
+    const iconClass = urgenciaIconClass[urg.cor] || urgenciaIconClass.gray;
+    const badgeClass = urgenciaBadgeClass[urg.cor] || urgenciaBadgeClass.gray;
 
     return (
       <div key={conta.id} id={`conta-${conta.id}`}>
-        <div className={`p-4 flex items-center justify-between transition-all duration-300 ${
+        <div className={`px-4 py-3.5 flex items-center justify-between gap-3 transition-all duration-300 ${
           highlightId === conta.id
             ? "bg-yellow-50 ring-2 ring-inset ring-yellow-400"
             : `hover:bg-[var(--color-bg)] ${conta.status === "pago" ? "opacity-60" : ""}`
         }`}>
-          <div className="flex items-center gap-3 min-w-0">
+          <div className="flex items-center gap-3 min-w-0 flex-1">
             {modoLote && conta.status === "pendente" && (
               <input type="checkbox" checked={selecionadas.has(conta.id)} onChange={() => toggleSelecionada(conta.id)} className="w-4 h-4 rounded accent-emerald-600 shrink-0" />
             )}
-            <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-sm shrink-0 ${conta.status === "pago" ? "bg-emerald-50 text-emerald-600" : isVencida ? "bg-red-50 text-red-500" : "bg-amber-50 text-amber-600"}`}>
-              {conta.status === "pago" ? "✓" : "⏳"}
+            {/* Ícone de status */}
+            <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold shrink-0 ${iconClass}`}>
+              {conta.status === "pago" ? "✓" : urg.cor === "red" ? "!" : "·"}
             </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <p className="text-sm font-semibold truncate">{conta.fornecedor}</p>
-                {isVencida && <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-[10px] font-bold shrink-0">VENCIDA</span>}
+            {/* Conteúdo */}
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm font-semibold truncate">{conta.fornecedor}</span>
+                <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold shrink-0 ${badgeClass}`}>{urg.label}</span>
+                {conta.categoria_nome && conta.categoria_nome !== "Sem categoria" && (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-[var(--color-bg)] text-[var(--color-text-muted)] border border-[var(--color-border)] shrink-0">{conta.categoria_nome}</span>
+                )}
               </div>
-              <p className="text-xs text-[var(--color-text-muted)]">
-                Vence: {new Date(conta.data_vencimento + "T12:00:00").toLocaleDateString("pt-BR")} ({diasSemana[new Date(conta.data_vencimento + "T12:00:00").getDay()]})
-                {conta.descricao && ` · ${conta.descricao}`}
-                {conta.data_pagamento && ` · Pago em ${new Date(conta.data_pagamento + "T12:00:00").toLocaleDateString("pt-BR")}`}
+              <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                <span className="text-xs text-[var(--color-text-muted)]">
+                  {diasSemana[new Date(conta.data_vencimento + "T12:00:00").getDay()]}{" "}
+                  {new Date(conta.data_vencimento + "T12:00:00").toLocaleDateString("pt-BR")}
+                </span>
+                {conta.descricao && <span className="text-xs text-[var(--color-text-muted)]">· {conta.descricao}</span>}
+                {conta.data_pagamento && <span className="text-xs text-emerald-600">· Pago {new Date(conta.data_pagamento + "T12:00:00").toLocaleDateString("pt-BR")}</span>}
                 {conta.comprovante_url && (
                   <a href={conta.comprovante_url} target="_blank" rel="noopener noreferrer"
                     onClick={e => e.stopPropagation()}
-                    className="ml-1 inline-flex items-center gap-0.5 text-blue-500 hover:text-blue-700 hover:underline">
+                    className="text-xs text-blue-500 hover:text-blue-700 hover:underline inline-flex items-center gap-0.5">
                     📎 comprovante
                   </a>
                 )}
-              </p>
+              </div>
             </div>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <span className="font-bold text-sm text-red-500">{fmt(conta.valor)}</span>
+          {/* Valor e ações */}
+          <div className="flex items-center gap-3 shrink-0">
+            <span className={`font-bold text-sm tabular-nums ${conta.status === "pago" ? "text-emerald-600" : urg.cor === "red" ? "text-red-500" : "text-[var(--color-text)]"}`}>
+              {fmt(conta.valor)}
+            </span>
             <div className="flex gap-0.5">
               {conta.status === "pendente" && (
                 <button onClick={() => iniciarPagamento(conta)} title="Marcar como pago" className="p-1.5 rounded-lg hover:bg-emerald-50 text-emerald-500 transition text-sm">💳</button>
               )}
               {conta.status === "pago" && (
-                <button onClick={() => desfazerPagamento(conta)} title="Desfazer" className="p-1.5 rounded-lg hover:bg-amber-50 text-amber-500 transition text-sm">↩️</button>
+                <button onClick={() => desfazerPagamento(conta)} title="Desfazer pagamento" className="p-1.5 rounded-lg hover:bg-amber-50 text-amber-500 transition text-sm">↩️</button>
               )}
               <button onClick={() => abrirEditar(conta)} title="Editar" className="p-1.5 rounded-lg hover:bg-blue-50 text-[var(--color-text-muted)] hover:text-blue-600 transition text-sm">✏️</button>
               <button onClick={() => handleExcluir(conta.id)} title="Excluir" className="p-1.5 rounded-lg hover:bg-red-50 text-[var(--color-text-muted)] hover:text-red-500 transition text-sm">🗑️</button>
@@ -401,23 +469,165 @@ export default function ContasPagarPage() {
     );
   }
 
+  function renderContaCompacta(conta: ContaPagar) {
+    const urg = urgencia(conta.data_vencimento, conta.status);
+    const badgeClass = urgenciaBadgeClass[urg.cor] || urgenciaBadgeClass.gray;
+    const isPagando = pagandoId === conta.id;
+
+    return (
+      <div key={conta.id} id={`conta-${conta.id}`}>
+        <div className={`flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg transition-all ${
+          highlightId === conta.id ? "bg-yellow-50 ring-1 ring-yellow-400" : "hover:bg-[var(--color-bg)]"
+        } ${conta.status === "pago" ? "opacity-60" : ""}`}>
+          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+            {modoLote && conta.status === "pendente" && (
+              <input type="checkbox" checked={selecionadas.has(conta.id)} onChange={() => toggleSelecionada(conta.id)} className="w-4 h-4 rounded accent-emerald-600 shrink-0" />
+            )}
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-sm font-medium truncate">{conta.fornecedor}</span>
+                <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-semibold shrink-0 ${badgeClass}`}>{urg.label}</span>
+                {conta.categoria_nome && conta.categoria_nome !== "Sem categoria" && (
+                  <span className="px-1.5 py-0.5 rounded-full text-[9px] font-medium bg-[var(--color-bg)] text-[var(--color-text-muted)] border border-[var(--color-border)] shrink-0">{conta.categoria_nome}</span>
+                )}
+              </div>
+              {conta.descricao && <p className="text-xs text-[var(--color-text-muted)] truncate mt-0.5">{conta.descricao}</p>}
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <span className={`text-sm font-bold tabular-nums ${conta.status === "pago" ? "text-emerald-600" : urg.cor === "red" ? "text-red-500" : "text-[var(--color-text)]"}`}>
+              {fmt(conta.valor)}
+            </span>
+            <div className="flex gap-0.5">
+              {conta.status === "pendente" && (
+                <button onClick={() => iniciarPagamento(conta)} title="Pagar" className="p-1 rounded-lg hover:bg-emerald-50 text-emerald-500 transition text-xs">💳</button>
+              )}
+              {conta.status === "pago" && (
+                <button onClick={() => desfazerPagamento(conta)} title="Desfazer" className="p-1 rounded-lg hover:bg-amber-50 text-amber-500 transition text-xs">↩️</button>
+              )}
+              <button onClick={() => abrirEditar(conta)} title="Editar" className="p-1 rounded-lg hover:bg-blue-50 text-[var(--color-text-muted)] hover:text-blue-600 transition text-xs">✏️</button>
+              <button onClick={() => handleExcluir(conta.id)} title="Excluir" className="p-1 rounded-lg hover:bg-red-50 text-[var(--color-text-muted)] hover:text-red-500 transition text-xs">🗑️</button>
+            </div>
+          </div>
+        </div>
+        {isPagando && (
+          <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-3 mx-1 mb-1 flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-semibold text-emerald-800">📅 Data:</span>
+            <input type="date" value={dataPagamentoInline} onChange={(e) => setDataPagamentoInline(e.target.value)} className="px-2 py-1.5 rounded-lg border border-emerald-300 bg-white text-xs focus:outline-none focus:ring-2 focus:ring-emerald-400" />
+            <button onClick={() => confirmarPagamento(conta)} disabled={loading} className="px-4 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-semibold hover:bg-emerald-700 transition disabled:opacity-50">
+              {loading ? "..." : "✓ Confirmar"}
+            </button>
+            <button onClick={() => setPagandoId(null)} className="px-3 py-1.5 bg-white text-gray-500 rounded-lg text-xs font-medium border border-gray-300 hover:bg-gray-50 transition">Cancelar</button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function renderCronograma() {
+    const grupos = agruparPorDia(contasFiltradas);
+    const agoraStr = new Date().toISOString().split("T")[0];
+
+    if (grupos.length === 0) {
+      return (
+        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
+          <EmptyState variant="accounts" title={`Sem contas em ${mesesNomes[mes - 1]}/${ano}`} description="Nenhuma conta a pagar registrada neste mês." compact />
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-3">
+        {grupos.map(([data, lista]) => {
+          const dataObj = new Date(data + "T12:00:00");
+          const diaSem = diasSemana[dataObj.getDay()];
+          const dataFmt = dataObj.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
+          const totalDia = lista.reduce((a, c) => a + c.valor, 0);
+          const temPendente = lista.some(c => c.status === "pendente");
+          const isPassado = data < agoraStr && temPendente;
+          const isHoje = data === agoraStr;
+
+          let headerBg = "bg-[var(--color-bg)]";
+          let headerText = "text-[var(--color-text)]";
+          let headerBorder = "border-[var(--color-border)]";
+          let dayLabel: string | null = null;
+
+          if (isPassado) {
+            headerBg = "bg-red-50";
+            headerText = "text-red-700";
+            headerBorder = "border-red-200";
+            dayLabel = "VENCIDO";
+          } else if (isHoje) {
+            headerBg = "bg-orange-50";
+            headerText = "text-orange-700";
+            headerBorder = "border-orange-200";
+            dayLabel = "HOJE";
+          }
+
+          return (
+            <div key={data} className={`border rounded-2xl overflow-hidden ${headerBorder}`}>
+              {/* Header do dia */}
+              <div className={`px-4 py-3 flex items-center justify-between ${headerBg} border-b ${headerBorder}`}>
+                <div className="flex items-center gap-2.5">
+                  <span className={`text-sm font-bold ${headerText}`}>{diaSem} {dataFmt}</span>
+                  {dayLabel && (
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                      isPassado ? "bg-red-100 text-red-700 border border-red-200" : "bg-orange-100 text-orange-700 border border-orange-200"
+                    }`}>
+                      {isPassado ? "⚠️ " : "📅 "}{dayLabel}
+                    </span>
+                  )}
+                  <span className={`text-xs font-medium ${headerText} opacity-70`}>{lista.length} {lista.length === 1 ? "conta" : "contas"}</span>
+                </div>
+                <span className={`text-sm font-bold tabular-nums ${headerText}`}>{fmt(totalDia)}</span>
+              </div>
+              {/* Lista de contas do dia */}
+              <div className="bg-[var(--color-surface)] divide-y divide-[var(--color-border)] px-2 py-1">
+                {lista.map(c => renderContaCompacta(c))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
+      {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-4">
-        <div><h1 className="text-2xl font-bold tracking-tight">Contas a Pagar</h1><p className="text-[var(--color-text-muted)] text-sm mt-1">Boletos, fornecedores e compromissos</p></div>
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Contas a Pagar</h1>
+          <p className="text-[var(--color-text-muted)] text-sm mt-0.5">Boletos, fornecedores e compromissos</p>
+        </div>
         <div className="flex gap-2 flex-wrap">
-          <button onClick={() => { setModoLote(!modoLote); setSelecionadas(new Set()); }} className={`px-4 py-3 font-semibold rounded-xl transition-all text-sm ${modoLote ? "bg-blue-600 text-white shadow-md" : "bg-[var(--color-surface)] border border-[var(--color-border)] text-[var(--color-text-muted)]"}`}>
+          <button
+            onClick={() => { setModoLote(!modoLote); setSelecionadas(new Set()); }}
+            className={`px-4 py-2.5 font-semibold rounded-xl transition-all text-sm border ${modoLote ? "bg-blue-600 text-white border-blue-600 shadow-md" : "bg-[var(--color-surface)] border-[var(--color-border)] text-[var(--color-text-muted)] hover:border-blue-400 hover:text-blue-600"}`}
+          >
             ☑️ {modoLote ? "Sair do Lote" : "Selecionar Lote"}
           </button>
-          <button onClick={abrirNovo} className="px-5 py-3 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white font-semibold rounded-xl hover:from-emerald-700 hover:to-emerald-600 transition-all text-sm shadow-md shadow-emerald-200">+ Nova Conta</button>
+          <button
+            onClick={abrirNovo}
+            className="px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white font-semibold rounded-xl hover:from-emerald-700 hover:to-emerald-600 transition-all text-sm shadow-md shadow-emerald-200"
+          >
+            + Nova Conta
+          </button>
         </div>
       </div>
 
       {/* Seletor de mês */}
-      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-4 flex items-center justify-between">
-        <button onClick={mesAnterior} className="px-4 py-2 rounded-xl bg-[var(--color-bg)] text-sm font-medium hover:bg-[var(--color-border)] transition">← Anterior</button>
-        <div className="text-center"><p className="font-bold capitalize">{mesesNomes[mes - 1]}</p><p className="text-sm text-[var(--color-text-muted)]">{ano}</p></div>
-        <button onClick={mesProximo} className="px-4 py-2 rounded-xl bg-[var(--color-bg)] text-sm font-medium hover:bg-[var(--color-border)] transition">Próximo →</button>
+      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-3 flex items-center justify-between gap-3">
+        <button onClick={mesAnterior} className="px-4 py-2 rounded-xl bg-[var(--color-bg)] text-sm font-medium hover:bg-[var(--color-border)] transition flex items-center gap-1">
+          ← <span className="hidden sm:inline">Anterior</span>
+        </button>
+        <div className="text-center">
+          <p className="font-bold capitalize text-base">{mesesNomes[mes - 1]}</p>
+          <p className="text-xs text-[var(--color-text-muted)]">{ano}</p>
+        </div>
+        <button onClick={mesProximo} className="px-4 py-2 rounded-xl bg-[var(--color-bg)] text-sm font-medium hover:bg-[var(--color-border)] transition flex items-center gap-1">
+          <span className="hidden sm:inline">Próximo</span> →
+        </button>
       </div>
 
       {/* Barra de lote */}
@@ -443,26 +653,99 @@ export default function ContasPagarPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {[{l:"Pendente",v:fmt(totalPendente),c:"text-amber-600"},{l:"Pago",v:fmt(totalPago),c:"text-emerald-600"},{l:"Vencidas",v:`${contasVencidas.length}`,c:"text-red-500"},{l:"Total",v:fmt(totalPendente+totalPago),c:"text-[var(--color-text)]"}].map(c=>(
-          <div key={c.l} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl p-4 text-center"><p className="text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1">{c.l}</p><p className={`font-bold ${c.c}`}>{c.v}</p></div>
-        ))}
-      </div>
-
+      {/* Banner de alerta inteligente */}
       {contasVencidas.length > 0 && (
-        <div className="bg-red-50 border border-red-200 rounded-2xl p-4 flex items-center gap-3">
-          <span className="text-xl">🚨</span>
-          <p className="text-sm font-medium text-red-800">{contasVencidas.length} {contasVencidas.length === 1 ? "conta vencida" : "contas vencidas"}! Total: {fmt(contasVencidas.reduce((a, c) => a + c.valor, 0))}</p>
+        <div className="rounded-2xl p-4 flex items-center gap-3 border" style={{ background: "rgba(239,68,68,0.06)", borderColor: "rgba(239,68,68,0.25)" }}>
+          <span className="text-lg shrink-0">🚨</span>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-red-800">
+              {contasVencidas.length} {contasVencidas.length === 1 ? "conta vencida" : "contas vencidas"} · Total: {fmt(totalVencidas)}
+            </p>
+            <p className="text-xs text-red-600 mt-0.5">Regularize para evitar juros e multas</p>
+          </div>
+        </div>
+      )}
+      {contasVencidas.length === 0 && contasHoje.length > 0 && (
+        <div className="rounded-2xl p-4 flex items-center gap-3 border" style={{ background: "rgba(249,115,22,0.06)", borderColor: "rgba(249,115,22,0.25)" }}>
+          <span className="text-lg shrink-0">⏰</span>
+          <p className="text-sm font-semibold text-orange-800">
+            {contasHoje.length} {contasHoje.length === 1 ? "conta vence" : "contas vencem"} HOJE · Total: {fmt(totalHoje)}
+          </p>
+        </div>
+      )}
+      {contasVencidas.length === 0 && contasHoje.length === 0 && contas2dias.length > 0 && (
+        <div className="rounded-2xl p-4 flex items-center gap-3 border" style={{ background: "rgba(234,179,8,0.06)", borderColor: "rgba(234,179,8,0.25)" }}>
+          <span className="text-lg shrink-0">📅</span>
+          <p className="text-sm font-semibold text-yellow-800">
+            {contas2dias.length} {contas2dias.length === 1 ? "conta vence" : "contas vencem"} em até 2 dias · Total: {fmt(contas2dias.reduce((a, c) => a + c.valor, 0))}
+          </p>
         </div>
       )}
 
-      {mensagem && <div className={`p-3 rounded-xl text-sm font-medium text-center ${mensagem.includes("Erro") || mensagem.includes("Não é possível") ? "bg-red-50 text-red-600" : "bg-emerald-50 text-emerald-700"}`}>{mensagem}</div>}
+      {/* Mensagem de feedback */}
+      {mensagem && (
+        <div className={`p-3 rounded-xl text-sm font-medium text-center ${mensagem.includes("Erro") || mensagem.includes("Não é possível") ? "bg-red-50 text-red-600 border border-red-200" : "bg-emerald-50 text-emerald-700 border border-emerald-200"}`}>
+          {mensagem}
+        </div>
+      )}
 
+      {/* KPI Cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {/* Pendente */}
+        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-4">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-[var(--color-text-muted)] mb-2">Pendente</p>
+          <p className="text-xl font-bold text-amber-600 tabular-nums leading-none">{fmt(totalPendente)}</p>
+          <p className="text-xs text-[var(--color-text-muted)] mt-1.5">{contasDoMes.filter(c => c.status === "pendente").length} contas</p>
+        </div>
+        {/* Pago */}
+        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-4">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-[var(--color-text-muted)] mb-2">Pago ✓</p>
+          <p className="text-xl font-bold text-emerald-600 tabular-nums leading-none">{fmt(totalPago)}</p>
+          <p className="text-xs text-[var(--color-text-muted)] mt-1.5">{percPago.toFixed(0)}% do mês</p>
+        </div>
+        {/* Vencidas */}
+        <div className={`border rounded-2xl p-4 ${contasVencidas.length > 0 ? "bg-red-50 border-red-200" : "bg-[var(--color-surface)] border-[var(--color-border)]"}`}>
+          <p className={`text-[10px] font-bold uppercase tracking-widest mb-2 ${contasVencidas.length > 0 ? "text-red-500" : "text-[var(--color-text-muted)]"}`}>Vencidas 🔴</p>
+          <p className={`text-xl font-bold tabular-nums leading-none ${contasVencidas.length > 0 ? "text-red-600" : "text-[var(--color-text-muted)]"}`}>{contasVencidas.length} contas</p>
+          {contasVencidas.length > 0 && <p className="text-xs text-red-500 mt-1.5">{fmt(totalVencidas)}</p>}
+          {contasVencidas.length === 0 && <p className="text-xs text-[var(--color-text-muted)] mt-1.5">Tudo em dia</p>}
+        </div>
+        {/* Próximos 7 dias */}
+        <div className={`border rounded-2xl p-4 ${contas7dias.length > 0 ? "bg-amber-50 border-amber-200" : "bg-[var(--color-surface)] border-[var(--color-border)]"}`}>
+          <p className={`text-[10px] font-bold uppercase tracking-widest mb-2 ${contas7dias.length > 0 ? "text-amber-600" : "text-[var(--color-text-muted)]"}`}>7 dias ⚠️</p>
+          <p className={`text-xl font-bold tabular-nums leading-none ${contas7dias.length > 0 ? "text-amber-700" : "text-[var(--color-text-muted)]"}`}>
+            {fmt(contas7dias.reduce((a, c) => a + c.valor, 0))}
+          </p>
+          <p className={`text-xs mt-1.5 ${contas7dias.length > 0 ? "text-amber-600" : "text-[var(--color-text-muted)]"}`}>{contas7dias.length} contas</p>
+        </div>
+      </div>
+
+      {/* Barra de progresso */}
+      {totalMes > 0 && (
+        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl px-5 py-4">
+          <div className="flex items-center justify-between mb-2.5">
+            <span className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Progresso de pagamento</span>
+            <span className="text-xs font-bold text-emerald-600">{percPago.toFixed(0)}% pago</span>
+          </div>
+          <div className="h-2 rounded-full bg-[var(--color-bg)] overflow-hidden">
+            <div
+              className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-700"
+              style={{ width: `${Math.min(percPago, 100)}%` }}
+            />
+          </div>
+          <div className="flex items-center justify-between mt-2">
+            <span className="text-xs text-[var(--color-text-muted)]">{fmt(totalPago)} pagos</span>
+            <span className="text-xs text-[var(--color-text-muted)]">Total: {fmt(totalMes)}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Formulário */}
       {showForm && (
         <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-6 shadow-sm">
           <div className="flex items-center justify-between mb-5">
-            <h2 className="font-bold">{editandoId ? "Editar" : "Nova"} Conta a Pagar</h2>
-            <button onClick={() => { setShowForm(false); resetarFormulario(); }} className="w-8 h-8 rounded-lg hover:bg-[var(--color-bg)] flex items-center justify-center text-[var(--color-text-muted)]">✕</button>
+            <h2 className="font-bold text-base">{editandoId ? "Editar" : "Nova"} Conta a Pagar</h2>
+            <button onClick={() => { setShowForm(false); resetarFormulario(); }} className="w-8 h-8 rounded-lg hover:bg-[var(--color-bg)] flex items-center justify-center text-[var(--color-text-muted)] transition">✕</button>
           </div>
           <form onSubmit={handleSalvar} className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -501,18 +784,35 @@ export default function ContasPagarPage() {
         </div>
       )}
 
+      {/* Controles: filtro + view */}
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <div className="flex gap-1 bg-[var(--color-bg)] rounded-xl p-1">
+        {/* Filtro de status */}
+        <div className="flex gap-1 bg-[var(--color-bg)] rounded-xl p-1 border border-[var(--color-border)]">
           {(["pendentes", "pagos", "todos"] as const).map(v => (
-            <button key={v} onClick={() => setFiltroStatus(v)} className={`px-4 py-2 rounded-lg text-xs font-medium capitalize transition ${filtroStatus === v ? "bg-[var(--color-surface)] shadow-sm" : "text-[var(--color-text-muted)]"}`}>{v}</button>
+            <button
+              key={v}
+              onClick={() => setFiltroStatus(v)}
+              className={`px-4 py-1.5 rounded-lg text-xs font-semibold capitalize transition ${filtroStatus === v ? "bg-[var(--color-surface)] shadow-sm text-[var(--color-text)]" : "text-[var(--color-text-muted)] hover:text-[var(--color-text)]"}`}
+            >
+              {v}
+            </button>
           ))}
         </div>
-        <div className="flex gap-1 bg-[var(--color-bg)] rounded-xl p-1">
-          <button onClick={() => setVisualizacao("semanal")} className={`px-4 py-2 rounded-lg text-xs font-medium transition ${visualizacao === "semanal" ? "bg-[var(--color-surface)] shadow-sm" : "text-[var(--color-text-muted)]"}`}>Semanal</button>
-          <button onClick={() => setVisualizacao("lista")} className={`px-4 py-2 rounded-lg text-xs font-medium transition ${visualizacao === "lista" ? "bg-[var(--color-surface)] shadow-sm" : "text-[var(--color-text-muted)]"}`}>Lista</button>
+        {/* Seletor de visualização */}
+        <div className="flex gap-1 bg-[var(--color-bg)] rounded-xl p-1 border border-[var(--color-border)]">
+          {(["lista", "semanal", "cronograma"] as const).map(v => (
+            <button
+              key={v}
+              onClick={() => setVisualizacao(v)}
+              className={`px-4 py-1.5 rounded-lg text-xs font-semibold capitalize transition ${visualizacao === v ? "bg-[var(--color-surface)] shadow-sm text-[var(--color-text)]" : "text-[var(--color-text-muted)] hover:text-[var(--color-text)]"}`}
+            >
+              {v === "lista" ? "Lista" : v === "semanal" ? "Semanal" : "Cronograma"}
+            </button>
+          ))}
         </div>
       </div>
 
+      {/* View: Semanal */}
       {visualizacao === "semanal" && (
         <div className="space-y-4">
           {semanas.length === 0 ? (
@@ -522,9 +822,9 @@ export default function ContasPagarPage() {
           ) : (
             semanas.map((semana, i) => (
               <div key={i} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
-                <div className={`p-4 border-b border-[var(--color-border)] flex items-center justify-between ${semana.label.includes("Vencidas") ? "bg-red-50" : "bg-[var(--color-bg)]"}`}>
-                  <h3 className="font-bold text-sm">{semana.label}</h3>
-                  <span className={`text-sm font-bold ${semana.label.includes("Vencidas") ? "text-red-500" : "text-[var(--color-text)]"}`}>{fmt(semana.total)}</span>
+                <div className={`px-4 py-3 border-b border-[var(--color-border)] flex items-center justify-between ${semana.label.includes("Vencidas") ? "bg-red-50" : "bg-[var(--color-bg)]"}`}>
+                  <h3 className={`font-bold text-sm ${semana.label.includes("Vencidas") ? "text-red-700" : "text-[var(--color-text)]"}`}>{semana.label}</h3>
+                  <span className={`text-sm font-bold tabular-nums ${semana.label.includes("Vencidas") ? "text-red-500" : "text-[var(--color-text)]"}`}>{fmt(semana.total)}</span>
                 </div>
                 <div className="divide-y divide-[var(--color-border)]">{semana.contas.map(c => renderConta(c))}</div>
               </div>
@@ -533,6 +833,7 @@ export default function ContasPagarPage() {
         </div>
       )}
 
+      {/* View: Lista */}
       {visualizacao === "lista" && (
         <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
           {contasFiltradas.length === 0 ? (
@@ -542,6 +843,9 @@ export default function ContasPagarPage() {
           )}
         </div>
       )}
+
+      {/* View: Cronograma */}
+      {visualizacao === "cronograma" && renderCronograma()}
     </div>
   );
 }
