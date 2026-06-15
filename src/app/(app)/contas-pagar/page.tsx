@@ -960,6 +960,133 @@ export default function ContasPagarPage() {
 
       {/* View: Cronograma */}
       {visualizacao === "cronograma" && renderCronograma()}
+
+      {/* Calendário Mensal de Valores por Dia */}
+      {(() => {
+        const priDiaSem = new Date(ano, mes - 1, 1).getDay();
+        const diasNoMes = new Date(ano, mes, 0).getDate();
+        const offset = priDiaSem === 0 ? 6 : priDiaSem - 1;
+        const hojeStr = new Date().toISOString().split("T")[0];
+
+        const porDia: Record<number, { pendente: number; pago: number; nPendente: number; nPago: number }> = {};
+        for (let d = 1; d <= diasNoMes; d++) {
+          const dataStr = `${ano}-${String(mes).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+          const lista = contasDoMes.filter(c => c.data_vencimento === dataStr);
+          porDia[d] = {
+            pendente: lista.filter(c => c.status === "pendente").reduce((a, c) => a + c.valor, 0),
+            pago: lista.filter(c => c.status === "pago").reduce((a, c) => a + c.valor, 0),
+            nPendente: lista.filter(c => c.status === "pendente").length,
+            nPago: lista.filter(c => c.status === "pago").length,
+          };
+        }
+
+        const cells: (number | null)[] = [];
+        for (let i = 0; i < offset; i++) cells.push(null);
+        for (let d = 1; d <= diasNoMes; d++) cells.push(d);
+        while (cells.length % 7 !== 0) cells.push(null);
+        const semanas: (number | null)[][] = [];
+        for (let i = 0; i < cells.length; i += 7) semanas.push(cells.slice(i, i + 7));
+
+        const DOW = ["Seg","Ter","Qua","Qui","Sex","Sáb","Dom"];
+
+        function getDayStyle(dia: number) {
+          const dataStr = `${ano}-${String(mes).padStart(2,"0")}-${String(dia).padStart(2,"0")}`;
+          const isHoje = dataStr === hojeStr;
+          const isPassado = dataStr < hojeStr;
+          const d = porDia[dia];
+          if (d.nPendente + d.nPago === 0) return { bg: "", border: "border-[var(--color-border)]", text: "text-[var(--color-text-muted)]", empty: true };
+          if (isHoje && d.nPendente > 0) return { bg: "bg-orange-50", border: "border-orange-300", text: "text-orange-800", empty: false };
+          if (isPassado && d.nPendente > 0) return { bg: "bg-red-50", border: "border-red-300", text: "text-red-700", empty: false };
+          if (d.nPendente > 0) return { bg: "bg-amber-50", border: "border-amber-200", text: "text-amber-800", empty: false };
+          return { bg: "bg-emerald-50", border: "border-emerald-200", text: "text-emerald-700", empty: false };
+        }
+
+        function fmtK(v: number) {
+          if (v >= 1000) return `${(v / 1000).toFixed(1)}k`;
+          return v.toLocaleString("pt-BR", { maximumFractionDigits: 0 });
+        }
+
+        const diasComContas = Object.values(porDia).filter(d => d.nPendente + d.nPago > 0).length;
+
+        return (
+          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
+            <div className="px-5 py-3.5 border-b border-[var(--color-border)] flex items-center justify-between flex-wrap gap-2">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-widest text-[var(--color-text-muted)]">Calendário {mesesNomes[mes - 1]} {ano}</p>
+                <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">Total por dia de vencimento</p>
+              </div>
+              <div className="flex items-center gap-3 text-[10px] flex-wrap">
+                {[
+                  { bg: "bg-red-300", label: "Vencida" },
+                  { bg: "bg-orange-300", label: "Hoje" },
+                  { bg: "bg-amber-200", label: "Pendente" },
+                  { bg: "bg-emerald-200", label: "Pago" },
+                ].map(({ bg, label }) => (
+                  <div key={label} className="flex items-center gap-1.5">
+                    <div className={`w-2.5 h-2.5 rounded-sm ${bg}`} />
+                    <span className="text-[var(--color-text-muted)]">{label}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="p-4">
+              <div className="grid grid-cols-7 gap-1.5 mb-1.5">
+                {DOW.map(d => (
+                  <div key={d} className="text-center text-[9px] font-semibold text-[var(--color-text-muted)] uppercase py-1">{d}</div>
+                ))}
+              </div>
+
+              {semanas.map((semana, si) => (
+                <div key={si} className="grid grid-cols-7 gap-1.5 mb-1.5">
+                  {semana.map((dia, di) => {
+                    if (!dia) return <div key={di} className="h-16 rounded-xl" />;
+                    const d = porDia[dia];
+                    const dataStr = `${ano}-${String(mes).padStart(2,"0")}-${String(dia).padStart(2,"0")}`;
+                    const isHoje = dataStr === hojeStr;
+                    const { bg, border, text, empty } = getDayStyle(dia);
+                    const total = d.pendente + d.pago;
+                    return (
+                      <div key={di}
+                        className={`h-16 rounded-xl border ${border} ${bg} p-1.5 flex flex-col transition-all ${!empty ? "hover:shadow-sm cursor-default" : "opacity-50"} ${isHoje ? "ring-2 ring-orange-400" : ""}`}
+                        title={!empty ? `${dia}/${mes}: ${d.nPendente > 0 ? `${d.nPendente} pendente(s) ${fmt(d.pendente)}` : ""} ${d.nPago > 0 ? `${d.nPago} pago(s) ${fmt(d.pago)}` : ""}`.trim() : `Dia ${dia} — Sem contas`}
+                      >
+                        <span className={`text-[10px] font-bold leading-none ${empty ? "text-[var(--color-text-muted)]" : text}`}>{dia}</span>
+                        {!empty ? (
+                          <>
+                            <span className={`text-[9px] font-bold mt-auto leading-tight tabular-nums ${text}`}>R${fmtK(total)}</span>
+                            <div className="flex gap-0.5 mt-0.5 flex-wrap">
+                              {d.nPendente > 0 && <span className="text-[7px] font-semibold px-1 py-0.5 rounded bg-amber-100 text-amber-700 leading-none">{d.nPendente}p</span>}
+                              {d.nPago > 0 && <span className="text-[7px] font-semibold px-1 py-0.5 rounded bg-emerald-100 text-emerald-700 leading-none">{d.nPago}✓</span>}
+                            </div>
+                          </>
+                        ) : (
+                          <span className="text-[8px] text-[var(--color-text-muted)] mt-auto opacity-50">R$0</span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
+
+              <div className="mt-3 pt-3 border-t border-[var(--color-border)] grid grid-cols-3 gap-3 text-center">
+                <div>
+                  <p className="text-[10px] text-[var(--color-text-muted)] uppercase tracking-wide">Dias com contas</p>
+                  <p className="text-sm font-bold mt-0.5">{diasComContas} de {diasNoMes}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-[var(--color-text-muted)] uppercase tracking-wide">Total pendente</p>
+                  <p className="text-sm font-bold mt-0.5 text-amber-600">{fmt(totalPendente)}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-[var(--color-text-muted)] uppercase tracking-wide">Total pago</p>
+                  <p className="text-sm font-bold mt-0.5 text-emerald-600">{fmt(totalPago)}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
