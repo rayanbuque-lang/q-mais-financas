@@ -110,17 +110,16 @@ export default function ContasPagarPage() {
       supabase.from("contas_pagar").select("*").gte("data_vencimento", inicioAno).lte("data_vencimento", fimAno).order("data_vencimento", { ascending: true }),
       supabase.from("categorias_saida").select("*").eq("ativo", true).order("nome"),
     ]);
+    if (r2.data) setCategorias(r2.data);
+
     if (r1.data) {
-      const lista = await Promise.all(r1.data.map(async (conta) => {
-        if (conta.categoria_id) {
-          const { data: cat } = await supabase.from("categorias_saida").select("nome").eq("id", conta.categoria_id).single();
-          return { ...conta, categoria_nome: cat?.nome || "Sem categoria" };
-        }
-        return { ...conta, categoria_nome: "Sem categoria" };
+      const catMap = Object.fromEntries((r2.data || []).map(c => [c.id, c.nome]));
+      const lista = r1.data.map(conta => ({
+        ...conta,
+        categoria_nome: conta.categoria_id ? (catMap[conta.categoria_id] || "Sem categoria") : "Sem categoria",
       }));
       setContas(lista);
     }
-    if (r2.data) setCategorias(r2.data);
   }
 
   useEffect(() => { carregarDados(); gerarRecorrentes(); setDiaSelecionado(null); }, [mes, ano]);
