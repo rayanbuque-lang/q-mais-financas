@@ -97,6 +97,9 @@ export default function ContasPagarPage() {
   // Calendário – dia selecionado para detalhe
   const [diaSelecionado, setDiaSelecionado] = useState<number | null>(null);
 
+  // Lista colapsável
+  const [listaExpandida, setListaExpandida] = useState(true);
+
   const supabase = createClient();
 
   async function carregarDados() {
@@ -913,15 +916,23 @@ export default function ContasPagarPage() {
         </div>
       </div>
 
-      {/* Seletor de visualização + contagem de resultados */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <p className="text-xs text-[var(--color-text-muted)]">
-          {contasFiltradas.length} {contasFiltradas.length === 1 ? "conta" : "contas"} · {fmt(contasFiltradas.reduce((a,c)=>a+c.valor,0))}
-          {(filtroBusca || filtroCategoria) && <span className="ml-2 text-amber-600 font-semibold">· filtrado</span>}
-        </p>
+      {/* Seletor de visualização + contagem + toggle colapso */}
+      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl px-4 py-2.5 flex items-center justify-between flex-wrap gap-3">
+        <button
+          onClick={() => setListaExpandida(v => !v)}
+          className="flex items-center gap-2 text-sm font-semibold text-[var(--color-text)] hover:text-[var(--color-primary)] transition select-none"
+        >
+          <span className={`transition-transform duration-200 text-xs ${listaExpandida ? "rotate-90" : ""}`}>▶</span>
+          {contasFiltradas.length} {contasFiltradas.length === 1 ? "conta" : "contas"}
+          <span className="text-[var(--color-text-muted)] font-normal">· {fmt(contasFiltradas.reduce((a,c)=>a+c.valor,0))}</span>
+          {(filtroBusca || filtroCategoria) && <span className="text-amber-600 font-semibold text-xs">filtrado</span>}
+          <span className="text-xs font-normal text-[var(--color-text-muted)] ml-1">
+            {listaExpandida ? "Ocultar lista" : "Mostrar lista"}
+          </span>
+        </button>
         <div className="flex gap-1 bg-[var(--color-bg)] rounded-xl p-1 border border-[var(--color-border)]">
           {(["lista", "semanal", "cronograma"] as const).map(v => (
-            <button key={v} onClick={() => setVisualizacao(v)}
+            <button key={v} onClick={() => { setVisualizacao(v); setListaExpandida(true); }}
               className={`px-4 py-1.5 rounded-lg text-xs font-semibold capitalize transition ${visualizacao === v ? "bg-[var(--color-surface)] shadow-sm text-[var(--color-text)]" : "text-[var(--color-text-muted)] hover:text-[var(--color-text)]"}`}>
               {v === "lista" ? "Lista" : v === "semanal" ? "Semanal" : "Cronograma"}
             </button>
@@ -929,40 +940,45 @@ export default function ContasPagarPage() {
         </div>
       </div>
 
-      {/* View: Semanal */}
-      {visualizacao === "semanal" && (
-        <div className="space-y-4">
-          {semanas.length === 0 ? (
-            <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
-              <EmptyState variant="accounts" title={`Sem contas em ${mesesNomes[mes - 1]}/${ano}`} description="Nenhuma conta a pagar registrada neste mês." />
-            </div>
-          ) : (
-            semanas.map((semana, i) => (
-              <div key={i} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
-                <div className={`px-4 py-3 border-b border-[var(--color-border)] flex items-center justify-between ${semana.label.includes("Vencidas") ? "bg-red-50" : "bg-[var(--color-bg)]"}`}>
-                  <h3 className={`font-bold text-sm ${semana.label.includes("Vencidas") ? "text-red-700" : "text-[var(--color-text)]"}`}>{semana.label}</h3>
-                  <span className={`text-sm font-bold tabular-nums ${semana.label.includes("Vencidas") ? "text-red-500" : "text-[var(--color-text)]"}`}>{fmt(semana.total)}</span>
+      {/* Views – colapsáveis */}
+      {listaExpandida && (
+        <>
+          {/* View: Semanal */}
+          {visualizacao === "semanal" && (
+            <div className="space-y-4">
+              {semanas.length === 0 ? (
+                <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
+                  <EmptyState variant="accounts" title={`Sem contas em ${mesesNomes[mes - 1]}/${ano}`} description="Nenhuma conta a pagar registrada neste mês." />
                 </div>
-                <div className="divide-y divide-[var(--color-border)]">{semana.contas.map(c => renderConta(c))}</div>
-              </div>
-            ))
+              ) : (
+                semanas.map((semana, i) => (
+                  <div key={i} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
+                    <div className={`px-4 py-3 border-b border-[var(--color-border)] flex items-center justify-between ${semana.label.includes("Vencidas") ? "bg-red-50" : "bg-[var(--color-bg)]"}`}>
+                      <h3 className={`font-bold text-sm ${semana.label.includes("Vencidas") ? "text-red-700" : "text-[var(--color-text)]"}`}>{semana.label}</h3>
+                      <span className={`text-sm font-bold tabular-nums ${semana.label.includes("Vencidas") ? "text-red-500" : "text-[var(--color-text)]"}`}>{fmt(semana.total)}</span>
+                    </div>
+                    <div className="divide-y divide-[var(--color-border)]">{semana.contas.map(c => renderConta(c))}</div>
+                  </div>
+                ))
+              )}
+            </div>
           )}
-        </div>
-      )}
 
-      {/* View: Lista */}
-      {visualizacao === "lista" && (
-        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
-          {contasFiltradas.length === 0 ? (
-            <EmptyState variant="accounts" title={`Sem contas em ${mesesNomes[mes - 1]}/${ano}`} description="Nenhuma conta a pagar registrada neste mês." compact />
-          ) : (
-            <div className="divide-y divide-[var(--color-border)]">{contasFiltradas.map(c => renderConta(c))}</div>
+          {/* View: Lista */}
+          {visualizacao === "lista" && (
+            <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
+              {contasFiltradas.length === 0 ? (
+                <EmptyState variant="accounts" title={`Sem contas em ${mesesNomes[mes - 1]}/${ano}`} description="Nenhuma conta a pagar registrada neste mês." compact />
+              ) : (
+                <div className="divide-y divide-[var(--color-border)]">{contasFiltradas.map(c => renderConta(c))}</div>
+              )}
+            </div>
           )}
-        </div>
-      )}
 
-      {/* View: Cronograma */}
-      {visualizacao === "cronograma" && renderCronograma()}
+          {/* View: Cronograma */}
+          {visualizacao === "cronograma" && renderCronograma()}
+        </>
+      )}
 
       {/* Calendário Mensal de Valores por Dia */}
       {(() => {
