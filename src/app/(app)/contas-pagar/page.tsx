@@ -1031,7 +1031,7 @@ export default function ContasPagarPage() {
         // Detalhe do dia selecionado
         const detalheDia = diaSelecionado ? (() => {
           const dataStr = `${ano}-${String(mes).padStart(2,"0")}-${String(diaSelecionado).padStart(2,"0")}`;
-          const lista = contasDoMes.filter(c => c.data_vencimento === dataStr);
+          const lista = contasDoMes.filter(c => c.data_vencimento === dataStr).sort((a, b) => b.valor - a.valor);
           const d = new Date(dataStr + "T12:00:00");
           const nomeDia = d.toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" });
           const totalDia = lista.reduce((a, c) => a + c.valor, 0);
