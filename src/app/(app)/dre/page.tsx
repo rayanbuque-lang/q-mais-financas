@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 
 interface Movimentacao {
@@ -22,7 +23,7 @@ function calcTotais(movs: Movimentacao[]) {
 }
 
 function fmt(v: number) { return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }); }
-function pct(v: number, t: number) { return t === 0 ? "0%" : ((v / t) * 100).toFixed(1) + "%"; }
+function pct(v: number, t: number) { return t === 0 ? "—" : ((v / t) * 100).toFixed(1) + "%"; }
 
 function getPeriodo(mes: number, ano: number) {
   const inicio = `${ano}-${String(mes + 1).padStart(2, "0")}-01`;
@@ -42,22 +43,24 @@ export default function DrePage() {
   const [todasCats, setTodasCats] = useState<Categoria[]>([]);
   const [metasCat, setMetasCat] = useState<Meta[]>([]);
   const [fechamentosMes, setFechamentosMes] = useState<FechamentoResumo[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadingComparativo, setLoadingComparativo] = useState(false);
+  const [erro, setErro] = useState("");
 
   const supabase = createClient();
 
   async function carregarDados() {
+    setLoading(true); setErro("");
     const { inicio, fim } = getPeriodo(mes, ano);
 
     let mesAnt = mes - 1, anoAnt = ano;
     if (mesAnt < 0) { mesAnt = 11; anoAnt = ano - 1; }
     const { inicio: inicioAnt, fim: fimAnt } = getPeriodo(mesAnt, anoAnt);
-    const { inicio: inicioAP, fim: fimAP } = getPeriodo(mes, ano - 1);
 
     const mesSup = mes + 1;
-    const [r1, r2, r3, r4, r5, r6, r7] = await Promise.all([
+    const [r1, r2, r4, r5, r6, r7] = await Promise.all([
       supabase.from("movimentacoes").select("*").gte("data", inicio).lte("data", fim),
       supabase.from("movimentacoes").select("*").gte("data", inicioAnt).lte("data", fimAnt),
-      supabase.from("movimentacoes").select("*").gte("data", inicioAP).lte("data", fimAP),
       supabase.from("categorias_entrada").select("id,nome").eq("ativo", true),
       supabase.from("categorias_saida").select("id,nome").eq("ativo", true),
       supabase.from("metas").select("categoria_id,valor_meta").eq("tipo", "despesa_categoria").eq("mes", mesSup).eq("ano", ano),
@@ -67,19 +70,36 @@ export default function DrePage() {
       supabase.from("fechamento_caixa").select("valor_total_vendas,dinheiro").eq("fechado", true).gte("data", inicio).lte("data", fim),
     ]);
 
+    const erros = [r1.error, r2.error, r4.error, r5.error, r6.error, r7.error].filter(Boolean);
+    if (erros.length > 0) setErro("Não foi possível carregar todos os dados do período. Os números abaixo podem estar incompletos.");
+
     if (r1.data) setMovAtual(r1.data);
     if (r2.data) setMovAnterior(r2.data);
-    if (r3.data) setMovMesmoAnoPassado(r3.data);
     if (r6.data) setMetasCat(r6.data as Meta[]);
     if (r7.data) setFechamentosMes(r7.data as FechamentoResumo[]);
     const cats: Categoria[] = [...(r4.data || []), ...(r5.data || [])];
     setTodasCats(cats);
+    setLoading(false);
+  }
+
+  // "Mesmo mês do ano anterior" só é usado no modo Comparativo — busca
+  // sob demanda em vez de sempre, para não gastar uma consulta sem uso
+  // quando a tela está em Mês Único.
+  async function carregarAnoPassado() {
+    setLoadingComparativo(true);
+    const { inicio: inicioAP, fim: fimAP } = getPeriodo(mes, ano - 1);
+    const { data, error } = await supabase.from("movimentacoes").select("*").gte("data", inicioAP).lte("data", fimAP);
+    if (error) setErro("Não foi possível carregar os dados do mesmo mês do ano anterior.");
+    if (data) setMovMesmoAnoPassado(data);
+    setLoadingComparativo(false);
   }
 
   useEffect(() => { carregarDados(); }, [mes, ano]);
+  useEffect(() => { if (modo === "comparativo") carregarAnoPassado(); }, [modo, mes, ano]);
 
+  const catMap = useMemo(() => new Map(todasCats.map(c => [c.id, c.nome])), [todasCats]);
   function getNomeCategoria(id: string): string {
-    return todasCats.find(c => c.id === id)?.nome || "Sem categoria";
+    return catMap.get(id) || "Sem categoria";
   }
 
   function mesAnteriorNav() { if (mes === 0) { setMes(11); setAno(ano - 1); } else setMes(mes - 1); }
@@ -171,10 +191,33 @@ export default function DrePage() {
       {/* Navegação de mês */}
       <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-4 flex items-center justify-between">
         <button onClick={mesAnteriorNav} className="px-4 py-2 rounded-xl bg-[var(--color-bg)] text-sm font-medium hover:bg-[var(--color-border)] transition">← Anterior</button>
-        <div className="text-center"><p className="font-semibold text-lg capitalize">{meses[mes]}</p><p className="text-sm text-[var(--color-text-muted)]">{ano}</p></div>
+        <div className="text-center">
+          <p className="font-semibold text-lg capitalize">{meses[mes]}</p>
+          <p className="text-sm text-[var(--color-text-muted)]">{ano}</p>
+        </div>
         <button onClick={mesProximoNav} className="px-4 py-2 rounded-xl bg-[var(--color-bg)] text-sm font-medium hover:bg-[var(--color-border)] transition">Próximo →</button>
       </div>
 
+      {/* Erro de carregamento — apenas leitura/aviso, não bloqueia a tela */}
+      {erro && (
+        <div className="rounded-2xl p-3 border bg-red-50 border-red-200 flex items-center gap-2.5">
+          <span className="text-sm">⚠️</span>
+          <p className="text-xs text-red-700 font-medium">{erro}</p>
+        </div>
+      )}
+
+      {/* Skeleton de carregamento inicial */}
+      {loading ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {[0, 1, 2, 3].map(i => (
+            <div key={i} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-5 animate-pulse">
+              <div className="h-3 w-20 rounded bg-[var(--color-bg)]" />
+              <div className="h-6 w-28 rounded bg-[var(--color-bg)] mt-3" />
+            </div>
+          ))}
+        </div>
+      ) : (
+      <>
       {/* Alerta (apenas leitura): vendas do Fechamento de Caixa ainda não lançadas
           manualmente em Movimentações. Não lança nem altera nada — só avisa. */}
       {vendasBrutasFechamento > 0 && naoDinheiroEsperado > 0 && (
@@ -210,14 +253,21 @@ export default function DrePage() {
         <>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {[
-              { l: "Receita Total", v: fmt(totalEntradas), c: "text-[var(--color-primary)]" },
-              { l: "Despesas Totais", v: fmt(totalSaidas), c: "text-[var(--color-danger)]" },
-              { l: "Resultado", v: fmt(resultado), c: resultado >= 0 ? "text-[var(--color-primary)]" : "text-[var(--color-danger)]" },
-              { l: "Margem", v: `${margem.toFixed(1)}%`, c: margem >= 0 ? "text-[var(--color-primary)]" : "text-[var(--color-danger)]" },
+              { l: "Receita Total", icon: "📈", v: fmt(totalEntradas), c: "text-emerald-600", atual: totalEntradas, ant: colAnterior.entradas, inverso: false },
+              { l: "Despesas Totais", icon: "📉", v: fmt(totalSaidas), c: "text-red-500", atual: totalSaidas, ant: colAnterior.saidas, inverso: true },
+              { l: "Resultado", icon: "💰", v: fmt(resultado), c: resultado >= 0 ? "text-emerald-600" : "text-red-500", atual: resultado, ant: colAnterior.resultado, inverso: false },
+              { l: "Margem", icon: "🎯", v: `${margem.toFixed(1)}%`, c: margem >= 0 ? "text-emerald-600" : "text-red-500", atual: margem, ant: colAnterior.margem, inverso: false },
             ].map(c => (
               <div key={c.l} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-5">
-                <p className="text-sm text-[var(--color-text-muted)]">{c.l}</p>
+                <div className="flex items-center justify-between">
+                  <p className="text-sm text-[var(--color-text-muted)]">{c.l}</p>
+                  <span className="text-base">{c.icon}</span>
+                </div>
                 <p className={`text-xl font-bold mt-1 ${c.c}`}>{c.v}</p>
+                <div className="mt-1.5">
+                  <VarBadge atual={c.atual} base={c.ant} inverso={c.inverso} />
+                  <span className="text-[10px] text-[var(--color-text-muted)] ml-1.5">vs mês anterior</span>
+                </div>
               </div>
             ))}
           </div>
@@ -293,6 +343,16 @@ export default function DrePage() {
                     <span className="text-sm font-bold">Total Despesas</span>
                     <span className="text-sm font-bold text-red-500">{fmt(totalSaidas)}</span>
                   </div>
+                  {metasCat.length === 0 && (
+                    <div className="px-4 py-3 text-center">
+                      <p className="text-xs text-[var(--color-text-muted)]">
+                        Defina metas por categoria para acompanhar % do orçamento aqui.{" "}
+                        <Link href="/metas" className="text-[var(--color-primary)] font-semibold hover:underline">
+                          Ir para Metas →
+                        </Link>
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -311,8 +371,16 @@ export default function DrePage() {
       {/* ===== MODO COMPARATIVO ===== */}
       {modo === "comparativo" && (
         <div className="space-y-4">
-          {/* Cabeçalho colunas */}
-          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
+          {loadingComparativo && (
+            <p className="text-xs text-[var(--color-text-muted)] flex items-center gap-2">
+              <span className="w-3 h-3 border-2 border-[var(--color-border)] border-t-[var(--color-primary)] rounded-full animate-spin inline-block" />
+              Carregando mesmo período do ano anterior...
+            </p>
+          )}
+          {/* Cabeçalho colunas — overflow-x-auto + largura mínima preserva o
+              layout de desktop e evita que as colunas fiquem espremidas no mobile */}
+          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-x-auto">
+            <div className="min-w-[640px]">
             <div className="grid grid-cols-4 border-b border-[var(--color-border)] bg-[var(--color-bg)]">
               <div className="p-4 text-xs font-bold uppercase tracking-wider text-[var(--color-text-muted)]">Indicador</div>
               <div className="p-4 text-center">
@@ -356,6 +424,7 @@ export default function DrePage() {
                 </div>
               </div>
             ))}
+            </div>
           </div>
 
           {/* Resumo visual */}
@@ -380,6 +449,8 @@ export default function DrePage() {
             ))}
           </div>
         </div>
+      )}
+      </>
       )}
     </div>
   );
