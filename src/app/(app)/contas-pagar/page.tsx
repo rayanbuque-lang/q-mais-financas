@@ -26,6 +26,14 @@ interface Categoria { id: string; nome: string; }
 const diasSemana = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
 const mesesNomes = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
 
+// Data que define em qual mês/semana/dia a conta é contabilizada:
+// pendente segue o vencimento; paga segue a data real do pagamento
+// (importante quando o vencimento cai em fim de semana e o pagamento
+// é feito no próximo dia útil, possivelmente no mês seguinte).
+function dataEfetiva(conta: { status: string; data_vencimento: string; data_pagamento: string | null }) {
+  return conta.status === "pago" && conta.data_pagamento ? conta.data_pagamento : conta.data_vencimento;
+}
+
 function urgencia(dataVencimento: string, status: string) {
   if (status === "pago") return { label: "Pago", dias: 0, cor: "green" };
   const hoje = new Date(); hoje.setHours(0,0,0,0);
@@ -139,12 +147,12 @@ export default function ContasPagarPage() {
     } else {
       createClient()
         .from("contas_pagar")
-        .select("data_vencimento")
+        .select("data_vencimento, data_pagamento, status")
         .eq("id", destacar)
         .single()
         .then(({ data: registro }) => {
           if (registro?.data_vencimento) {
-            const d = new Date(registro.data_vencimento + "T12:00:00");
+            const d = new Date(dataEfetiva(registro) + "T12:00:00");
             setMes(d.getMonth() + 1);
             setAno(d.getFullYear());
           }
@@ -342,9 +350,9 @@ export default function ContasPagarPage() {
   function mesAnterior() { if (mes === 1) { setMes(12); setAno(ano - 1); } else setMes(mes - 1); }
   function mesProximo() { if (mes === 12) { setMes(1); setAno(ano + 1); } else setMes(mes + 1); }
 
-  // Filtrar por mês
+  // Filtrar por mês (pendentes por vencimento, pagas por data real do pagamento)
   const contasDoMes = contas.filter((c) => {
-    const d = new Date(c.data_vencimento + "T12:00:00");
+    const d = new Date(dataEfetiva(c) + "T12:00:00");
     return d.getMonth() + 1 === mes && d.getFullYear() === ano;
   });
 
@@ -363,14 +371,14 @@ export default function ContasPagarPage() {
     for (let s = 0; s < 4; s++) {
       const inicio = new Date(inicioSemana); inicio.setDate(inicioSemana.getDate() + s * 7);
       const fim = new Date(inicio); fim.setDate(inicio.getDate() + 6);
-      const cs = lista.filter(c => { const v = new Date(c.data_vencimento + "T12:00:00"); return v >= inicio && v <= fim; });
-      if (cs.length > 0) grupos.push({ label: `${inicio.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })} a ${fim.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })}${s === 0 ? " (Esta semana)" : ""}`, contas: cs.sort((a, b) => a.data_vencimento.localeCompare(b.data_vencimento)), total: cs.reduce((a, c) => a + c.valor, 0) });
+      const cs = lista.filter(c => { const v = new Date(dataEfetiva(c) + "T12:00:00"); return v >= inicio && v <= fim; });
+      if (cs.length > 0) grupos.push({ label: `${inicio.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })} a ${fim.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })}${s === 0 ? " (Esta semana)" : ""}`, contas: cs.sort((a, b) => dataEfetiva(a).localeCompare(dataEfetiva(b))), total: cs.reduce((a, c) => a + c.valor, 0) });
     }
-    const anteriores = lista.filter(c => new Date(c.data_vencimento + "T12:00:00") < inicioSemana);
+    const anteriores = lista.filter(c => new Date(dataEfetiva(c) + "T12:00:00") < inicioSemana);
     const ultimoFim = new Date(inicioSemana); ultimoFim.setDate(inicioSemana.getDate() + 27);
-    const futuras = lista.filter(c => new Date(c.data_vencimento + "T12:00:00") > ultimoFim);
-    if (anteriores.length > 0) grupos.unshift({ label: "⚠️ Vencidas", contas: anteriores.sort((a, b) => a.data_vencimento.localeCompare(b.data_vencimento)), total: anteriores.reduce((a, c) => a + c.valor, 0) });
-    if (futuras.length > 0) grupos.push({ label: "Futuras", contas: futuras.sort((a, b) => a.data_vencimento.localeCompare(b.data_vencimento)), total: futuras.reduce((a, c) => a + c.valor, 0) });
+    const futuras = lista.filter(c => new Date(dataEfetiva(c) + "T12:00:00") > ultimoFim);
+    if (anteriores.length > 0) grupos.unshift({ label: "⚠️ Vencidas", contas: anteriores.sort((a, b) => dataEfetiva(a).localeCompare(dataEfetiva(b))), total: anteriores.reduce((a, c) => a + c.valor, 0) });
+    if (futuras.length > 0) grupos.push({ label: "Futuras", contas: futuras.sort((a, b) => dataEfetiva(a).localeCompare(dataEfetiva(b))), total: futuras.reduce((a, c) => a + c.valor, 0) });
     return grupos;
   }
 
@@ -419,12 +427,13 @@ export default function ContasPagarPage() {
   // Comprovantes em falta (pagas sem anexo)
   const contasSemComprovante = contasDoMes.filter(c => c.status === "pago" && !c.comprovante_url).length;
 
-  // Agrupamento para cronograma
+  // Agrupamento para cronograma (pendente por vencimento, paga por data do pagamento)
   function agruparPorDia(lista: ContaPagar[]) {
     const mapa: Record<string, ContaPagar[]> = {};
     for (const c of lista) {
-      if (!mapa[c.data_vencimento]) mapa[c.data_vencimento] = [];
-      mapa[c.data_vencimento].push(c);
+      const key = dataEfetiva(c);
+      if (!mapa[key]) mapa[key] = [];
+      mapa[key].push(c);
     }
     return Object.entries(mapa).sort(([a], [b]) => a.localeCompare(b));
   }
@@ -989,7 +998,7 @@ export default function ContasPagarPage() {
         const porDia: Record<number, { pendente: number; pago: number; nPendente: number; nPago: number }> = {};
         for (let d = 1; d <= diasNoMes; d++) {
           const dataStr = `${ano}-${String(mes).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
-          const lista = contasDoMes.filter(c => c.data_vencimento === dataStr);
+          const lista = contasDoMes.filter(c => dataEfetiva(c) === dataStr);
           porDia[d] = {
             pendente: lista.filter(c => c.status === "pendente").reduce((a, c) => a + c.valor, 0),
             pago: lista.filter(c => c.status === "pago").reduce((a, c) => a + c.valor, 0),
@@ -1031,7 +1040,7 @@ export default function ContasPagarPage() {
         // Detalhe do dia selecionado
         const detalheDia = diaSelecionado ? (() => {
           const dataStr = `${ano}-${String(mes).padStart(2,"0")}-${String(diaSelecionado).padStart(2,"0")}`;
-          const lista = contasDoMes.filter(c => c.data_vencimento === dataStr).sort((a, b) => b.valor - a.valor);
+          const lista = contasDoMes.filter(c => dataEfetiva(c) === dataStr).sort((a, b) => b.valor - a.valor);
           const d = new Date(dataStr + "T12:00:00");
           const nomeDia = d.toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" });
           const totalDia = lista.reduce((a, c) => a + c.valor, 0);
