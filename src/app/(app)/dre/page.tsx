@@ -10,6 +10,9 @@ interface Meta { categoria_id: string; valor_meta: number; }
 
 interface Categoria { id: string; nome: string; }
 
+interface FechamentoResumo { valor_total_vendas: number; dinheiro: number; }
+const NOME_CATEGORIA_FECHAMENTO = "Dinheiro (Fechamento Caixa)";
+
 const meses = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
 
 function calcTotais(movs: Movimentacao[]) {
@@ -38,6 +41,7 @@ export default function DrePage() {
   const [movMesmoAnoPassado, setMovMesmoAnoPassado] = useState<Movimentacao[]>([]);
   const [todasCats, setTodasCats] = useState<Categoria[]>([]);
   const [metasCat, setMetasCat] = useState<Meta[]>([]);
+  const [fechamentosMes, setFechamentosMes] = useState<FechamentoResumo[]>([]);
 
   const supabase = createClient();
 
@@ -50,19 +54,24 @@ export default function DrePage() {
     const { inicio: inicioAP, fim: fimAP } = getPeriodo(mes, ano - 1);
 
     const mesSup = mes + 1;
-    const [r1, r2, r3, r4, r5, r6] = await Promise.all([
+    const [r1, r2, r3, r4, r5, r6, r7] = await Promise.all([
       supabase.from("movimentacoes").select("*").gte("data", inicio).lte("data", fim),
       supabase.from("movimentacoes").select("*").gte("data", inicioAnt).lte("data", fimAnt),
       supabase.from("movimentacoes").select("*").gte("data", inicioAP).lte("data", fimAP),
       supabase.from("categorias_entrada").select("id,nome").eq("ativo", true),
       supabase.from("categorias_saida").select("id,nome").eq("ativo", true),
       supabase.from("metas").select("categoria_id,valor_meta").eq("tipo", "despesa_categoria").eq("mes", mesSup).eq("ano", ano),
+      // Apenas leitura — usado para alertar se há vendas do Fechamento de Caixa
+      // (cartão/Pix/outros) ainda não lançadas manualmente em Movimentações.
+      // Não dispara nem altera nenhum lançamento.
+      supabase.from("fechamento_caixa").select("valor_total_vendas,dinheiro").eq("fechado", true).gte("data", inicio).lte("data", fim),
     ]);
 
     if (r1.data) setMovAtual(r1.data);
     if (r2.data) setMovAnterior(r2.data);
     if (r3.data) setMovMesmoAnoPassado(r3.data);
     if (r6.data) setMetasCat(r6.data as Meta[]);
+    if (r7.data) setFechamentosMes(r7.data as FechamentoResumo[]);
     const cats: Categoria[] = [...(r4.data || []), ...(r5.data || [])];
     setTodasCats(cats);
   }
@@ -83,24 +92,41 @@ export default function DrePage() {
   const resultado = totalEntradas - totalSaidas;
   const margem = totalEntradas > 0 ? (resultado / totalEntradas) * 100 : 0;
 
+  // Agrupado por categoria_id (não por nome) — evita misturar categorias
+  // diferentes que por acaso tenham o mesmo nome cadastrado.
   const entradasPorCategoria = Object.entries(
-    entradas.reduce((acc: Record<string, number>, m) => {
-      const nome = getNomeCategoria(m.categoria_id);
-      acc[nome] = (acc[nome] || 0) + m.valor;
+    entradas.reduce((acc: Record<string, { total: number; nome: string }>, m) => {
+      const id = m.categoria_id;
+      if (!acc[id]) acc[id] = { total: 0, nome: getNomeCategoria(id) };
+      acc[id].total += m.valor;
       return acc;
     }, {})
-  ).map(([nome, total]) => ({ nome, total })).sort((a, b) => b.total - a.total);
+  ).map(([id, { total, nome }]) => ({ id, nome, total })).sort((a, b) => b.total - a.total);
 
   const saidasPorCategoria = Object.entries(
-    saidas.reduce((acc: Record<string, { total: number; catId: string }>, m) => {
-      const nome = getNomeCategoria(m.categoria_id);
-      if (!acc[nome]) acc[nome] = { total: 0, catId: m.categoria_id };
-      acc[nome].total += m.valor;
+    saidas.reduce((acc: Record<string, { total: number; nome: string }>, m) => {
+      const id = m.categoria_id;
+      if (!acc[id]) acc[id] = { total: 0, nome: getNomeCategoria(id) };
+      acc[id].total += m.valor;
       return acc;
     }, {})
-  ).map(([nome, { total, catId }]) => ({ nome, total, catId })).sort((a, b) => b.total - a.total);
+  ).map(([id, { total, nome }]) => ({ id, nome, total })).sort((a, b) => b.total - a.total);
 
   const metasByCatId = Object.fromEntries(metasCat.map(m => [m.categoria_id, m.valor_meta]));
+
+  // ── Apenas leitura: comparação Fechamento de Caixa x Movimentações ──
+  // Não altera nenhum lançamento — só sinaliza visualmente se vendas de
+  // cartão/Pix/outros registradas no Fechamento de Caixa ainda não foram
+  // lançadas manualmente em Movimentações neste período.
+  const vendasBrutasFechamento = fechamentosMes.reduce((a, f) => a + (f.valor_total_vendas || 0), 0);
+  const dinheiroFechamento = fechamentosMes.reduce((a, f) => a + (f.dinheiro || 0), 0);
+  const naoDinheiroEsperado = Math.max(vendasBrutasFechamento - dinheiroFechamento, 0);
+  const entradasFechamentoCaixa = entradas
+    .filter(m => getNomeCategoria(m.categoria_id) === NOME_CATEGORIA_FECHAMENTO)
+    .reduce((a, m) => a + m.valor, 0);
+  const entradasOutrosMeios = totalEntradas - entradasFechamentoCaixa;
+  const gapLancamentoManual = Math.max(naoDinheiroEsperado - entradasOutrosMeios, 0);
+  const percLancadoOutrosMeios = naoDinheiroEsperado > 0 ? (entradasOutrosMeios / naoDinheiroEsperado) * 100 : 100;
 
   let mesAnt = mes - 1, anoAnt = ano;
   if (mesAnt < 0) { mesAnt = 11; anoAnt = ano - 1; }
@@ -149,6 +175,36 @@ export default function DrePage() {
         <button onClick={mesProximoNav} className="px-4 py-2 rounded-xl bg-[var(--color-bg)] text-sm font-medium hover:bg-[var(--color-border)] transition">Próximo →</button>
       </div>
 
+      {/* Alerta (apenas leitura): vendas do Fechamento de Caixa ainda não lançadas
+          manualmente em Movimentações. Não lança nem altera nada — só avisa. */}
+      {vendasBrutasFechamento > 0 && naoDinheiroEsperado > 0 && (
+        gapLancamentoManual > 0.01 ? (
+          <div className="rounded-2xl p-4 border bg-amber-50 border-amber-300">
+            <div className="flex items-start gap-3">
+              <span className="text-lg shrink-0">⚠️</span>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-amber-800">
+                  Possível receita não lançada em Movimentações neste período
+                </p>
+                <p className="text-xs text-amber-700 mt-1">
+                  O Fechamento de Caixa registrou {fmt(vendasBrutasFechamento)} em vendas, das quais {fmt(dinheiroFechamento)} são dinheiro (já lançado automaticamente). Os outros {fmt(naoDinheiroEsperado)} (cartão/Pix/demais meios) são lançados manualmente em Movimentações — até agora {fmt(entradasOutrosMeios)} foram lançados ({percLancadoOutrosMeios.toFixed(0)}%), faltando aproximadamente <strong>{fmt(gapLancamentoManual)}</strong>.
+                </p>
+                <p className="text-[11px] text-amber-600 mt-1.5">
+                  Isso não lança nada automaticamente — é só um aviso para você conferir e lançar manualmente quando os recebimentos baterem no extrato.
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-2xl p-3 border bg-emerald-50 border-emerald-200 flex items-center gap-2.5">
+            <span className="text-sm">✓</span>
+            <p className="text-xs text-emerald-700 font-medium">
+              Lançamentos de cartão/Pix/outros meios em dia com o Fechamento de Caixa deste período.
+            </p>
+          </div>
+        )
+      )}
+
       {/* ===== MODO SIMPLES ===== */}
       {modo === "simples" && (
         <>
@@ -176,7 +232,7 @@ export default function DrePage() {
               ) : (
                 <div className="divide-y divide-[var(--color-border)]">
                   {entradasPorCategoria.map(cat => (
-                    <div key={cat.nome} className="flex justify-between items-center p-4">
+                    <div key={cat.id} className="flex justify-between items-center p-4">
                       <span className="text-sm">{cat.nome}</span>
                       <div className="text-right">
                         <span className="text-sm font-semibold text-emerald-600">{fmt(cat.total)}</span>
@@ -201,11 +257,11 @@ export default function DrePage() {
               ) : (
                 <div className="divide-y divide-[var(--color-border)]">
                   {saidasPorCategoria.map(cat => {
-                    const metaValor = metasByCatId[cat.catId];
+                    const metaValor = metasByCatId[cat.id];
                     const pctUsado = metaValor ? (cat.total / metaValor) * 100 : null;
                     const acima = pctUsado !== null && pctUsado > 100;
                     return (
-                      <div key={cat.nome} className="p-4">
+                      <div key={cat.id} className="p-4">
                         <div className="flex justify-between items-center">
                           <span className="text-sm">{cat.nome}</span>
                           <div className="flex items-center gap-2">
