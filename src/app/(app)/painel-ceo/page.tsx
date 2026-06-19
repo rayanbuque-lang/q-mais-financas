@@ -11,6 +11,11 @@ interface DiaResumo { data: string; dia: number; semana: string; totalVendas: nu
 interface Meta { meta_mensal: number; meta_diaria: number; }
 interface MovResumo { tipo: string; valor: number; categoria_id: string; data: string; }
 interface CatInfo { id: string; nome: string; }
+interface ResumoAnterior { totalVendido: number; totalSaidas: number; resultado: number; }
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
+}
 
 export default function PainelCeoPage() {
   const router = useRouter();
@@ -28,12 +33,16 @@ export default function PainelCeoPage() {
   const [metaEditando, setMetaEditando] = useState(false);
   const [metaMensal, setMetaMensal] = useState("");
   const [metaDiaria, setMetaDiaria] = useState("");
+  const [mensagemMeta, setMensagemMeta] = useState("");
   const [movs, setMovs] = useState<MovResumo[]>([]);
   const [cats, setCats] = useState<CatInfo[]>([]);
   const [contasPendentes, setContasPendentes] = useState(0);
   const [contasVencidas, setContasVencidas] = useState(0);
   const [diasFechados, setDiasFechados] = useState(0);
+  const [diasRascunho, setDiasRascunho] = useState(0);
   const [totalDiasComDados, setTotalDiasComDados] = useState(0);
+  const [resumoAnterior, setResumoAnterior] = useState<ResumoAnterior>({ totalVendido: 0, totalSaidas: 0, resultado: 0 });
+  const [erro, setErro] = useState("");
 
   const supabase = createClient();
 
@@ -55,22 +64,37 @@ export default function PainelCeoPage() {
   }, []);
 
   async function carregarDados() {
-    setLoading(true);
+    setLoading(true); setErro("");
     const inicio = `${ano}-${String(mes).padStart(2, "0")}-01`;
     const ultimoDia = new Date(ano, mes, 0).getDate();
     const fim = `${ano}-${String(mes).padStart(2, "0")}-${String(ultimoDia).padStart(2, "0")}`;
 
-    const [r1, r2, r3, r4, r5] = await Promise.all([
+    let mesAnt = mes - 1, anoAnt = ano;
+    if (mesAnt < 1) { mesAnt = 12; anoAnt = ano - 1; }
+    const inicioAnt = `${anoAnt}-${String(mesAnt).padStart(2, "0")}-01`;
+    const ultimoDiaAnt = new Date(anoAnt, mesAnt, 0).getDate();
+    const fimAnt = `${anoAnt}-${String(mesAnt).padStart(2, "0")}-${String(ultimoDiaAnt).padStart(2, "0")}`;
+
+    const [r1, r2, r3, r4, r5, r6, r7] = await Promise.all([
       supabase.from("fechamento_caixa").select("*").gte("data", inicio).lte("data", fim).order("data"),
       supabase.from("metas_vendas").select("*").eq("mes", mes).eq("ano", ano).limit(1),
       supabase.from("movimentacoes").select("*").gte("data", inicio).lte("data", fim),
       supabase.from("contas_pagar").select("status,data_vencimento,valor").eq("status", "pendente").gte("data_vencimento", inicio).lte("data_vencimento", fim),
-      supabase.from("categorias_entrada").select("id,nome").eq("ativo", true),
+      supabase.from("categorias_saida").select("id,nome").eq("ativo", true),
+      // Apenas para a comparação "vs mês anterior" nos KPIs — leitura, não altera nada.
+      supabase.from("fechamento_caixa").select("valor_total_vendas").eq("fechado", true).gte("data", inicioAnt).lte("data", fimAnt),
+      supabase.from("movimentacoes").select("tipo,valor").gte("data", inicioAnt).lte("data", fimAnt),
     ]);
 
-    const caixasData = (r1.data || []) as { data: string; valor_total_vendas: number; dinheiro: number; cartao: number; pix_santander: number; pix_inter: number; rom_card: number; app: number; prefeitura: number; fechado: boolean }[];
+    const erros = [r1.error, r2.error, r3.error, r4.error, r5.error, r6.error, r7.error].filter(Boolean);
+    if (erros.length > 0) setErro("Não foi possível carregar todos os dados do período. Os números abaixo podem estar incompletos.");
 
-    const diasResumo: DiaResumo[] = caixasData.map(c => ({
+    const caixasData = (r1.data || []) as { data: string; valor_total_vendas: number; dinheiro: number; cartao: number; pix_santander: number; pix_inter: number; rom_card: number; app: number; prefeitura: number; fechado: boolean; rascunho: boolean }[];
+
+    // Só dias FECHADOS (confirmados) entram nos totais — rascunhos ainda
+    // estão aguardando revisão e não devem inflar/distorcer o painel.
+    const caixasFechados = caixasData.filter(c => c.fechado);
+    const diasResumo: DiaResumo[] = caixasFechados.map(c => ({
       data: c.data,
       dia: new Date(c.data + "T12:00:00").getDate(),
       semana: diasSemana[new Date(c.data + "T12:00:00").getDay()],
@@ -82,7 +106,8 @@ export default function PainelCeoPage() {
     }));
 
     setCaixas(diasResumo);
-    setDiasFechados(caixasData.filter(c => c.fechado).length);
+    setDiasFechados(caixasFechados.length);
+    setDiasRascunho(caixasData.filter(c => c.rascunho && !c.fechado).length);
     setTotalDiasComDados(caixasData.length);
 
     if (r2.data && r2.data.length > 0) {
@@ -101,6 +126,12 @@ export default function PainelCeoPage() {
     setContasVencidas(contas.filter(c => c.data_vencimento < new Date().toISOString().split("T")[0]).length);
     setCats((r5.data || []) as CatInfo[]);
 
+    const totalVendidoAnt = ((r6.data || []) as { valor_total_vendas: number }[]).reduce((a, c) => a + (c.valor_total_vendas || 0), 0);
+    const movsAnt = (r7.data || []) as { tipo: string; valor: number }[];
+    const totalSaidasAnt = movsAnt.filter(m => m.tipo === "saida").reduce((a, m) => a + m.valor, 0);
+    const totalEntradasAnt = movsAnt.filter(m => m.tipo === "entrada").reduce((a, m) => a + m.valor, 0);
+    setResumoAnterior({ totalVendido: totalVendidoAnt, totalSaidas: totalSaidasAnt, resultado: totalEntradasAnt - totalSaidasAnt });
+
     setLoading(false);
   }
 
@@ -109,7 +140,17 @@ export default function PainelCeoPage() {
   async function salvarMeta() {
     const mm = parseFloat(metaMensal.replace(",", "."));
     const md = parseFloat(metaDiaria.replace(",", "."));
-    await supabase.from("metas_vendas").upsert({ mes, ano, meta_mensal: mm, meta_diaria: md }, { onConflict: "mes,ano" });
+    if (isNaN(mm) || isNaN(md) || mm < 0 || md < 0) {
+      setMensagemMeta("Informe valores numéricos válidos (ou 0) para as metas.");
+      setTimeout(() => setMensagemMeta(""), 4000);
+      return;
+    }
+    const { error } = await supabase.from("metas_vendas").upsert({ mes, ano, meta_mensal: mm, meta_diaria: md }, { onConflict: "mes,ano" });
+    if (error) {
+      setMensagemMeta("Erro ao salvar meta. Tente novamente.");
+      setTimeout(() => setMensagemMeta(""), 4000);
+      return;
+    }
     setMeta({ meta_mensal: mm, meta_diaria: md });
     setMetaEditando(false);
   }
@@ -231,7 +272,7 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
 
           ${analiseIA ? `
           <h2>Análise Estratégica por IA</h2>
-          <div style="background: #f5f3ff; border: 1px solid #ddd6fe; border-radius: 8px; padding: 16px; font-size: 12px; line-height: 1.6; white-space: pre-wrap;">${analiseIA}</div>
+          <div style="background: #f5f3ff; border: 1px solid #ddd6fe; border-radius: 8px; padding: 16px; font-size: 12px; line-height: 1.6; white-space: pre-wrap;">${escapeHtml(analiseIA)}</div>
           ` : ""}
 
           <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0 12px;">
@@ -250,6 +291,17 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
   function mesProximo() { if (mes === 12) { setMes(1); setAno(ano + 1); } else setMes(mes + 1); }
   function fmt(v: number) { return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }); }
 
+  function VarBadge({ atual, base, inverso = false }: { atual: number; base: number; inverso?: boolean }) {
+    if (base === 0) return <span className="text-[10px] text-[var(--color-text-muted)]">—</span>;
+    const v = ((atual - base) / base) * 100;
+    const positivo = inverso ? v < 0 : v > 0;
+    return (
+      <span className={`text-[10px] font-semibold ${positivo ? "text-emerald-600" : "text-red-500"}`}>
+        {v > 0 ? "↑" : "↓"} {Math.abs(v).toFixed(1)}% vs mês ant.
+      </span>
+    );
+  }
+
   // Tela de acesso negado
   if (acessoPermitido === null) {
     return <div className="text-center py-12"><div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto" /></div>;
@@ -259,7 +311,7 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
       <div className="text-center py-12">
         <p className="text-4xl mb-3">🔒</p>
         <p className="font-bold text-lg">Acesso restrito</p>
-        <p className="text-sm text-[var(--color-text-muted)] mt-1">O Painel do CEO e exclusivo para administradores.</p>
+        <p className="text-sm text-[var(--color-text-muted)] mt-1">O Painel do CEO é exclusivo para administradores.</p>
       </div>
     );
   }
@@ -298,38 +350,61 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Painel do CEO</h1>
-          <p className="text-[var(--color-text-muted)] text-sm mt-1">Visao estrategica completa do negocio</p>
+          <p className="text-[var(--color-text-muted)] text-sm mt-1">Visão estratégica completa do negócio</p>
         </div>
         <div className="flex gap-2 flex-wrap">
           <button onClick={exportarPDF} className="px-4 py-3 bg-gradient-to-r from-gray-700 to-gray-600 text-white font-semibold rounded-xl hover:from-gray-800 hover:to-gray-700 transition-all text-sm shadow-md">Imprimir / PDF</button>
           <button onClick={gerarAnalise} disabled={carregandoIA} className="px-4 py-3 bg-gradient-to-r from-purple-600 to-purple-500 text-white font-semibold rounded-xl hover:from-purple-700 hover:to-purple-600 transition-all text-sm shadow-md disabled:opacity-50">
-            {carregandoIA ? "Analisando..." : "Analise IA"}
+            {carregandoIA ? "Analisando..." : "Análise IA"}
           </button>
         </div>
       </div>
 
+      {erro && (
+        <div className="rounded-2xl p-3 border bg-red-50 border-red-200 flex items-center gap-2.5">
+          <span className="text-sm">⚠️</span>
+          <p className="text-xs text-red-700 font-medium">{erro}</p>
+        </div>
+      )}
+
       <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-4 flex items-center justify-between">
         <button onClick={mesAnterior} className="px-4 py-2 rounded-xl bg-[var(--color-bg)] text-sm font-medium hover:bg-[var(--color-border)] transition">← Anterior</button>
         <div className="text-center"><p className="font-bold text-lg capitalize">{mesesNomes[mes - 1]}</p><p className="text-sm text-[var(--color-text-muted)]">{ano}</p></div>
-        <button onClick={mesProximo} className="px-4 py-2 rounded-xl bg-[var(--color-bg)] text-sm font-medium hover:bg-[var(--color-border)] transition">Proximo →</button>
+        <button onClick={mesProximo} className="px-4 py-2 rounded-xl bg-[var(--color-bg)] text-sm font-medium hover:bg-[var(--color-border)] transition">Próximo →</button>
       </div>
 
       {loading && <div className="text-center"><div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto" /></div>}
+
+      {!loading && diasRascunho > 0 && (
+        <div className="rounded-2xl p-3 border bg-amber-50 border-amber-200 flex items-center gap-2.5">
+          <span className="text-sm">📝</span>
+          <p className="text-xs text-amber-700 font-medium">
+            {diasRascunho} {diasRascunho === 1 ? "dia em rascunho" : "dias em rascunho"} aguardando revisão neste mês — não incluído nos totais abaixo.
+          </p>
+        </div>
+      )}
 
       <div id="painel-ceo-conteudo">
         {/* KPIs */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
           {[
-            { l: "Total Vendido", v: fmt(totalVendido), c: "text-emerald-600" },
-            { l: "Media Diaria", v: fmt(mediaDiaria), c: "text-blue-600" },
-            { l: "Meta Mensal", v: meta.meta_mensal > 0 ? fmt(meta.meta_mensal) : "—", c: "text-amber-600" },
-            { l: "% Meta", v: meta.meta_mensal > 0 ? `${pctMeta.toFixed(1)}%` : "—", c: pctMeta >= 100 ? "text-emerald-600" : "text-amber-600" },
-            { l: "Despesas", v: fmt(totalSaidasMov), c: "text-red-500" },
-            { l: "Resultado", v: fmt(resultado), c: resultado >= 0 ? "text-emerald-600" : "text-red-500" },
+            { l: "Total Vendido", icon: "📈", v: fmt(totalVendido), c: "text-emerald-600", atual: totalVendido, ant: resumoAnterior.totalVendido, inverso: false },
+            { l: "Média Diária", icon: "📊", v: fmt(mediaDiaria), c: "text-blue-600" },
+            { l: "Meta Mensal", icon: "🎯", v: meta.meta_mensal > 0 ? fmt(meta.meta_mensal) : "—", c: "text-amber-600" },
+            { l: "% Meta", icon: "✓", v: meta.meta_mensal > 0 ? `${pctMeta.toFixed(1)}%` : "—", c: pctMeta >= 100 ? "text-emerald-600" : "text-amber-600" },
+            { l: "Despesas", icon: "📉", v: fmt(totalSaidasMov), c: "text-red-500", atual: totalSaidasMov, ant: resumoAnterior.totalSaidas, inverso: true },
+            { l: "Resultado", icon: "💰", v: fmt(resultado), c: resultado >= 0 ? "text-emerald-600" : "text-red-500", atual: resultado, ant: resumoAnterior.resultado, inverso: false },
           ].map(c => (
             <div key={c.l} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl p-3 text-center">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1">{c.l}</p>
-              <p className={`font-bold text-sm ${c.c}`}>{c.v}</p>
+              <div className="flex items-center justify-center gap-1.5">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1">{c.l}</p>
+              </div>
+              <p className={`font-bold text-sm ${c.c}`}>{c.icon} {c.v}</p>
+              {c.ant !== undefined && (
+                <div className="mt-1">
+                  <VarBadge atual={c.atual!} base={c.ant} inverso={c.inverso} />
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -345,7 +420,8 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
             {metaEditando ? (
               <div className="space-y-3">
                 <div><label className="block text-[10px] font-semibold text-[var(--color-text-muted)] mb-1">META MENSAL</label><input type="text" value={metaMensal} onChange={e => setMetaMensal(e.target.value)} placeholder="0,00" className="w-full px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-sm" /></div>
-                <div><label className="block text-[10px] font-semibold text-[var(--color-text-muted)] mb-1">META DIARIA</label><input type="text" value={metaDiaria} onChange={e => setMetaDiaria(e.target.value)} placeholder="0,00" className="w-full px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-sm" /></div>
+                <div><label className="block text-[10px] font-semibold text-[var(--color-text-muted)] mb-1">META DIÁRIA</label><input type="text" value={metaDiaria} onChange={e => setMetaDiaria(e.target.value)} placeholder="0,00" className="w-full px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-sm" /></div>
+                {mensagemMeta && <p className="text-xs text-red-600 font-medium">{mensagemMeta}</p>}
                 <button onClick={salvarMeta} className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-xs font-semibold hover:bg-emerald-700">Salvar Meta</button>
               </div>
             ) : (
@@ -359,9 +435,9 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="text-center p-2 bg-[var(--color-bg)] rounded-lg"><p className="text-[10px] text-[var(--color-text-muted)]">Vendido</p><p className="font-bold text-sm text-emerald-600">{fmt(totalVendido)}</p></div>
-                  <div className="text-center p-2 bg-[var(--color-bg)] rounded-lg"><p className="text-[10px] text-[var(--color-text-muted)]">Meta</p><p className="font-bold text-sm text-amber-600">{meta.meta_mensal > 0 ? fmt(meta.meta_mensal) : "Nao definida"}</p></div>
+                  <div className="text-center p-2 bg-[var(--color-bg)] rounded-lg"><p className="text-[10px] text-[var(--color-text-muted)]">Meta</p><p className="font-bold text-sm text-amber-600">{meta.meta_mensal > 0 ? fmt(meta.meta_mensal) : "Não definida"}</p></div>
                 </div>
-                {meta.meta_diaria > 0 && <p className="text-xs text-[var(--color-text-muted)] mt-2 text-center">Meta diaria: {fmt(meta.meta_diaria)} · Media atual: {fmt(mediaDiaria)}</p>}
+                {meta.meta_diaria > 0 && <p className="text-xs text-[var(--color-text-muted)] mt-2 text-center">Meta diária: {fmt(meta.meta_diaria)} · Média atual: {fmt(mediaDiaria)}</p>}
               </div>
             )}
           </div>
@@ -405,7 +481,7 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
             ) : <p className="text-sm text-[var(--color-text-muted)] text-center">Sem dados</p>}
           </div>
           <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-5">
-            <h3 className="font-bold text-sm mb-3">📅 Media por Dia da Semana</h3>
+            <h3 className="font-bold text-sm mb-3">📅 Média por Dia da Semana</h3>
             {mediaPorSemana.length === 0 ? <p className="text-sm text-[var(--color-text-muted)] text-center">Sem dados</p> : (
               <div className="space-y-2">{mediaPorSemana.map(d => (<div key={d.dia} className="flex items-center justify-between"><span className="text-xs font-medium">{d.dia}</span><span className="text-xs font-bold">{fmt(d.media)}</span></div>))}</div>
             )}
@@ -413,13 +489,13 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
         </div>
 
         {/* Alertas */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-1">
           <div className={`border rounded-2xl p-4 text-center ${contasVencidas > 0 ? "bg-red-50 border-red-200" : "bg-emerald-50 border-emerald-200"}`}>
             <p className="text-2xl font-bold">{contasVencidas}</p>
             <p className="text-xs text-[var(--color-text-muted)]">Contas Vencidas</p>
           </div>
-          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-center">
-            <p className="text-2xl font-bold text-amber-700">{contasPendentes}</p>
+          <div className={`border rounded-2xl p-4 text-center ${contasPendentes > 0 ? "bg-amber-50 border-amber-200" : "bg-[var(--color-bg)] border-[var(--color-border)]"}`}>
+            <p className={`text-2xl font-bold ${contasPendentes > 0 ? "text-amber-700" : ""}`}>{contasPendentes}</p>
             <p className="text-xs text-[var(--color-text-muted)]">Contas Pendentes</p>
           </div>
           <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 text-center">
@@ -427,13 +503,16 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
             <p className="text-xs text-[var(--color-text-muted)]">Dias Conferidos</p>
           </div>
         </div>
+        <p className="text-[10px] text-[var(--color-text-muted)] text-center mb-6">
+          Vencidas e Pendentes consideram apenas contas com vencimento em {mesesNomes[mes - 1]}/{ano} — não é o total geral de pendências da empresa.
+        </p>
 
         {/* Analise IA */}
         {analiseIA && (
           <div className="bg-gradient-to-br from-purple-50 to-indigo-50 border border-purple-200 rounded-2xl p-6 mb-6">
             <div className="flex items-center gap-2 mb-4">
               <span className="text-xl">🧠</span>
-              <h3 className="font-bold text-purple-800">Analise Estrategica por IA</h3>
+              <h3 className="font-bold text-purple-800">Análise Estratégica por IA</h3>
             </div>
             <div className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{analiseIA}</div>
           </div>
