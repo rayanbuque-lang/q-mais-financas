@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { registrarLog } from "@/lib/audit";
 import { CurrencyInput } from "@/components/currency-input";
+import { useRole } from "@/lib/role-context";
 
 const mesesNomes = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
 const diasSemana = ["Dom","Seg","Ter","Qua","Qui","Sex","Sáb"];
@@ -64,6 +65,7 @@ function ls<T>(key: string, fallback: T): T {
 }
 
 export default function FechamentoCaixaPage() {
+  const { isReadOnly } = useRole();
   const [mes, setMes] = useState(new Date().getMonth() + 1);
   const [ano, setAno] = useState(new Date().getFullYear());
   const [caixas, setCaixas] = useState<CaixaDia[]>([]);
@@ -155,6 +157,7 @@ export default function FechamentoCaixaPage() {
   }
 
   function handleDayClick(data: string) {
+    if (isReadOnly) return;
     const rec = getRecord(data);
     if (rec) {
       setFormFromRecord(rec);
@@ -552,9 +555,9 @@ export default function FechamentoCaixaPage() {
           const rec = getRecord(dataStr);
           const isSelected = detailData === dataStr && showDetail;
           return (
-            <button key={d} type="button" onClick={() => handleDayClick(dataStr)}
+            <button key={d} type="button" onClick={() => handleDayClick(dataStr)} disabled={isReadOnly}
               style={{
-                display: "block", width: "100%", textAlign: "left", borderRadius: 12, padding: "10px 12px", cursor: "pointer", transition: "all 0.2s",
+                display: "block", width: "100%", textAlign: "left", borderRadius: 12, padding: "10px 12px", cursor: isReadOnly ? "default" : "pointer", transition: "all 0.2s",
                 border: `2px solid ${rec?.fechado ? "var(--green)" : rec?.rascunho ? "var(--amber)" : isSelected ? "var(--blue)" : "var(--border)"}`,
                 background: rec?.fechado ? "var(--green-subtle)" : rec?.rascunho ? "var(--amber-subtle)" : isSelected ? "var(--blue-subtle)" : "var(--surface)",
               }}>
@@ -570,6 +573,8 @@ export default function FechamentoCaixaPage() {
                   <div style={{ fontSize: 13, fontWeight: 700, color: rec.fechado ? "var(--brand-strong)" : "var(--amber)", lineHeight: 1.2 }}>{fmt(rec.total)}</div>
                   <div style={{ fontSize: 8, color: rec.rascunho && !rec.fechado ? "var(--amber)" : "var(--text-placeholder)", marginTop: 2 }}>{rec.rascunho && !rec.fechado ? "Rascunho" : fmt(rec.dinheiro)}</div>
                 </div>
+              ) : isReadOnly ? (
+                <div style={{ fontSize: 9, color: "var(--text-placeholder)", padding: "6px 0", fontWeight: 600 }}>Sem dados</div>
               ) : (
                 <div style={{ fontSize: 9, color: "var(--blue)", padding: "6px 0", fontWeight: 600 }}>+ Abrir</div>
               )}

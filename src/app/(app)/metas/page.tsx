@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import EmptyState from "@/components/empty-state";
+import { useRole } from "@/lib/role-context";
 
 interface Meta {
   id: string;
@@ -19,6 +20,7 @@ const mesesNomes = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho
 function fmt(v: number) { return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }); }
 
 export default function MetasPage() {
+  const { isReadOnly } = useRole();
   const hoje = new Date();
   const [mes, setMes] = useState(hoje.getMonth() + 1);
   const [ano, setAno] = useState(hoje.getFullYear());
@@ -164,19 +166,21 @@ export default function MetasPage() {
             <h2 className="font-bold text-base">🎯 Meta de Receita</h2>
             <p className="text-sm text-[var(--color-text-muted)] mt-0.5">Total de entradas esperado no mês</p>
           </div>
-          <div className="flex gap-2 shrink-0">
-            {metaReceita && (
-              <button onClick={excluirReceita}
-                className="px-3 py-1.5 text-xs rounded-lg hover:bg-[var(--color-danger-light)] text-[var(--color-text-muted)] hover:text-[var(--color-danger)] border border-[var(--color-border)] transition">
-                Remover
+          {!isReadOnly && (
+            <div className="flex gap-2 shrink-0">
+              {metaReceita && (
+                <button onClick={excluirReceita}
+                  className="px-3 py-1.5 text-xs rounded-lg hover:bg-[var(--color-danger-light)] text-[var(--color-text-muted)] hover:text-[var(--color-danger)] border border-[var(--color-border)] transition">
+                  Remover
+                </button>
+              )}
+              <button
+                onClick={() => { setEditandoReceita(true); setInputReceita(metaReceita ? metaReceita.valor_meta.toFixed(2).replace(".", ",") : ""); }}
+                className="px-4 py-1.5 text-xs rounded-lg bg-[var(--color-primary)] text-white font-semibold hover:bg-[var(--color-primary-dark)] transition">
+                {metaReceita ? "Editar" : "Definir meta"}
               </button>
-            )}
-            <button
-              onClick={() => { setEditandoReceita(true); setInputReceita(metaReceita ? metaReceita.valor_meta.toFixed(2).replace(".", ",") : ""); }}
-              className="px-4 py-1.5 text-xs rounded-lg bg-[var(--color-primary)] text-white font-semibold hover:bg-[var(--color-primary-dark)] transition">
-              {metaReceita ? "Editar" : "Definir meta"}
-            </button>
-          </div>
+            </div>
+          )}
         </div>
 
         {metaReceita ? (
@@ -215,7 +219,7 @@ export default function MetasPage() {
             <h2 className="font-bold text-base">📋 Orçamento por Categoria</h2>
             <p className="text-sm text-[var(--color-text-muted)] mt-0.5">Limite mensal de gasto por categoria de despesa</p>
           </div>
-          {catsDisponiveis.length > 0 && !showFormCat && (
+          {catsDisponiveis.length > 0 && !showFormCat && !isReadOnly && (
             <button onClick={abrirFormCat}
               className="px-4 py-2 bg-[var(--color-primary)] text-white text-sm font-semibold rounded-xl hover:bg-[var(--color-primary-dark)] transition">
               + Adicionar
@@ -270,7 +274,7 @@ export default function MetasPage() {
         {metasCat.length === 0 && !showFormCat ? (
           <EmptyState variant="categories" title="Nenhum orçamento definido"
             description="Defina limites de gasto por categoria para controlar melhor as despesas."
-            action={{ label: "Adicionar orçamento", onClick: abrirFormCat }} />
+            action={isReadOnly ? undefined : { label: "Adicionar orçamento", onClick: abrirFormCat }} />
         ) : (
           <div className="divide-y divide-[var(--color-border)]">
             {metasCat.map(m => {
@@ -288,12 +292,14 @@ export default function MetasPage() {
                   </div>
                   <div className="flex items-center gap-4">
                     <span className="text-sm font-bold" style={{ color: "var(--red)" }}>{fmt(m.valor_meta)}</span>
-                    <div className="flex gap-1">
-                      <button onClick={() => editarMetaCat(m)}
-                        className="p-1.5 rounded-lg hover:bg-blue-50 text-[var(--color-text-muted)] hover:text-blue-600 transition text-sm">✏️</button>
-                      <button onClick={() => excluirMetaCat(m.id)}
-                        className="p-1.5 rounded-lg hover:bg-red-50 text-[var(--color-text-muted)] hover:text-red-500 transition text-sm">🗑️</button>
-                    </div>
+                    {!isReadOnly && (
+                      <div className="flex gap-1">
+                        <button onClick={() => editarMetaCat(m)}
+                          className="p-1.5 rounded-lg hover:bg-blue-50 text-[var(--color-text-muted)] hover:text-blue-600 transition text-sm">✏️</button>
+                        <button onClick={() => excluirMetaCat(m.id)}
+                          className="p-1.5 rounded-lg hover:bg-red-50 text-[var(--color-text-muted)] hover:text-red-500 transition text-sm">🗑️</button>
+                      </div>
+                    )}
                   </div>
                 </div>
               );

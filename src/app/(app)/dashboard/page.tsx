@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import Link from "next/link";
 import EmptyState from "@/components/empty-state";
+import { useRole } from "@/lib/role-context";
 
 interface Movimentacao {
   id: string; tipo: string; data: string; valor: number;
@@ -309,6 +310,7 @@ function HeatmapCalendar({ movimentos, fmtBRL }: { movimentos: Movimentacao[]; f
 
 /* ─── Main ───────────────────────────────────────────────────── */
 export default function DashboardPage() {
+  const { isReadOnly } = useRole();
   const [movAtual, setMovAtual] = useState<Movimentacao[]>([]);
   const [movAnterior, setMovAnterior] = useState<Movimentacao[]>([]);
   const [movRecentes, setMovRecentes] = useState<Movimentacao[]>([]);
@@ -752,11 +754,13 @@ export default function DashboardPage() {
                   </span>
                 </div>
               )}
-              <button
-                onClick={() => { setEditandoMeta(true); setInputMeta(metaMensal > 0 ? metaMensal.toFixed(2) : ""); }}
-                style={{ fontSize: 12, padding: "6px 14px", borderRadius: "var(--radius-sm)", background: "var(--hover-bg)", border: "1px solid var(--border)", cursor: "pointer", color: "var(--text)", fontWeight: 500 }}>
-                {metaMensal > 0 ? "Editar" : "Definir meta"}
-              </button>
+              {!isReadOnly && (
+                <button
+                  onClick={() => { setEditandoMeta(true); setInputMeta(metaMensal > 0 ? metaMensal.toFixed(2) : ""); }}
+                  style={{ fontSize: 12, padding: "6px 14px", borderRadius: "var(--radius-sm)", background: "var(--hover-bg)", border: "1px solid var(--border)", cursor: "pointer", color: "var(--text)", fontWeight: 500 }}>
+                  {metaMensal > 0 ? "Editar" : "Definir meta"}
+                </button>
+              )}
             </div>
           </div>
           {metaMensal > 0 && (

@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { registrarLog } from "@/lib/audit";
 import Tesseract from "tesseract.js";
+import { useRole } from "@/lib/role-context";
 
 interface Categoria {
   id: string;
@@ -17,6 +18,7 @@ interface ValorDetectado {
 }
 
 export default function CapturaPage() {
+  const { isReadOnly } = useRole();
   const [imagem, setImagem] = useState<string | null>(null);
   const [arquivo, setArquivo] = useState<File | null>(null);
   const [processando, setProcessando] = useState(false);
@@ -290,6 +292,16 @@ export default function CapturaPage() {
 
   function fmt(v: number) {
     return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  }
+
+  if (isReadOnly) {
+    return (
+      <div className="text-center py-12">
+        <p className="text-4xl mb-3">👁️</p>
+        <p className="font-bold text-lg">Somente leitura</p>
+        <p className="text-sm text-[var(--color-text-muted)] mt-1">Esta página só serve para criar lançamentos, por isso não está disponível no modo leitura.</p>
+      </div>
+    );
   }
 
   return (

@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import EmptyState from "@/components/empty-state";
+import { useRole } from "@/lib/role-context";
 
 interface Maquina {
   id: string;
@@ -17,6 +18,7 @@ interface Maquina {
 }
 
 export default function MaquinasPage() {
+  const { isReadOnly } = useRole();
   const [maquinas, setMaquinas] = useState<Maquina[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [editandoId, setEditandoId] = useState<string | null>(null);
@@ -103,9 +105,11 @@ export default function MaquinasPage() {
           <h1 className="text-2xl font-bold tracking-tight">Máquinas e Contas</h1>
           <p className="text-[var(--color-text-muted)] text-sm mt-1">Cadastre maquininhas, bancos e taxas</p>
         </div>
-        <button onClick={abrirNovo} className="px-5 py-3 bg-gradient-to-r from-blue-600 to-blue-500 text-white font-semibold rounded-xl hover:from-blue-700 hover:to-blue-600 transition-all text-sm shadow-md shadow-blue-200">
-          + Nova Máquina
-        </button>
+        {!isReadOnly && (
+          <button onClick={abrirNovo} className="px-5 py-3 bg-gradient-to-r from-blue-600 to-blue-500 text-white font-semibold rounded-xl hover:from-blue-700 hover:to-blue-600 transition-all text-sm shadow-md shadow-blue-200">
+            + Nova Máquina
+          </button>
+        )}
       </div>
 
       {mensagem && <div className={`p-3 rounded-xl text-sm font-medium text-center ${mensagem.includes("Erro") ? "bg-red-50 text-red-600" : "bg-emerald-50 text-emerald-700"}`}>{mensagem}</div>}
@@ -201,13 +205,15 @@ export default function MaquinasPage() {
                     <span className="px-2 py-1 bg-blue-50 text-blue-700 rounded-lg font-medium">Créd: {m.taxa_credito}%</span>
                     <span className="px-2 py-1 bg-emerald-50 text-emerald-700 rounded-lg font-medium">Pix: {m.taxa_pix}%</span>
                   </div>
-                  <div className="flex gap-1">
-                    <button onClick={() => abrirEditar(m)} className="p-1.5 rounded-lg hover:bg-blue-50 text-[var(--color-text-muted)] hover:text-blue-600 transition text-sm">✏️</button>
-                    <button onClick={() => toggleAtivo(m)} className={`p-1.5 rounded-lg transition text-sm ${m.ativo ? "hover:bg-amber-50 text-[var(--color-text-muted)] hover:text-amber-600" : "hover:bg-emerald-50 text-[var(--color-text-muted)] hover:text-emerald-600"}`}>
-                      {m.ativo ? "⏸" : "▶"}
-                    </button>
-                    <button onClick={() => handleExcluir(m.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-[var(--color-text-muted)] hover:text-red-500 transition text-sm">🗑️</button>
-                  </div>
+                  {!isReadOnly && (
+                    <div className="flex gap-1">
+                      <button onClick={() => abrirEditar(m)} className="p-1.5 rounded-lg hover:bg-blue-50 text-[var(--color-text-muted)] hover:text-blue-600 transition text-sm">✏️</button>
+                      <button onClick={() => toggleAtivo(m)} className={`p-1.5 rounded-lg transition text-sm ${m.ativo ? "hover:bg-amber-50 text-[var(--color-text-muted)] hover:text-amber-600" : "hover:bg-emerald-50 text-[var(--color-text-muted)] hover:text-emerald-600"}`}>
+                        {m.ativo ? "⏸" : "▶"}
+                      </button>
+                      <button onClick={() => handleExcluir(m.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-[var(--color-text-muted)] hover:text-red-500 transition text-sm">🗑️</button>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import EmptyState from "@/components/empty-state";
+import { useRole } from "@/lib/role-context";
 
 interface Categoria {
   id: string;
@@ -17,6 +18,7 @@ const meses = [
 ];
 
 export default function CategoriasPage() {
+  const { isReadOnly } = useRole();
   const [aba, setAba] = useState<"entrada" | "saida">("entrada");
   const [categorias, setCategorias] = useState<Categoria[]>([]);
   const [novoNome, setNovoNome] = useState("");
@@ -189,25 +191,27 @@ export default function CategoriasPage() {
       )}
 
       {/* Formulário de adicionar */}
-      <form onSubmit={handleAdicionar} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-5">
-        <h2 className="font-semibold mb-3">Nova Categoria</h2>
-        <div className="flex gap-3">
-          <input
-            type="text"
-            value={novoNome}
-            onChange={(e) => setNovoNome(e.target.value)}
-            placeholder={aba === "entrada" ? "Ex: Pix Nubank" : "Ex: Internet"}
-            className="flex-1 px-4 py-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] transition"
-          />
-          <button
-            type="submit"
-            disabled={loading || !novoNome.trim()}
-            className="px-6 py-3 bg-[var(--color-primary)] text-white font-semibold rounded-xl hover:bg-[var(--color-primary-dark)] transition disabled:opacity-50 text-sm"
-          >
-            Adicionar
-          </button>
-        </div>
-      </form>
+      {!isReadOnly && (
+        <form onSubmit={handleAdicionar} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-5">
+          <h2 className="font-semibold mb-3">Nova Categoria</h2>
+          <div className="flex gap-3">
+            <input
+              type="text"
+              value={novoNome}
+              onChange={(e) => setNovoNome(e.target.value)}
+              placeholder={aba === "entrada" ? "Ex: Pix Nubank" : "Ex: Internet"}
+              className="flex-1 px-4 py-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] transition"
+            />
+            <button
+              type="submit"
+              disabled={loading || !novoNome.trim()}
+              className="px-6 py-3 bg-[var(--color-primary)] text-white font-semibold rounded-xl hover:bg-[var(--color-primary-dark)] transition disabled:opacity-50 text-sm"
+            >
+              Adicionar
+            </button>
+          </div>
+        </form>
+      )}
 
       {/* Lista de categorias ativas */}
       <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
@@ -226,7 +230,7 @@ export default function CategoriasPage() {
           <div className="divide-y divide-[var(--color-border)]">
             {ativas.map((cat) => (
               <div key={cat.id} className="flex items-center justify-between p-4 hover:bg-[var(--color-bg)] transition">
-                {editandoId === cat.id ? (
+                {editandoId === cat.id && !isReadOnly ? (
                   <div className="flex items-center gap-3 flex-1">
                     <input
                       type="text"
@@ -263,22 +267,24 @@ export default function CategoriasPage() {
                         </p>
                       </div>
                     </div>
-                    <div className="flex gap-1">
-                      <button
-                        onClick={() => { setEditandoId(cat.id); setEditandoNome(cat.nome); }}
-                        title="Editar"
-                        className="p-2 rounded-lg hover:bg-[var(--color-primary-light)] text-[var(--color-text-muted)] hover:text-[var(--color-primary)] transition text-sm"
-                      >
-                        ✏️
-                      </button>
-                      <button
-                        onClick={() => handleDesativar(cat.id, cat.nome)}
-                        title="Desativar"
-                        className="p-2 rounded-lg hover:bg-red-50 text-[var(--color-text-muted)] hover:text-[var(--color-danger)] transition text-sm"
-                      >
-                        ⏸️
-                      </button>
-                    </div>
+                    {!isReadOnly && (
+                      <div className="flex gap-1">
+                        <button
+                          onClick={() => { setEditandoId(cat.id); setEditandoNome(cat.nome); }}
+                          title="Editar"
+                          className="p-2 rounded-lg hover:bg-[var(--color-primary-light)] text-[var(--color-text-muted)] hover:text-[var(--color-primary)] transition text-sm"
+                        >
+                          ✏️
+                        </button>
+                        <button
+                          onClick={() => handleDesativar(cat.id, cat.nome)}
+                          title="Desativar"
+                          className="p-2 rounded-lg hover:bg-red-50 text-[var(--color-text-muted)] hover:text-[var(--color-danger)] transition text-sm"
+                        >
+                          ⏸️
+                        </button>
+                      </div>
+                    )}
                   </>
                 )}
               </div>
@@ -311,13 +317,15 @@ export default function CategoriasPage() {
                         </p>
                       </div>
                     </div>
-                    <button
-                      onClick={() => handleReativar(cat.id)}
-                      title="Reativar"
-                      className="p-2 rounded-lg hover:bg-[var(--color-primary-light)] text-[var(--color-text-muted)] hover:text-[var(--color-primary)] transition text-sm"
-                    >
-                      ▶️
-                    </button>
+                    {!isReadOnly && (
+                      <button
+                        onClick={() => handleReativar(cat.id)}
+                        title="Reativar"
+                        className="p-2 rounded-lg hover:bg-[var(--color-primary-light)] text-[var(--color-text-muted)] hover:text-[var(--color-primary)] transition text-sm"
+                      >
+                        ▶️
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>

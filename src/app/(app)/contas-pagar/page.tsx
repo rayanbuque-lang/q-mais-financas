@@ -6,6 +6,7 @@ import { registrarLog, verificarMesFechado, verificarAdmin } from "@/lib/audit";
 import ComprovantePicker from "@/components/comprovante-picker";
 import { CurrencyInput } from "@/components/currency-input";
 import EmptyState from "@/components/empty-state";
+import { useRole } from "@/lib/role-context";
 
 interface ContaPagar {
   id: string;
@@ -65,6 +66,7 @@ const urgenciaIconClass: Record<string, string> = {
 };
 
 export default function ContasPagarPage() {
+  const { isReadOnly } = useRole();
   const [contas, setContas] = useState<ContaPagar[]>([]);
   const [categorias, setCategorias] = useState<Categoria[]>([]);
   const [showForm, setShowForm] = useState(false);
@@ -495,16 +497,18 @@ export default function ContasPagarPage() {
             <span className={`font-bold text-sm tabular-nums ${conta.status === "pago" ? "text-emerald-600" : urg.cor === "red" ? "text-red-500" : "text-[var(--color-text)]"}`}>
               {fmt(conta.valor)}
             </span>
-            <div className="flex gap-0.5">
-              {conta.status === "pendente" && (
-                <button onClick={() => iniciarPagamento(conta)} title="Marcar como pago" className="p-1.5 rounded-lg hover:bg-emerald-50 text-emerald-500 transition text-sm">💳</button>
-              )}
-              {conta.status === "pago" && (
-                <button onClick={() => desfazerPagamento(conta)} title="Desfazer pagamento" className="p-1.5 rounded-lg hover:bg-amber-50 text-amber-500 transition text-sm">↩️</button>
-              )}
-              <button onClick={() => abrirEditar(conta)} title="Editar" className="p-1.5 rounded-lg hover:bg-blue-50 text-[var(--color-text-muted)] hover:text-blue-600 transition text-sm">✏️</button>
-              <button onClick={() => handleExcluir(conta.id)} title="Excluir" className="p-1.5 rounded-lg hover:bg-red-50 text-[var(--color-text-muted)] hover:text-red-500 transition text-sm">🗑️</button>
-            </div>
+            {!isReadOnly && (
+              <div className="flex gap-0.5">
+                {conta.status === "pendente" && (
+                  <button onClick={() => iniciarPagamento(conta)} title="Marcar como pago" className="p-1.5 rounded-lg hover:bg-emerald-50 text-emerald-500 transition text-sm">💳</button>
+                )}
+                {conta.status === "pago" && (
+                  <button onClick={() => desfazerPagamento(conta)} title="Desfazer pagamento" className="p-1.5 rounded-lg hover:bg-amber-50 text-amber-500 transition text-sm">↩️</button>
+                )}
+                <button onClick={() => abrirEditar(conta)} title="Editar" className="p-1.5 rounded-lg hover:bg-blue-50 text-[var(--color-text-muted)] hover:text-blue-600 transition text-sm">✏️</button>
+                <button onClick={() => handleExcluir(conta.id)} title="Excluir" className="p-1.5 rounded-lg hover:bg-red-50 text-[var(--color-text-muted)] hover:text-red-500 transition text-sm">🗑️</button>
+              </div>
+            )}
           </div>
         </div>
 
@@ -551,16 +555,18 @@ export default function ContasPagarPage() {
             <span className={`text-sm font-bold tabular-nums ${conta.status === "pago" ? "text-emerald-600" : urg.cor === "red" ? "text-red-500" : "text-[var(--color-text)]"}`}>
               {fmt(conta.valor)}
             </span>
-            <div className="flex gap-0.5">
-              {conta.status === "pendente" && (
-                <button onClick={() => iniciarPagamento(conta)} title="Pagar" className="p-1 rounded-lg hover:bg-emerald-50 text-emerald-500 transition text-xs">💳</button>
-              )}
-              {conta.status === "pago" && (
-                <button onClick={() => desfazerPagamento(conta)} title="Desfazer" className="p-1 rounded-lg hover:bg-amber-50 text-amber-500 transition text-xs">↩️</button>
-              )}
-              <button onClick={() => abrirEditar(conta)} title="Editar" className="p-1 rounded-lg hover:bg-blue-50 text-[var(--color-text-muted)] hover:text-blue-600 transition text-xs">✏️</button>
-              <button onClick={() => handleExcluir(conta.id)} title="Excluir" className="p-1 rounded-lg hover:bg-red-50 text-[var(--color-text-muted)] hover:text-red-500 transition text-xs">🗑️</button>
-            </div>
+            {!isReadOnly && (
+              <div className="flex gap-0.5">
+                {conta.status === "pendente" && (
+                  <button onClick={() => iniciarPagamento(conta)} title="Pagar" className="p-1 rounded-lg hover:bg-emerald-50 text-emerald-500 transition text-xs">💳</button>
+                )}
+                {conta.status === "pago" && (
+                  <button onClick={() => desfazerPagamento(conta)} title="Desfazer" className="p-1 rounded-lg hover:bg-amber-50 text-amber-500 transition text-xs">↩️</button>
+                )}
+                <button onClick={() => abrirEditar(conta)} title="Editar" className="p-1 rounded-lg hover:bg-blue-50 text-[var(--color-text-muted)] hover:text-blue-600 transition text-xs">✏️</button>
+                <button onClick={() => handleExcluir(conta.id)} title="Excluir" className="p-1 rounded-lg hover:bg-red-50 text-[var(--color-text-muted)] hover:text-red-500 transition text-xs">🗑️</button>
+              </div>
+            )}
           </div>
         </div>
         {isPagando && (
@@ -653,20 +659,22 @@ export default function ContasPagarPage() {
           <h1 className="text-2xl font-bold tracking-tight">Contas a Pagar</h1>
           <p className="text-[var(--color-text-muted)] text-sm mt-0.5">Boletos, fornecedores e compromissos</p>
         </div>
-        <div className="flex gap-2 flex-wrap">
-          <button
-            onClick={() => { setModoLote(!modoLote); setSelecionadas(new Set()); }}
-            className={`px-4 py-2.5 font-semibold rounded-xl transition-all text-sm border ${modoLote ? "bg-blue-600 text-white border-blue-600 shadow-md" : "bg-[var(--color-surface)] border-[var(--color-border)] text-[var(--color-text-muted)] hover:border-blue-400 hover:text-blue-600"}`}
-          >
-            ☑️ {modoLote ? "Sair do Lote" : "Selecionar Lote"}
-          </button>
-          <button
-            onClick={abrirNovo}
-            className="px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white font-semibold rounded-xl hover:from-emerald-700 hover:to-emerald-600 transition-all text-sm shadow-md shadow-emerald-200"
-          >
-            + Nova Conta
-          </button>
-        </div>
+        {!isReadOnly && (
+          <div className="flex gap-2 flex-wrap">
+            <button
+              onClick={() => { setModoLote(!modoLote); setSelecionadas(new Set()); }}
+              className={`px-4 py-2.5 font-semibold rounded-xl transition-all text-sm border ${modoLote ? "bg-blue-600 text-white border-blue-600 shadow-md" : "bg-[var(--color-surface)] border-[var(--color-border)] text-[var(--color-text-muted)] hover:border-blue-400 hover:text-blue-600"}`}
+            >
+              ☑️ {modoLote ? "Sair do Lote" : "Selecionar Lote"}
+            </button>
+            <button
+              onClick={abrirNovo}
+              className="px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white font-semibold rounded-xl hover:from-emerald-700 hover:to-emerald-600 transition-all text-sm shadow-md shadow-emerald-200"
+            >
+              + Nova Conta
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Seletor de mês */}
@@ -1167,8 +1175,8 @@ export default function ContasPagarPage() {
                     const badgeClass = urgenciaBadgeClass[urg.cor] || urgenciaBadgeClass.gray;
                     return (
                       <div key={conta.id}
-                        className="flex items-center justify-between px-5 py-3.5 hover:bg-[var(--color-bg)] transition cursor-pointer"
-                        onClick={() => abrirEditar(conta)}
+                        className={`flex items-center justify-between px-5 py-3.5 hover:bg-[var(--color-bg)] transition ${isReadOnly ? "" : "cursor-pointer"}`}
+                        onClick={() => { if (!isReadOnly) abrirEditar(conta); }}
                       >
                         <div className="flex items-center gap-3 min-w-0">
                           <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold shrink-0 ${conta.status === "pago" ? "bg-emerald-100 text-emerald-600" : urg.cor === "red" ? "bg-red-50 text-red-500" : "bg-amber-50 text-amber-600"}`}>

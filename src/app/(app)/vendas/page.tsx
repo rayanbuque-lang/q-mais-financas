@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import EmptyState from "@/components/empty-state";
+import { useRole } from "@/lib/role-context";
 
 interface Maquina {
   id: string;
@@ -38,6 +39,7 @@ interface Feriado {
 const mesesNomes = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
 
 export default function VendasPage() {
+  const { isReadOnly } = useRole();
   const [maquinas, setMaquinas] = useState<Maquina[]>([]);
   const [vendas, setVendas] = useState<Venda[]>([]);
   const [feriados, setFeriados] = useState<string[]>([]);
@@ -240,10 +242,12 @@ export default function VendasPage() {
           <h1 className="text-2xl font-bold tracking-tight">Vendas na Maquininha</h1>
           <p className="text-[var(--color-text-muted)] text-sm mt-1">Registre vendas e acompanhe recebimentos</p>
         </div>
-        <div className="flex gap-2">
-          <button onClick={() => setShowFeriado(!showFeriado)} className="px-4 py-3 bg-[var(--color-surface)] border border-[var(--color-border)] text-[var(--color-text-muted)] font-semibold rounded-xl hover:bg-[var(--color-bg)] transition text-sm">📅 Feriados</button>
-          <button onClick={() => setShowForm(!showForm)} className="px-5 py-3 bg-gradient-to-r from-blue-600 to-blue-500 text-white font-semibold rounded-xl hover:from-blue-700 hover:to-blue-600 transition-all text-sm shadow-md shadow-blue-200">+ Nova Venda</button>
-        </div>
+        {!isReadOnly && (
+          <div className="flex gap-2">
+            <button onClick={() => setShowFeriado(!showFeriado)} className="px-4 py-3 bg-[var(--color-surface)] border border-[var(--color-border)] text-[var(--color-text-muted)] font-semibold rounded-xl hover:bg-[var(--color-bg)] transition text-sm">📅 Feriados</button>
+            <button onClick={() => setShowForm(!showForm)} className="px-5 py-3 bg-gradient-to-r from-blue-600 to-blue-500 text-white font-semibold rounded-xl hover:from-blue-700 hover:to-blue-600 transition-all text-sm shadow-md shadow-blue-200">+ Nova Venda</button>
+          </div>
+        )}
       </div>
 
       {mensagem && <div className={`p-3 rounded-xl text-sm font-medium text-center ${mensagem.includes("Erro") ? "bg-red-50 text-red-600" : "bg-emerald-50 text-emerald-700"}`}>{mensagem}</div>}
@@ -450,12 +454,14 @@ export default function VendasPage() {
                         <p className="text-xs text-red-500 font-semibold">Dif: {fmt(v.diferenca)}</p>
                       )}
                     </div>
-                    <div className="flex flex-col gap-1">
-                      {v.status === "pendente" && (
-                        <button onClick={() => iniciarRecebimento(v)} className="px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-600 text-xs font-semibold hover:bg-emerald-100 transition">💳 Receber</button>
-                      )}
-                      <button onClick={() => handleExcluir(v.id)} className="px-3 py-1.5 rounded-lg bg-red-50 text-red-500 text-xs font-semibold hover:bg-red-100 transition">🗑️</button>
-                    </div>
+                    {!isReadOnly && (
+                      <div className="flex flex-col gap-1">
+                        {v.status === "pendente" && (
+                          <button onClick={() => iniciarRecebimento(v)} className="px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-600 text-xs font-semibold hover:bg-emerald-100 transition">💳 Receber</button>
+                        )}
+                        <button onClick={() => handleExcluir(v.id)} className="px-3 py-1.5 rounded-lg bg-red-50 text-red-500 text-xs font-semibold hover:bg-red-100 transition">🗑️</button>
+                      </div>
+                    )}
                   </div>
                 </div>
 

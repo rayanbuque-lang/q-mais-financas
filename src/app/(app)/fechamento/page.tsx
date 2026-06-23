@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { useRole } from "@/lib/role-context";
 
 interface Fechamento {
   id: string;
@@ -30,6 +31,7 @@ interface DetalheMov {
 const mesesNomes = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
 
 export default function FechamentoPage() {
+  const { isReadOnly } = useRole();
   const [ano, setAno] = useState(new Date().getFullYear());
   const [fechamentos, setFechamentos] = useState<Fechamento[]>([]);
   const [loading, setLoading] = useState(false);
@@ -304,7 +306,7 @@ export default function FechamentoPage() {
           <h1 className="text-2xl font-bold tracking-tight">Fechamento Mensal</h1>
           <p className="text-[var(--color-text-muted)] text-sm mt-1">Congule e audite os dados de cada mês</p>
         </div>
-        {mesesAbertos > 0 && (
+        {mesesAbertos > 0 && !isReadOnly && (
           <button onClick={fecharTodosAbertos} disabled={loading} className="px-5 py-3 bg-gradient-to-r from-purple-600 to-purple-500 text-white font-semibold rounded-xl hover:from-purple-700 hover:to-purple-600 transition-all text-sm shadow-md shadow-purple-200 disabled:opacity-50">
             🔒 Fechar Todos Abertos
           </button>
@@ -436,13 +438,13 @@ export default function FechamentoPage() {
                         </button>
                       )}
 
-                      {!isFechado && temDados && !isConfirmando && (
+                      {!isFechado && temDados && !isConfirmando && !isReadOnly && (
                         <button onClick={() => setConfirmando(f.mes)} className="px-3 py-2 rounded-lg bg-purple-50 text-purple-600 text-xs font-semibold hover:bg-purple-100 transition">
                           🔒 Fechar Mês
                         </button>
                       )}
 
-                      {isFechado && (
+                      {isFechado && !isReadOnly && (
                         <button onClick={() => reabrirMes(f)} className="px-3 py-2 rounded-lg bg-amber-50 text-amber-600 text-xs font-semibold hover:bg-amber-100 transition">
                           🔓 Reabrir
                         </button>
@@ -450,7 +452,7 @@ export default function FechamentoPage() {
                     </div>
 
                     {/* Confirmação de fechamento */}
-                    {isConfirmando && (
+                    {isConfirmando && !isReadOnly && (
                       <div className="bg-purple-50 border border-purple-200 rounded-xl p-4 space-y-3">
                         <p className="text-sm font-semibold text-purple-800">Confirmar fechamento de {mesesNomes[f.mes - 1]}/{ano}?</p>
                         <p className="text-xs text-purple-600">Após fechar, os dados serão registrados e você poderá visualizar o relatório a qualquer momento.</p>

@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { useRole } from "@/lib/role-context";
 
 interface TesteResult {
   sent?: boolean;
@@ -57,6 +58,7 @@ function SetupStep({
 }
 
 export default function ConfiguracoesPage() {
+  const { role } = useRole();
   const [loading, setLoading] = useState(false);
   const [resultado, setResultado] = useState<TesteResult | null>(null);
   const [contasPendentes, setContasPendentes] = useState<{ hoje: number; amanha: number; vencidas: number } | null>(null);
@@ -103,6 +105,16 @@ export default function ConfiguracoesPage() {
   }
 
   const totalAlerta = (contasPendentes?.hoje ?? 0) + (contasPendentes?.amanha ?? 0) + (contasPendentes?.vencidas ?? 0);
+
+  if (role !== null && role !== "master") {
+    return (
+      <div className="text-center py-12">
+        <p className="text-4xl mb-3">🔒</p>
+        <p className="font-bold text-lg">Acesso restrito</p>
+        <p className="text-sm text-[var(--color-text-muted)] mt-1">Configurações é exclusivo para administradores.</p>
+      </div>
+    );
+  }
 
   return (
     <div style={{ maxWidth: 760 }}>

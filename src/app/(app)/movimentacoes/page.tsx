@@ -5,6 +5,7 @@ import { CurrencyInput } from "@/components/currency-input";
 import { registrarLog } from "@/lib/audit";
 import ComprovantePicker from "@/components/comprovante-picker";
 import EmptyState from "@/components/empty-state";
+import { useRole } from "@/lib/role-context";
 
 interface Movimentacao { id: string; tipo: string; data: string; valor: number; categoria_id: string; observacao: string; revisar: boolean; comprovante_url?: string; }
 interface Cat { id: string; nome: string; }
@@ -13,6 +14,7 @@ interface Template { id: string; nome: string; tipo: "entrada" | "saida"; valor:
 const mesesNomes = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
 
 export default function MovimentacoesPage() {
+  const { isReadOnly } = useRole();
   const [movs, setMovs] = useState<Movimentacao[]>([]);
   const [catEntrada, setCatEntrada] = useState<Cat[]>([]);
   const [catSaida, setCatSaida] = useState<Cat[]>([]);
@@ -405,9 +407,11 @@ export default function MovimentacoesPage() {
           <h1 className="text-2xl font-bold tracking-tight">Movimentações</h1>
           <p className="text-[var(--color-text-muted)] text-sm mt-1">Registre entradas e saídas</p>
         </div>
-        <button onClick={novoLancamento} className="px-5 py-3 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white font-semibold rounded-xl hover:from-emerald-700 hover:to-emerald-600 transition-all text-sm shadow-md shadow-emerald-200">
-          + Nova Movimentação
-        </button>
+        {!isReadOnly && (
+          <button onClick={novoLancamento} className="px-5 py-3 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white font-semibold rounded-xl hover:from-emerald-700 hover:to-emerald-600 transition-all text-sm shadow-md shadow-emerald-200">
+            + Nova Movimentação
+          </button>
+        )}
       </div>
 
       {/* Mês */}
@@ -460,10 +464,12 @@ export default function MovimentacoesPage() {
                           {t.tipo === "entrada" ? "+" : "-"} {t.valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
                         </p>
                       </div>
-                      <div className="flex flex-col gap-1 shrink-0">
-                        <button onClick={() => usarTemplate(t)} className="px-3 py-1.5 bg-white border border-current rounded-lg text-xs font-semibold hover:bg-gray-50 transition text-emerald-700">Usar</button>
-                        <button onClick={() => excluirTemplate(t.id)} className="px-3 py-1.5 bg-white border border-red-200 rounded-lg text-xs text-red-400 hover:bg-red-50 transition">✕</button>
-                      </div>
+                      {!isReadOnly && (
+                        <div className="flex flex-col gap-1 shrink-0">
+                          <button onClick={() => usarTemplate(t)} className="px-3 py-1.5 bg-white border border-current rounded-lg text-xs font-semibold hover:bg-gray-50 transition text-emerald-700">Usar</button>
+                          <button onClick={() => excluirTemplate(t.id)} className="px-3 py-1.5 bg-white border border-red-200 rounded-lg text-xs text-red-400 hover:bg-red-50 transition">✕</button>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -756,8 +762,12 @@ export default function MovimentacoesPage() {
                               <span className={`text-sm font-bold tabular-nums ${m.tipo === "entrada" ? "text-emerald-600" : "text-red-500"}`}>
                                 {m.tipo === "entrada" ? "+" : "–"} {fmt(m.valor)}
                               </span>
-                              <button onClick={e => { e.stopPropagation(); editarMov(m); }} className="p-1 rounded-lg hover:bg-[var(--color-bg)] text-[var(--color-text-muted)] hover:text-blue-600 transition text-xs">✏️</button>
-                              <button onClick={e => { e.stopPropagation(); excluirMov(m.id); }} className="p-1 rounded-lg hover:bg-red-50 text-[var(--color-text-muted)] hover:text-red-500 transition text-xs">🗑️</button>
+                              {!isReadOnly && (
+                                <>
+                                  <button onClick={e => { e.stopPropagation(); editarMov(m); }} className="p-1 rounded-lg hover:bg-[var(--color-bg)] text-[var(--color-text-muted)] hover:text-blue-600 transition text-xs">✏️</button>
+                                  <button onClick={e => { e.stopPropagation(); excluirMov(m.id); }} className="p-1 rounded-lg hover:bg-red-50 text-[var(--color-text-muted)] hover:text-red-500 transition text-xs">🗑️</button>
+                                </>
+                              )}
                             </div>
                           </div>
 

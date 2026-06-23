@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { registrarLog } from "@/lib/audit";
 import EmptyState from "@/components/empty-state";
+import { useRole } from "@/lib/role-context";
 
 interface Recorrente {
   id: string;
@@ -28,6 +29,7 @@ const mesesNomes = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho
 const freqLabels: Record<string, string> = { mensal: "Mensal", quinzenal: "Quinzenal", semanal: "Semanal" };
 
 export default function RecorrentesPage() {
+  const { isReadOnly } = useRole();
   const [recorrentes, setRecorrentes] = useState<Recorrente[]>([]);
   const [categoriasEntrada, setCategoriasEntrada] = useState<Categoria[]>([]);
   const [categoriasSaida, setCategoriasSaida] = useState<Categoria[]>([]);
@@ -267,9 +269,11 @@ export default function RecorrentesPage() {
           <h1 className="text-2xl font-bold tracking-tight">Lançamentos Recorrentes</h1>
           <p className="text-[var(--color-text-muted)] text-sm mt-1">Cadastre uma vez, gera todos os meses</p>
         </div>
-        <button onClick={abrirNovo} className="px-5 py-3 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white font-semibold rounded-xl hover:from-emerald-700 hover:to-emerald-600 transition-all text-sm shadow-md shadow-emerald-200">
-          + Novo Recorrente
-        </button>
+        {!isReadOnly && (
+          <button onClick={abrirNovo} className="px-5 py-3 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white font-semibold rounded-xl hover:from-emerald-700 hover:to-emerald-600 transition-all text-sm shadow-md shadow-emerald-200">
+            + Novo Recorrente
+          </button>
+        )}
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -396,7 +400,7 @@ export default function RecorrentesPage() {
         <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
           <EmptyState variant="recurring" title="Nenhum lançamento recorrente"
             description="Configure assinaturas, mensalidades e despesas fixas para geração automática."
-            action={{ label: "Novo Recorrente", onClick: abrirNovo }} />
+            action={isReadOnly ? undefined : { label: "Novo Recorrente", onClick: abrirNovo }} />
         </div>
       ) : (
         <div className="space-y-3">
@@ -423,12 +427,14 @@ export default function RecorrentesPage() {
                   <span className={`font-bold text-sm ${r.tipo === "entrada" ? "text-emerald-600" : "text-red-500"}`}>
                     {fmt(r.valor)}
                   </span>
-                  <div className="flex gap-1">
-                    <button onClick={() => gerarFaltantes(r)} title="Gerar meses faltantes" className="p-1.5 rounded-lg hover:bg-purple-50 text-[var(--color-text-muted)] hover:text-purple-600 transition text-sm">🔄</button>
-                    <button onClick={() => abrirEditar(r)} className="p-1.5 rounded-lg hover:bg-blue-50 text-[var(--color-text-muted)] hover:text-blue-600 transition text-sm">✏️</button>
-                    <button onClick={() => toggleAtivo(r)} className={`p-1.5 rounded-lg transition text-sm ${r.ativo ? "hover:bg-amber-50 text-[var(--color-text-muted)] hover:text-amber-600" : "hover:bg-emerald-50 text-[var(--color-text-muted)] hover:text-emerald-600"}`}>{r.ativo ? "⏸" : "▶"}</button>
-                    <button onClick={() => handleExcluir(r)} className="p-1.5 rounded-lg hover:bg-red-50 text-[var(--color-text-muted)] hover:text-red-500 transition text-sm">🗑️</button>
-                  </div>
+                  {!isReadOnly && (
+                    <div className="flex gap-1">
+                      <button onClick={() => gerarFaltantes(r)} title="Gerar meses faltantes" className="p-1.5 rounded-lg hover:bg-purple-50 text-[var(--color-text-muted)] hover:text-purple-600 transition text-sm">🔄</button>
+                      <button onClick={() => abrirEditar(r)} className="p-1.5 rounded-lg hover:bg-blue-50 text-[var(--color-text-muted)] hover:text-blue-600 transition text-sm">✏️</button>
+                      <button onClick={() => toggleAtivo(r)} className={`p-1.5 rounded-lg transition text-sm ${r.ativo ? "hover:bg-amber-50 text-[var(--color-text-muted)] hover:text-amber-600" : "hover:bg-emerald-50 text-[var(--color-text-muted)] hover:text-emerald-600"}`}>{r.ativo ? "⏸" : "▶"}</button>
+                      <button onClick={() => handleExcluir(r)} className="p-1.5 rounded-lg hover:bg-red-50 text-[var(--color-text-muted)] hover:text-red-500 transition text-sm">🗑️</button>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

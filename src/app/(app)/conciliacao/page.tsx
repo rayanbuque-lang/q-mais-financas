@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import EmptyState from "@/components/empty-state";
+import { useRole } from "@/lib/role-context";
 
 interface Conciliacao {
   id: string;
@@ -28,6 +29,7 @@ interface MovResumo {
 const mesesNomes = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
 
 export default function ConciliacaoPage() {
+  const { isReadOnly } = useRole();
   const [conciliacoes, setConciliacoes] = useState<Conciliacao[]>([]);
   const [loading, setLoading] = useState(false);
   const [mensagem, setMensagem] = useState("");
@@ -275,9 +277,11 @@ export default function ConciliacaoPage() {
           <h1 className="text-2xl font-bold tracking-tight">Conciliação Bancária</h1>
           <p className="text-[var(--color-text-muted)] text-sm mt-1">Compare extratos bancários com os registros do sistema</p>
         </div>
-        <button onClick={abrirNovo} className="px-5 py-3 bg-gradient-to-r from-blue-600 to-blue-500 text-white font-semibold rounded-xl hover:from-blue-700 hover:to-blue-600 transition-all text-sm shadow-md shadow-blue-200">
-          + Nova Conciliação
-        </button>
+        {!isReadOnly && (
+          <button onClick={abrirNovo} className="px-5 py-3 bg-gradient-to-r from-blue-600 to-blue-500 text-white font-semibold rounded-xl hover:from-blue-700 hover:to-blue-600 transition-all text-sm shadow-md shadow-blue-200">
+            + Nova Conciliação
+          </button>
+        )}
       </div>
 
       {/* Ano */}
@@ -536,7 +540,9 @@ export default function ConciliacaoPage() {
 
                     <div className="flex gap-2 flex-wrap">
                       <button onClick={() => imprimirConciliacao(c)} className="px-3 py-2 rounded-lg bg-blue-50 text-blue-600 text-xs font-semibold hover:bg-blue-100 transition">🖨️ Imprimir</button>
-                      <button onClick={() => handleExcluir(c.id)} className="px-3 py-2 rounded-lg bg-red-50 text-red-500 text-xs font-semibold hover:bg-red-100 transition">🗑️ Excluir</button>
+                      {!isReadOnly && (
+                        <button onClick={() => handleExcluir(c.id)} className="px-3 py-2 rounded-lg bg-red-50 text-red-500 text-xs font-semibold hover:bg-red-100 transition">🗑️ Excluir</button>
+                      )}
                     </div>
                   </div>
                 )}

@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { useRole } from "@/lib/role-context";
 
 interface Profile {
   id: string;
@@ -31,6 +32,7 @@ const todosModulos = [
 ];
 
 export default function UsuariosPage() {
+  const { role: meuRole } = useRole();
   const [usuarios, setUsuarios] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
   const [mensagem, setMensagem] = useState("");
@@ -178,6 +180,16 @@ export default function UsuariosPage() {
     if (role === "master") return { label: "Administrador", bg: "var(--green-muted)", color: "var(--green-strong)", icon: "👑" };
     if (role === "leitura") return { label: "Somente Leitura", bg: "var(--amber-muted)", color: "var(--amber-strong)", icon: "👁️" };
     return { label: "Funcionário", bg: "var(--blue-muted)", color: "var(--blue-strong)", icon: "👤" };
+  }
+
+  if (meuRole !== null && meuRole !== "master") {
+    return (
+      <div className="text-center py-12">
+        <p className="text-4xl mb-3">🔒</p>
+        <p className="font-bold text-lg">Acesso restrito</p>
+        <p className="text-sm text-[var(--color-text-muted)] mt-1">Usuários é exclusivo para administradores.</p>
+      </div>
+    );
   }
 
   return (

@@ -8,6 +8,7 @@ import { createClient } from "@/lib/supabase/client";
 import NotificacoesBell from "@/components/notificacoes-bell";
 import ChatWidget from "@/components/chat-widget";
 import { useTheme } from "@/components/theme-provider";
+import { RoleProvider } from "@/lib/role-context";
 
 interface Profile {
   id: string;
@@ -210,7 +211,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           )}
 
           <main className="main-content">
-            <div style={{ maxWidth: 1100, margin: "0 auto", width: "100%" }}>{children}</div>
+            <div style={{ maxWidth: 1100, margin: "0 auto", width: "100%" }}>
+              <RoleProvider role={profile?.role ?? null}>{children}</RoleProvider>
+            </div>
           </main>
         </div>
       </div>
