@@ -107,26 +107,39 @@ export default function UsuariosPage() {
       if (error) setMensagem("Erro ao atualizar: " + error.message);
       else setMensagem("Usuário atualizado!");
     } else {
-      // Criar novo usuário no Auth
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email,
-        password: senha,
-        options: {
-          data: { nome },
-        },
-      });
-
-      if (authError) {
-        setMensagem("Erro ao criar conta: " + authError.message);
+      // Criar novo usuário via API server-side (com a service role key).
+      // Importante: NÃO usar supabase.auth.signUp() aqui — como o projeto
+      // auto-confirma novos cadastros, signUp() loga o navegador como o
+      // usuário recém-criado e troca a sessão do admin no meio do fluxo.
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (!sessionData.session) {
+        setMensagem("Sessão expirada. Faça login novamente.");
         setLoading(false);
         setTimeout(() => setMensagem(""), 5000);
         return;
       }
 
-      if (authData.user) {
-        // Atualizar profile com role e permissões
+      const res = await fetch("/api/usuarios", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${sessionData.session.access_token}`,
+        },
+        body: JSON.stringify({ email, password: senha, nome }),
+      });
+      const result = await res.json();
+
+      if (!res.ok) {
+        setMensagem("Erro ao criar conta: " + (result.error || "Erro desconhecido"));
+        setLoading(false);
+        setTimeout(() => setMensagem(""), 5000);
+        return;
+      }
+
+      if (result.user) {
+        // Sessão do admin permanece intacta — agora sim gravamos o perfil.
         const { error: profileError } = await supabase.from("profiles").upsert({
-          id: authData.user.id,
+          id: result.user.id,
           nome,
           email,
           role,
