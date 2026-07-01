@@ -623,7 +623,9 @@ export default function FechamentoCaixaPage() {
                         </span>
                       </td>
                       {resumoColsAtivas.map(c => {
-                        const v = r[c.key as keyof CaixaDia] as number;
+                        const v = c.key === "total"
+                          ? (r.cartao + r.pix_santander + r.pix_inter + r.rom_card + r.app + r.prefeitura + r.compras_prazo + r.dinheiro)
+                          : (r[c.key as keyof CaixaDia] as number);
                         return (
                           <td key={c.key} style={{ padding: "9px 12px", textAlign: "right", borderBottom: "1px solid var(--border-subtle)", color: c.key === "total" ? "var(--brand-strong)" : c.key === "sobras_faltas" ? (v >= 0 ? "var(--green)" : "var(--red)") : "var(--text)", fontWeight: c.key === "total" ? 700 : 400 }}>
                             {v !== 0 ? fmt(v) : <span style={{ color: "var(--border-strong)" }}>—</span>}
@@ -638,7 +640,9 @@ export default function FechamentoCaixaPage() {
                 <tr style={{ background: "var(--green-subtle)", borderTop: "2px solid var(--green)" }}>
                   <td style={{ padding: "10px 14px", fontWeight: 700, color: "var(--green)", fontSize: 12 }}>TOTAL</td>
                   {resumoColsAtivas.map(c => {
-                    const total = registros.reduce((a, r) => a + ((r[c.key as keyof CaixaDia] as number) ?? 0), 0);
+                    const total = c.key === "total"
+                      ? registros.reduce((a, r) => a + r.cartao + r.pix_santander + r.pix_inter + r.rom_card + r.app + r.prefeitura + r.compras_prazo + r.dinheiro, 0)
+                      : registros.reduce((a, r) => a + ((r[c.key as keyof CaixaDia] as number) ?? 0), 0);
                     return (
                       <td key={c.key} style={{ padding: "10px 12px", textAlign: "right", fontWeight: 800, color: "var(--green)" }}>
                         {fmt(total)}
