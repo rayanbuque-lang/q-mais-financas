@@ -13,9 +13,12 @@ interface Categoria {
 
 interface ValorDetectado {
   texto: string;
+  contexto: string;
   valor: number;
   selecionado: boolean;
 }
+
+type Destino = "movimentacoes" | "contas_pagar";
 
 export default function CapturaPage() {
   const { isReadOnly } = useRole();
@@ -25,6 +28,7 @@ export default function CapturaPage() {
   const [progresso, setProgresso] = useState(0);
   const [textoExtraido, setTextoExtraido] = useState("");
   const [valoresDetectados, setValoresDetectados] = useState<ValorDetectado[]>([]);
+  const [destino, setDestino] = useState<Destino>("movimentacoes");
   const [tipo, setTipo] = useState<"entrada" | "saida">("saida");
   const [categorias, setCategorias] = useState<Categoria[]>([]);
   const [categoriaId, setCategoriaId] = useState("");
@@ -38,7 +42,7 @@ export default function CapturaPage() {
   const supabase = createClient();
 
   async function carregarCategorias() {
-    const tabela = tipo === "entrada" ? "categorias_entrada" : "categorias_saida";
+    const tabela = destino === "contas_pagar" || tipo === "saida" ? "categorias_saida" : "categorias_entrada";
     const { data } = await supabase.from(tabela).select("*").eq("ativo", true).order("nome");
     if (data) {
       setCategorias(data);
@@ -46,7 +50,7 @@ export default function CapturaPage() {
     }
   }
 
-  useEffect(() => { carregarCategorias(); }, [tipo]);
+  useEffect(() => { carregarCategorias(); }, [tipo, destino]);
 
   function handleArquivo(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -90,15 +94,12 @@ export default function CapturaPage() {
       const texto = result.data.text;
       setTextoExtraido(texto);
 
-      // Extrair valores monetários
       const valores = extrairValores(texto);
       setValoresDetectados(valores);
 
-      // Tentar extrair data
       const dataEncontrada = extrairData(texto);
       if (dataEncontrada) setData(dataEncontrada);
 
-      // Tentar extrair observação (primeira linha não vazia)
       const linhas = texto.split("\n").filter((l: string) => l.trim().length > 3);
       if (linhas.length > 0 && !observacao) {
         setObservacao(linhas[0].trim().substring(0, 100));
@@ -123,50 +124,40 @@ export default function CapturaPage() {
   function extrairValores(texto: string): ValorDetectado[] {
     const valores: ValorDetectado[] = [];
     const seen = new Set<string>();
+    const linhas = texto.split("\n");
 
-    // Padrão: R$ 1.234,56 ou 1.234,56 ou 1234,56
-    const regex1 = /R?\$?\s*(\d{1,3}(?:\.\d{3})*,\d{2})/g;
-    let match;
-    while ((match = regex1.exec(texto)) !== null) {
-      const numStr = match[1].replace(/\./g, "").replace(",", ".");
+    function tryAdd(numStr: string, matchedText: string, linha: string) {
       const num = parseFloat(numStr);
       if (!isNaN(num) && num > 0 && !seen.has(num.toFixed(2))) {
         seen.add(num.toFixed(2));
+        const resto = linha.replace(matchedText, "").replace(/^[-–—,.\s]+|[-–—,.\s]+$/g, "").trim();
         valores.push({
-          texto: match[0].trim(),
+          texto: matchedText.trim(),
+          contexto: resto || linha.trim(),
           valor: num,
           selecionado: true,
         });
       }
     }
 
-    // Padrão: 1234.56 (ponto como decimal)
-    const regex2 = /(\d{1,3}(?:,\d{3})*\.\d{2})/g;
-    while ((match = regex2.exec(texto)) !== null) {
-      const numStr = match[1].replace(/,/g, "");
-      const num = parseFloat(numStr);
-      if (!isNaN(num) && num > 0 && !seen.has(num.toFixed(2))) {
-        seen.add(num.toFixed(2));
-        valores.push({
-          texto: match[0].trim(),
-          valor: num,
-          selecionado: true,
-        });
-      }
-    }
+    for (const linha of linhas) {
+      const limpada = linha.trim();
+      if (!limpada) continue;
 
-    // Padrão: números com vírgula simples (ex: 50,00)
-    const regex3 = /(\d+,\d{2})\b/g;
-    while ((match = regex3.exec(texto)) !== null) {
-      const numStr = match[1].replace(",", ".");
-      const num = parseFloat(numStr);
-      if (!isNaN(num) && num > 0 && !seen.has(num.toFixed(2))) {
-        seen.add(num.toFixed(2));
-        valores.push({
-          texto: match[0].trim(),
-          valor: num,
-          selecionado: true,
-        });
+      const regex1 = /R?\$?\s*(\d{1,3}(?:\.\d{3})*,\d{2})/g;
+      let match;
+      while ((match = regex1.exec(limpada)) !== null) {
+        tryAdd(match[1].replace(/\./g, "").replace(",", "."), match[0], limpada);
+      }
+
+      const regex2 = /(\d{1,3}(?:,\d{3})*\.\d{2})/g;
+      while ((match = regex2.exec(limpada)) !== null) {
+        tryAdd(match[1].replace(/,/g, ""), match[0], limpada);
+      }
+
+      const regex3 = /(\d+,\d{2})\b/g;
+      while ((match = regex3.exec(limpada)) !== null) {
+        tryAdd(match[1].replace(",", "."), match[0], limpada);
       }
     }
 
@@ -174,26 +165,17 @@ export default function CapturaPage() {
   }
 
   function extrairData(texto: string): string | null {
-    // Padrão: DD/MM/YYYY
     const regex1 = /(\d{2})\/(\d{2})\/(\d{4})/;
     const match1 = texto.match(regex1);
-    if (match1) {
-      return `${match1[3]}-${match1[2]}-${match1[1]}`;
-    }
+    if (match1) return `${match1[3]}-${match1[2]}-${match1[1]}`;
 
-    // Padrão: DD-MM-YYYY
     const regex2 = /(\d{2})-(\d{2})-(\d{4})/;
     const match2 = texto.match(regex2);
-    if (match2) {
-      return `${match2[3]}-${match2[2]}-${match2[1]}`;
-    }
+    if (match2) return `${match2[3]}-${match2[2]}-${match2[1]}`;
 
-    // Padrão: YYYY-MM-DD
     const regex3 = /(\d{4})-(\d{2})-(\d{2})/;
     const match3 = texto.match(regex3);
-    if (match3) {
-      return `${match3[1]}-${match3[2]}-${match3[3]}`;
-    }
+    if (match3) return `${match3[1]}-${match3[2]}-${match3[3]}`;
 
     return null;
   }
@@ -208,12 +190,10 @@ export default function CapturaPage() {
     setValoresDetectados((prev) => prev.map((v) => ({ ...v, selecionado: true })));
   }
 
-  const totalSelecionado = valoresDetectados
-    .filter((v) => v.selecionado)
-    .reduce((a, v) => a + v.valor, 0);
+  const selecionados = valoresDetectados.filter((v) => v.selecionado);
+  const totalSelecionado = selecionados.reduce((a, v) => a + v.valor, 0);
 
   async function handleSalvar() {
-    const selecionados = valoresDetectados.filter((v) => v.selecionado);
     if (selecionados.length === 0) {
       setMensagem("Selecione pelo menos um valor.");
       setTimeout(() => setMensagem(""), 3000);
@@ -223,51 +203,77 @@ export default function CapturaPage() {
     setSalvando(true);
     setMensagem("");
 
-    // Salvar como movimentação com sub-itens
-    const dados = {
-      tipo,
-      data,
-      valor: totalSelecionado,
-      categoria_id: categoriaId,
-      observacao: observacao || `Captura por foto`,
-      revisar: false,
-    };
+    if (destino === "contas_pagar") {
+      const registros = selecionados.map((v) => ({
+        descricao: v.contexto || observacao || "Captura por foto",
+        valor: v.valor,
+        data_vencimento: data,
+        categoria_id: categoriaId,
+        status: "pendente",
+      }));
 
-    const { data: movResult, error } = await supabase
-      .from("movimentacoes")
-      .insert(dados)
-      .select("id")
-      .single();
+      const { error } = await supabase.from("contas_pagar").insert(registros);
 
-    if (error) {
-      setMensagem("Erro ao salvar.");
-      setSalvando(false);
-      return;
+      if (error) {
+        setMensagem("Erro ao salvar.");
+        setSalvando(false);
+        return;
+      }
+
+      await registrarLog({
+        acao: "criou",
+        tabela: "contas_pagar",
+        registroId: undefined,
+        dadosNovos: { quantidade: selecionados.length, total: totalSelecionado, vencimento: data },
+        detalhes: `Captura por foto: ${selecionados.length} conta(s) a pagar — Total R$ ${totalSelecionado.toFixed(2)}`,
+      });
+
+      setMensagem(`${selecionados.length} conta${selecionados.length > 1 ? "s" : ""} a pagar salva${selecionados.length > 1 ? "s" : ""}! Total: ${fmt(totalSelecionado)}`);
+    } else {
+      const dados = {
+        tipo,
+        data,
+        valor: totalSelecionado,
+        categoria_id: categoriaId,
+        observacao: observacao || `Captura por foto`,
+        revisar: false,
+      };
+
+      const { data: movResult, error } = await supabase
+        .from("movimentacoes")
+        .insert(dados)
+        .select("id")
+        .single();
+
+      if (error) {
+        setMensagem("Erro ao salvar.");
+        setSalvando(false);
+        return;
+      }
+
+      if (selecionados.length > 1 && movResult) {
+        await supabase.from("movimentacao_itens").insert(
+          selecionados.map((v, i) => ({
+            movimentacao_id: movResult.id,
+            descricao: v.contexto || `Valor ${i + 1} (OCR)`,
+            valor: v.valor,
+          }))
+        );
+      }
+
+      await registrarLog({
+        acao: "criou",
+        tabela: "movimentacoes",
+        registroId: movResult?.id,
+        dadosNovos: dados,
+        detalhes: `Captura por foto: ${tipo === "entrada" ? "Entrada" : "Saída"} de R$ ${totalSelecionado.toFixed(2)}`,
+      });
+
+      setMensagem(`Salvo! ${selecionados.length} ${selecionados.length === 1 ? "valor" : "valores"} — Total: ${fmt(totalSelecionado)}`);
     }
 
-    // Salvar sub-itens se tiver mais de 1 valor
-    if (selecionados.length > 1 && movResult) {
-      await supabase.from("movimentacao_itens").insert(
-        selecionados.map((v, i) => ({
-          movimentacao_id: movResult.id,
-          descricao: `Valor ${i + 1} (OCR)`,
-          valor: v.valor,
-        }))
-      );
-    }
-
-    await registrarLog({
-      acao: "criou",
-      tabela: "movimentacoes",
-      registroId: movResult?.id,
-      dadosNovos: dados,
-      detalhes: `Captura por foto: ${tipo === "entrada" ? "Entrada" : "Saída"} de R$ ${totalSelecionado.toFixed(2)}`,
-    });
-
-    setMensagem(`Salvo! ${selecionados.length} ${selecionados.length === 1 ? "valor" : "valores"} — Total: R$ ${totalSelecionado.toFixed(2)}`);
     setSalvando(false);
 
-    // Reset
     setTimeout(() => {
       setImagem(null);
       setArquivo(null);
@@ -342,7 +348,6 @@ export default function CapturaPage() {
               Cupom fiscal, boleto, comprovante, extrato...
             </p>
             <div className="flex gap-3 justify-center flex-wrap">
-              {/* Câmera (mobile) */}
               <label className="inline-flex items-center gap-2 px-5 py-3 bg-emerald-600 text-white rounded-xl text-sm font-semibold cursor-pointer hover:bg-emerald-700 transition">
                 📱 Tirar Foto
                 <input
@@ -354,7 +359,6 @@ export default function CapturaPage() {
                   className="hidden"
                 />
               </label>
-              {/* Galeria / Arquivo */}
               <label className="inline-flex items-center gap-2 px-5 py-3 bg-blue-600 text-white rounded-xl text-sm font-semibold cursor-pointer hover:bg-blue-700 transition">
                 🖼️ Escolher Arquivo
                 <input
@@ -446,6 +450,9 @@ export default function CapturaPage() {
                     <p className="text-[10px] text-[var(--color-text-muted)] mt-1 truncate">
                       &quot;{v.texto}&quot;
                     </p>
+                    {v.contexto && (
+                      <p className="text-[10px] text-[var(--color-text-muted)] truncate">{v.contexto}</p>
+                    )}
                     {v.selecionado && (
                       <p className="text-[10px] text-emerald-600 font-bold mt-1">✓ Selecionado</p>
                     )}
@@ -454,10 +461,10 @@ export default function CapturaPage() {
               </div>
             )}
 
-            {valoresDetectados.filter((v) => v.selecionado).length > 0 && (
+            {selecionados.length > 0 && (
               <div className="mt-4 bg-emerald-50 rounded-xl p-4 flex items-center justify-between">
                 <span className="text-sm font-semibold text-emerald-800">
-                  {valoresDetectados.filter((v) => v.selecionado).length} valores selecionados
+                  {selecionados.length} valor{selecionados.length > 1 ? "es" : ""} selecionado{selecionados.length > 1 ? "s" : ""}
                 </span>
                 <span className="text-lg font-bold text-emerald-700">{fmt(totalSelecionado)}</span>
               </div>
@@ -465,38 +472,80 @@ export default function CapturaPage() {
           </div>
 
           {/* Formulário de salvamento */}
-          {valoresDetectados.filter((v) => v.selecionado).length > 0 && (
+          {selecionados.length > 0 && (
             <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-6">
               <h2 className="font-bold text-sm mb-4">4. Confirme e salve</h2>
               <div className="space-y-4">
-                <div className="flex gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setTipo("entrada")}
-                    className={`flex-1 py-3 rounded-xl font-semibold text-sm transition-all ${
-                      tipo === "entrada"
-                        ? "bg-emerald-600 text-white shadow-md shadow-emerald-200"
-                        : "bg-[var(--color-bg)] text-[var(--color-text-muted)] border border-[var(--color-border)]"
-                    }`}
-                  >
-                    ▲ Entrada
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setTipo("saida")}
-                    className={`flex-1 py-3 rounded-xl font-semibold text-sm transition-all ${
-                      tipo === "saida"
-                        ? "bg-red-500 text-white shadow-md shadow-red-200"
-                        : "bg-[var(--color-bg)] text-[var(--color-text-muted)] border border-[var(--color-border)]"
-                    }`}
-                  >
-                    ▼ Saída
-                  </button>
+
+                {/* Seletor de destino */}
+                <div>
+                  <p className="text-xs font-semibold text-[var(--color-text-muted)] mb-2">Salvar como</p>
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setDestino("movimentacoes")}
+                      className={`flex-1 py-3 rounded-xl font-semibold text-sm transition-all ${
+                        destino === "movimentacoes"
+                          ? "bg-blue-600 text-white shadow-md shadow-blue-200"
+                          : "bg-[var(--color-bg)] text-[var(--color-text-muted)] border border-[var(--color-border)]"
+                      }`}
+                    >
+                      📊 Movimentação
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDestino("contas_pagar")}
+                      className={`flex-1 py-3 rounded-xl font-semibold text-sm transition-all ${
+                        destino === "contas_pagar"
+                          ? "bg-amber-500 text-white shadow-md shadow-amber-200"
+                          : "bg-[var(--color-bg)] text-[var(--color-text-muted)] border border-[var(--color-border)]"
+                      }`}
+                    >
+                      📋 Conta a Pagar
+                    </button>
+                  </div>
                 </div>
+
+                {/* Entrada/Saída — só para movimentações */}
+                {destino === "movimentacoes" && (
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setTipo("entrada")}
+                      className={`flex-1 py-3 rounded-xl font-semibold text-sm transition-all ${
+                        tipo === "entrada"
+                          ? "bg-emerald-600 text-white shadow-md shadow-emerald-200"
+                          : "bg-[var(--color-bg)] text-[var(--color-text-muted)] border border-[var(--color-border)]"
+                      }`}
+                    >
+                      ▲ Entrada
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTipo("saida")}
+                      className={`flex-1 py-3 rounded-xl font-semibold text-sm transition-all ${
+                        tipo === "saida"
+                          ? "bg-red-500 text-white shadow-md shadow-red-200"
+                          : "bg-[var(--color-bg)] text-[var(--color-text-muted)] border border-[var(--color-border)]"
+                      }`}
+                    >
+                      ▼ Saída
+                    </button>
+                  </div>
+                )}
+
+                {/* Contas a pagar: aviso de quantidade */}
+                {destino === "contas_pagar" && selecionados.length > 1 && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-xs text-amber-800 font-medium">
+                    {selecionados.length} contas a pagar serão criadas separadamente, cada uma com sua descrição e valor individual.
+                  </div>
+                )}
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-semibold mb-2 text-[var(--color-text-muted)]">Data</label>
+                    <label className="block text-sm font-semibold mb-2 text-[var(--color-text-muted)]">
+                      {destino === "contas_pagar" ? "Vencimento" : "Data"}
+                    </label>
                     <input
                       type="date"
                       value={data}
@@ -518,28 +567,49 @@ export default function CapturaPage() {
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-sm font-semibold mb-2 text-[var(--color-text-muted)]">Observação</label>
-                  <input
-                    type="text"
-                    value={observacao}
-                    onChange={(e) => setObservacao(e.target.value)}
-                    placeholder="Descrição do documento"
-                    className="w-full px-4 py-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none"
-                  />
-                </div>
+                {destino === "movimentacoes" && (
+                  <div>
+                    <label className="block text-sm font-semibold mb-2 text-[var(--color-text-muted)]">Observação</label>
+                    <input
+                      type="text"
+                      value={observacao}
+                      onChange={(e) => setObservacao(e.target.value)}
+                      placeholder="Descrição do documento"
+                      className="w-full px-4 py-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none"
+                    />
+                  </div>
+                )}
 
                 {/* Preview */}
                 <div className="bg-[var(--color-bg)] rounded-xl border border-[var(--color-border)] p-4">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-[var(--color-text-muted)]">Total a salvar:</span>
-                    <span className={`text-xl font-bold ${tipo === "entrada" ? "text-emerald-600" : "text-red-500"}`}>
-                      {fmt(totalSelecionado)}
-                    </span>
-                  </div>
-                  {valoresDetectados.filter((v) => v.selecionado).length > 1 && (
+                  {destino === "contas_pagar" ? (
+                    <div className="space-y-1">
+                      {selecionados.map((v, i) => (
+                        <div key={i} className="flex items-center justify-between text-sm">
+                          <span className="text-[var(--color-text-muted)] truncate max-w-[60%]">
+                            {v.contexto || `Conta ${i + 1}`}
+                          </span>
+                          <span className="font-semibold text-amber-600">{fmt(v.valor)}</span>
+                        </div>
+                      ))}
+                      {selecionados.length > 1 && (
+                        <div className="flex items-center justify-between text-sm pt-2 border-t border-[var(--color-border)] mt-2">
+                          <span className="font-bold text-[var(--color-text)]">Total</span>
+                          <span className="font-bold text-amber-600">{fmt(totalSelecionado)}</span>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-[var(--color-text-muted)]">Total a salvar:</span>
+                      <span className={`text-xl font-bold ${tipo === "entrada" ? "text-emerald-600" : "text-red-500"}`}>
+                        {fmt(totalSelecionado)}
+                      </span>
+                    </div>
+                  )}
+                  {destino === "movimentacoes" && selecionados.length > 1 && (
                     <p className="text-xs text-[var(--color-text-muted)] mt-1">
-                      Soma de {valoresDetectados.filter((v) => v.selecionado).length} valores individuais
+                      Soma de {selecionados.length} valores individuais
                     </p>
                   )}
                 </div>
@@ -551,9 +621,17 @@ export default function CapturaPage() {
                   <button
                     onClick={handleSalvar}
                     disabled={salvando}
-                    className="flex-1 py-3 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white font-semibold rounded-xl hover:from-emerald-700 hover:to-emerald-600 transition-all disabled:opacity-50 text-sm shadow-md shadow-emerald-200"
+                    className={`flex-1 py-3 text-white font-semibold rounded-xl transition-all disabled:opacity-50 text-sm shadow-md ${
+                      destino === "contas_pagar"
+                        ? "bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-600 hover:to-amber-500 shadow-amber-200"
+                        : "bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-700 hover:to-emerald-600 shadow-emerald-200"
+                    }`}
                   >
-                    {salvando ? "Salvando..." : "💾 Salvar Movimentação"}
+                    {salvando
+                      ? "Salvando..."
+                      : destino === "contas_pagar"
+                      ? `📋 Salvar ${selecionados.length} Conta${selecionados.length > 1 ? "s" : ""} a Pagar`
+                      : "💾 Salvar Movimentação"}
                   </button>
                 </div>
               </div>
