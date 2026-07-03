@@ -205,7 +205,8 @@ export default function CapturaPage() {
 
     if (destino === "contas_pagar") {
       const registros = selecionados.map((v) => ({
-        descricao: v.contexto || observacao || "Captura por foto",
+        fornecedor: v.contexto || "Captura por foto",
+        descricao: observacao || null,
         valor: v.valor,
         data_vencimento: data,
         categoria_id: categoriaId,
@@ -567,18 +568,18 @@ export default function CapturaPage() {
                   </div>
                 </div>
 
-                {destino === "movimentacoes" && (
-                  <div>
-                    <label className="block text-sm font-semibold mb-2 text-[var(--color-text-muted)]">Observação</label>
-                    <input
-                      type="text"
-                      value={observacao}
-                      onChange={(e) => setObservacao(e.target.value)}
-                      placeholder="Descrição do documento"
-                      className="w-full px-4 py-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none"
-                    />
-                  </div>
-                )}
+                <div>
+                  <label className="block text-sm font-semibold mb-2 text-[var(--color-text-muted)]">
+                    {destino === "contas_pagar" ? "Observação (opcional)" : "Observação"}
+                  </label>
+                  <input
+                    type="text"
+                    value={observacao}
+                    onChange={(e) => setObservacao(e.target.value)}
+                    placeholder={destino === "contas_pagar" ? "Nota comum a todas as contas" : "Descrição do documento"}
+                    className="w-full px-4 py-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none"
+                  />
+                </div>
 
                 {/* Preview */}
                 <div className="bg-[var(--color-bg)] rounded-xl border border-[var(--color-border)] p-4">
