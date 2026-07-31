@@ -214,17 +214,18 @@ export default function ContasPagarPage() {
 
     if (!recorrentes || recorrentes.length === 0) return;
 
-    for (const r of recorrentes) {
-      const { data: existente } = await supabase
-        .from("contas_pagar")
-        .select("id")
-        .eq("fornecedor", r.descricao)
-        .eq("valor", r.valor)
-        .gte("data_vencimento", inicio)
-        .lte("data_vencimento", fim)
-        .limit(1);
+    const { data: existentesNoMes } = await supabase
+      .from("contas_pagar")
+      .select("fornecedor, valor")
+      .gte("data_vencimento", inicio)
+      .lte("data_vencimento", fim);
 
-      if (existente && existente.length > 0) continue;
+    const jaExiste = new Set(
+      (existentesNoMes ?? []).map((c) => `${c.fornecedor}|${c.valor}`)
+    );
+
+    for (const r of recorrentes) {
+      if (jaExiste.has(`${r.descricao}|${r.valor}`)) continue;
 
       const dataInicioR = new Date(r.data_inicio + "T12:00:00");
       const dataVenc = new Date(ano, mes - 1, r.dia_vencimento || 1);
