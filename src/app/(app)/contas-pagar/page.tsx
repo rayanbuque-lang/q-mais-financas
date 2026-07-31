@@ -99,6 +99,7 @@ export default function ContasPagarPage() {
   const [loteDataPagamento, setLoteDataPagamento] = useState(new Date().toISOString().split("T")[0]);
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const [comprovanteUrl, setComprovanteUrl] = useState<string | null>(null);
+  const [verTodosPendentes, setVerTodosPendentes] = useState(false);
 
   // Filtros avançados
   const [filtroCategoria, setFiltroCategoria] = useState("");
@@ -132,7 +133,7 @@ export default function ContasPagarPage() {
     }
   }
 
-  useEffect(() => { carregarDados(); gerarRecorrentes(); setDiaSelecionado(null); }, [mes, ano]);
+  useEffect(() => { carregarDados(); gerarRecorrentes(); setDiaSelecionado(null); setVerTodosPendentes(false); }, [mes, ano]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -358,9 +359,30 @@ export default function ContasPagarPage() {
     return d.getMonth() + 1 === mes && d.getFullYear() === ano;
   });
 
-  const contasFiltradas = contasDoMes.filter(c => {
-    if (filtroStatus === "pendentes" && c.status !== "pendente") return false;
-    if (filtroStatus === "pagos" && c.status !== "pago") return false;
+  const todasPendentesOrdenadas = contas
+    .filter(c => c.status === "pendente")
+    .sort((a, b) => a.data_vencimento.localeCompare(b.data_vencimento));
+
+  const pendentesDoMes = contasDoMes.filter(c => c.status === "pendente");
+
+  // Próximo mês (após o atual) que tem pendentes — usado no banner de mês vazio
+  const proximoMesComPendentes = (() => {
+    const mesAtualStr = `${ano}-${String(mes).padStart(2, "0")}`;
+    const futuras = todasPendentesOrdenadas.filter(c => c.data_vencimento.substring(0, 7) > mesAtualStr);
+    if (!futuras.length) return null;
+    const d = new Date(futuras[0].data_vencimento + "T12:00:00");
+    const mNum = d.getMonth() + 1;
+    const aNum = d.getFullYear();
+    const prefixo = `${aNum}-${String(mNum).padStart(2, "0")}`;
+    const doMes = futuras.filter(c => c.data_vencimento.startsWith(prefixo));
+    return { mes: mNum, ano: aNum, count: doMes.length, total: doMes.reduce((a, c) => a + c.valor, 0) };
+  })();
+
+  const contasFiltradas = (verTodosPendentes ? todasPendentesOrdenadas : contasDoMes).filter(c => {
+    if (!verTodosPendentes) {
+      if (filtroStatus === "pendentes" && c.status !== "pendente") return false;
+      if (filtroStatus === "pagos" && c.status !== "pago") return false;
+    }
     if (filtroCategoria && c.categoria_id !== filtroCategoria) return false;
     if (filtroBusca && !c.fornecedor.toLowerCase().includes(filtroBusca.toLowerCase())) return false;
     return true;
@@ -691,6 +713,33 @@ export default function ContasPagarPage() {
         </button>
       </div>
 
+      {/* Link "ver todos os pendentes" abaixo do seletor de mês */}
+      {!verTodosPendentes && todasPendentesOrdenadas.length > pendentesDoMes.length && (
+        <div className="text-center -mt-2">
+          <button
+            onClick={() => { setVerTodosPendentes(true); setFiltroStatus("pendentes"); }}
+            className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-primary)] transition font-medium"
+          >
+            Ver todos os {todasPendentesOrdenadas.length} pendentes (todos os meses) →
+          </button>
+        </div>
+      )}
+
+      {/* Strip: modo "ver todos os pendentes" ativo */}
+      {verTodosPendentes && (
+        <div className="bg-blue-50 border border-blue-200 rounded-2xl px-4 py-3 flex items-center justify-between gap-3">
+          <p className="text-sm font-semibold text-blue-800">
+            📋 Todos os pendentes · {todasPendentesOrdenadas.length} conta{todasPendentesOrdenadas.length !== 1 ? "s" : ""} · {fmt(todasPendentesOrdenadas.reduce((a, c) => a + c.valor, 0))}
+          </p>
+          <button
+            onClick={() => setVerTodosPendentes(false)}
+            className="px-3 py-1.5 bg-white border border-blue-300 text-blue-700 rounded-lg text-xs font-semibold hover:bg-blue-50 transition shrink-0"
+          >
+            ✕ Voltar ao mês
+          </button>
+        </div>
+      )}
+
       {/* Barra de lote */}
       {modoLote && (
         <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 space-y-3">
@@ -754,6 +803,38 @@ export default function ContasPagarPage() {
           <p className="text-sm font-semibold text-yellow-800">
             {contas2dias.length} {contas2dias.length === 1 ? "conta vence" : "contas vencem"} em até 2 dias · Total: {fmt(contas2dias.reduce((a, c) => a + c.valor, 0))}
           </p>
+        </div>
+      )}
+
+      {/* Banner: mês selecionado não tem pendentes — aponta para o próximo */}
+      {filtroStatus === "pendentes" && !verTodosPendentes && pendentesDoMes.length === 0 && !filtroBusca && !filtroCategoria && (
+        <div className="rounded-2xl p-4 flex items-start gap-3 border border-blue-200 bg-blue-50">
+          <span className="text-lg shrink-0">📋</span>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-blue-800">
+              Nenhum pendente em {mesesNomes[mes - 1]}
+              {proximoMesComPendentes
+                ? ` — próximas contas em ${mesesNomes[proximoMesComPendentes.mes - 1]} (${proximoMesComPendentes.count} conta${proximoMesComPendentes.count !== 1 ? "s" : ""}, ${fmt(proximoMesComPendentes.total)})`
+                : " — nenhum pendente futuro encontrado"}
+            </p>
+            <p className="text-xs text-blue-600 mt-0.5">Todas as contas deste mês foram pagas.</p>
+          </div>
+          <div className="flex gap-2 shrink-0 flex-wrap">
+            {proximoMesComPendentes && (
+              <button
+                onClick={() => { setMes(proximoMesComPendentes.mes); setAno(proximoMesComPendentes.ano); }}
+                className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700 transition"
+              >
+                Ver {mesesNomes[proximoMesComPendentes.mes - 1]}
+              </button>
+            )}
+            <button
+              onClick={() => { setVerTodosPendentes(true); }}
+              className="px-3 py-1.5 bg-white border border-blue-300 text-blue-700 rounded-lg text-xs font-semibold hover:bg-blue-50 transition"
+            >
+              Ver todos
+            </button>
+          </div>
         </div>
       )}
 
