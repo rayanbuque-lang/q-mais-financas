@@ -118,7 +118,7 @@ export default function ContasPagarPage() {
     const fimAno = `${ano}-12-31`;
 
     const [r1, r2] = await Promise.all([
-      supabase.from("contas_pagar").select("*").gte("data_vencimento", inicioAno).lte("data_vencimento", fimAno).order("data_vencimento", { ascending: true }),
+      supabase.from("contas_pagar").select("*").gte("data_vencimento", inicioAno).lte("data_vencimento", fimAno).order("data_vencimento", { ascending: true }).limit(5000),
       supabase.from("categorias_saida").select("*").eq("ativo", true).order("nome"),
     ]);
     if (r2.data) setCategorias(r2.data);
