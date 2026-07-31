@@ -114,23 +114,51 @@ export default function ContasPagarPage() {
   const supabase = createClient();
 
   async function carregarDados() {
-    const inicioAno = `${ano}-01-01`;
-    const fimAno = `${ano}-12-31`;
+    const inicioMes = `${ano}-${String(mes).padStart(2, "0")}-01`;
+    const ultimoDia = new Date(ano, mes, 0).getDate();
+    const fimMes = `${ano}-${String(mes).padStart(2, "0")}-${String(ultimoDia).padStart(2, "0")}`;
 
-    const [r1, r2] = await Promise.all([
-      supabase.from("contas_pagar").select("*").gte("data_vencimento", inicioAno).lte("data_vencimento", fimAno).order("data_vencimento", { ascending: true }).limit(5000),
+    const [rMes, rPagosNoMes, rPendentes, rCats] = await Promise.all([
+      // 1. Contas com vencimento no mês (pendentes + pagas no prazo)
+      supabase.from("contas_pagar").select("*")
+        .gte("data_vencimento", inicioMes)
+        .lte("data_vencimento", fimMes),
+      // 2. Contas pagas com data_pagamento no mês (venceram em outro mês mas foram pagas aqui)
+      supabase.from("contas_pagar").select("*")
+        .eq("status", "pago")
+        .gte("data_pagamento", inicioMes)
+        .lte("data_pagamento", fimMes),
+      // 3. Todas as pendentes sem restrição de mês — garante que agosto+ sempre apareça
+      supabase.from("contas_pagar").select("*")
+        .eq("status", "pendente")
+        .order("data_vencimento", { ascending: true }),
       supabase.from("categorias_saida").select("*").eq("ativo", true).order("nome"),
     ]);
-    if (r2.data) setCategorias(r2.data);
 
-    if (r1.data) {
-      const catMap = Object.fromEntries((r2.data || []).map(c => [c.id, c.nome]));
-      const lista = r1.data.map(conta => ({
-        ...conta,
-        categoria_nome: conta.categoria_id ? (catMap[conta.categoria_id] || "Sem categoria") : "Sem categoria",
-      }));
-      setContas(lista);
+    if (rCats.data) setCategorias(rCats.data);
+
+    const catMap = Object.fromEntries((rCats.data || []).map(c => [c.id, c.nome]));
+
+    // Merge de-duplicado: mês + pagos do mês + todas as pendentes
+    const seen = new Set<string>();
+    const merged: ContaPagar[] = [];
+    for (const conta of [
+      ...(rMes.data ?? []),
+      ...(rPagosNoMes.data ?? []),
+      ...(rPendentes.data ?? []),
+    ]) {
+      if (!seen.has(conta.id)) {
+        seen.add(conta.id);
+        merged.push({
+          ...conta,
+          categoria_nome: conta.categoria_id
+            ? (catMap[conta.categoria_id] || "Sem categoria")
+            : "Sem categoria",
+        });
+      }
     }
+
+    setContas(merged);
   }
 
   useEffect(() => { carregarDados(); gerarRecorrentes(); setDiaSelecionado(null); setVerTodosPendentes(false); }, [mes, ano]);
