@@ -35,6 +35,16 @@ function dataEfetiva(conta: { status: string; data_vencimento: string; data_paga
   return conta.status === "pago" && conta.data_pagamento ? conta.data_pagamento : conta.data_vencimento;
 }
 
+// Ordenação determinística: data (ISO string) > fornecedor > id, para que
+// contas de mesma data e mesmo fornecedor não troquem de posição entre renders.
+function compararContas(a: ContaPagar, b: ContaPagar) {
+  return (
+    a.data_vencimento.localeCompare(b.data_vencimento) ||
+    a.fornecedor.localeCompare(b.fornecedor, "pt-BR") ||
+    String(a.id).localeCompare(String(b.id))
+  );
+}
+
 function urgencia(dataVencimento: string, status: string) {
   if (status === "pago") return { label: "Pago", dias: 0, cor: "green" };
   const hoje = new Date(); hoje.setHours(0,0,0,0);
@@ -129,9 +139,9 @@ export default function ContasPagarPage() {
         .gte("data_pagamento", inicioMes)
         .lte("data_pagamento", fimMes),
       // 3. Todas as pendentes sem restrição de mês — garante que agosto+ sempre apareça
+      // (ordenação final é feita no merge abaixo, não aqui — fonte única de verdade)
       supabase.from("contas_pagar").select("*")
-        .eq("status", "pendente")
-        .order("data_vencimento", { ascending: true }),
+        .eq("status", "pendente"),
       supabase.from("categorias_saida").select("*").eq("ativo", true).order("nome"),
     ]);
 
@@ -158,6 +168,7 @@ export default function ContasPagarPage() {
       }
     }
 
+    merged.sort(compararContas);
     setContas(merged);
   }
 
@@ -390,7 +401,7 @@ export default function ContasPagarPage() {
 
   const todasPendentesOrdenadas = contas
     .filter(c => c.status === "pendente")
-    .sort((a, b) => a.data_vencimento.localeCompare(b.data_vencimento));
+    .sort(compararContas);
 
   const pendentesDoMes = contasDoMes.filter(c => c.status === "pendente");
 
