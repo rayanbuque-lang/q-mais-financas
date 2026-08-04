@@ -46,6 +46,9 @@ export default function MovimentacoesPage() {
   const [salvandoTemplate, setSalvandoTemplate] = useState(false);
   const [nomeTemplate, setNomeTemplate] = useState("");
   const [filtroCatNome, setFiltroCatNome] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<"lista" | "calendario">("lista");
+  const [listaVisible, setListaVisible] = useState(true);
+  const [calDiaSel, setCalDiaSel] = useState<string | null>(null);
 
   const supabase = createClient();
   const cats = tipo === "entrada" ? catEntrada : catSaida;
@@ -400,6 +403,14 @@ export default function MovimentacoesPage() {
   const saldo = totalEntradas - totalSaidas;
   const totalSomatoria = itensTemp.reduce((a, b) => a + b, 0);
 
+  const calDados: Record<string, { ent: number; sai: number; movs: Movimentacao[] }> = {};
+  movsFiltrados.forEach(m => {
+    if (!calDados[m.data]) calDados[m.data] = { ent: 0, sai: 0, movs: [] };
+    if (m.tipo === "entrada") calDados[m.data].ent += m.valor;
+    else calDados[m.data].sai += m.valor;
+    calDados[m.data].movs.push(m);
+  });
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-4">
@@ -414,22 +425,52 @@ export default function MovimentacoesPage() {
         )}
       </div>
 
-      {/* Mês */}
-      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-4 flex items-center justify-between">
-        <button onClick={mesAnterior} className="px-4 py-2 rounded-xl bg-[var(--color-bg)] text-sm font-medium hover:bg-[var(--color-border)] transition">← Anterior</button>
-        <div className="text-center"><p className="font-bold capitalize">{mesesNomes[mes]}</p><p className="text-sm text-[var(--color-text-muted)]">{ano}</p></div>
-        <button onClick={mesProximo} className="px-4 py-2 rounded-xl bg-[var(--color-bg)] text-sm font-medium hover:bg-[var(--color-border)] transition">Próximo →</button>
+      {/* Nav + Resumo compacto */}
+      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl px-4 py-3 flex items-center flex-wrap gap-y-3">
+        <div className="flex items-center gap-2 shrink-0">
+          <button onClick={mesAnterior} className="w-8 h-8 flex items-center justify-center rounded-lg bg-[var(--color-bg)] border border-[var(--color-border)] text-sm hover:bg-[var(--color-border)] transition">←</button>
+          <div className="text-center min-w-[96px]">
+            <p className="font-bold capitalize text-sm">{mesesNomes[mes]}</p>
+            <p className="text-xs text-[var(--color-text-muted)]">{ano}</p>
+          </div>
+          <button onClick={mesProximo} className="w-8 h-8 flex items-center justify-center rounded-lg bg-[var(--color-bg)] border border-[var(--color-border)] text-sm hover:bg-[var(--color-border)] transition">→</button>
+        </div>
+        <div className="w-px bg-[var(--color-border)] h-8 mx-4 shrink-0 hidden sm:block" />
+        <div className="flex flex-1 flex-wrap gap-y-2">
+          {[
+            { l: "Entradas", v: fmt(totalEntradas), c: "text-emerald-600" },
+            { l: "Saídas", v: fmt(totalSaidas), c: "text-red-500" },
+            { l: "Saldo", v: fmt(saldo), c: saldo >= 0 ? "text-emerald-600" : "text-red-500" },
+          ].map((item, i) => (
+            <div key={item.l} className={`flex flex-col px-4 ${i > 0 ? "border-l border-[var(--color-border)]" : ""}`}>
+              <span className="text-[10px] font-bold uppercase tracking-widest text-[var(--color-text-muted)]">{item.l}</span>
+              <span className={`text-sm font-bold tabular-nums ${item.c}`}>{item.v}</span>
+            </div>
+          ))}
+        </div>
       </div>
 
-      {/* Busca */}
-      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-4">
-        <div className="relative">
-          <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", fontSize: 16, color: "var(--text-placeholder)" }}>🔍</span>
-          <input type="text" value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar por categoria, valor, data, observação..."
-            className="w-full pl-10 pr-10 py-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none" />
-          {busca && <button onClick={() => setBusca("")} style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "var(--text-placeholder)" }}>✕</button>}
+      {/* Busca + alternância de vista */}
+      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-4 space-y-2">
+        <div className="flex gap-3 items-center">
+          <div className="relative flex-1">
+            <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", fontSize: 16, color: "var(--text-placeholder)" }}>🔍</span>
+            <input type="text" value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar por categoria, valor, data, observação..."
+              className="w-full pl-10 pr-10 py-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm focus:outline-none" />
+            {busca && <button onClick={() => setBusca("")} style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "var(--text-placeholder)" }}>✕</button>}
+          </div>
+          <div className="flex border border-[var(--color-border)] rounded-xl overflow-hidden shrink-0">
+            <button
+              onClick={() => { setViewMode("lista"); setCalDiaSel(null); }}
+              className={`px-4 py-2.5 text-xs font-bold transition-all ${viewMode === "lista" ? "bg-[var(--color-text)] text-[var(--color-surface)]" : "bg-[var(--color-bg)] text-[var(--color-text-muted)] hover:bg-[var(--color-border)]"}`}
+            >📋 Lista</button>
+            <button
+              onClick={() => setViewMode("calendario")}
+              className={`px-4 py-2.5 text-xs font-bold transition-all border-l border-[var(--color-border)] ${viewMode === "calendario" ? "bg-[var(--color-text)] text-[var(--color-surface)]" : "bg-[var(--color-bg)] text-[var(--color-text-muted)] hover:bg-[var(--color-border)]"}`}
+            >📅 Calendário</button>
+          </div>
         </div>
-        {busca && <p className="text-xs text-[var(--color-text-muted)] mt-2">{movsFiltrados.length} resultado{movsFiltrados.length !== 1 ? "s" : ""}</p>}
+        {busca && <p className="text-xs text-[var(--color-text-muted)]">{movsFiltrados.length} resultado{movsFiltrados.length !== 1 ? "s" : ""}</p>}
       </div>
 
       {/* Templates Rápidos */}
@@ -479,15 +520,6 @@ export default function MovimentacoesPage() {
         )}
       </div>
 
-      {/* Cards */}
-      <div className="grid grid-cols-3 gap-3">
-        {[{ l: "Entradas", v: fmt(totalEntradas), c: "text-emerald-600" }, { l: "Saídas", v: fmt(totalSaidas), c: "text-red-500" }, { l: "Saldo", v: fmt(saldo), c: saldo >= 0 ? "text-emerald-600" : "text-red-500" }].map(c => (
-          <div key={c.l} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl p-4 text-center">
-            <p className="text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1">{c.l}</p>
-            <p className={`font-bold ${c.c}`}>{c.v}</p>
-          </div>
-        ))}
-      </div>
 
       {/* Filtros por categoria */}
       {(entryCatTotais.length > 0 || saidaCatTotais.length > 0) && (
@@ -668,133 +700,260 @@ export default function MovimentacoesPage() {
         </div>
       )}
 
-      {/* Lista agrupada por dia */}
-      {movsFiltrados.length === 0 ? (
-        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
-          <EmptyState
-            variant={busca || filtroCatNome ? "search" : "movements"}
-            title={busca ? `Sem resultados para "${busca}"` : filtroCatNome ? `Nenhuma movimentação em "${filtroCatNome}"` : `Nenhuma movimentação em ${mesesNomes[mes]}/${ano}`}
-            description={busca || filtroCatNome ? "Tente outros termos ou remova o filtro." : "Registre sua primeira movimentação deste mês."}
-            action={!busca && !filtroCatNome ? { label: "+ Nova movimentação", onClick: () => {} } : undefined}
-          />
-        </div>
-      ) : (() => {
-        // Agrupar por data
-        const grupos: { data: string; movs: Movimentacao[] }[] = [];
-        movsFiltrados.forEach(m => {
-          const last = grupos[grupos.length - 1];
-          if (last && last.data === m.data) last.movs.push(m);
-          else grupos.push({ data: m.data, movs: [m] });
-        });
-
-        return (
-          <div className="space-y-2">
-            {grupos.map(grupo => {
-              const entDia = grupo.movs.filter(m => m.tipo === "entrada").reduce((a, m) => a + m.valor, 0);
-              const saiDia = grupo.movs.filter(m => m.tipo === "saida").reduce((a, m) => a + m.valor, 0);
-              const saldoDia = entDia - saiDia;
-              const dObj = new Date(grupo.data + "T12:00:00");
-              const diaSem = dObj.toLocaleDateString("pt-BR", { weekday: "short" });
-              const dataFmt = dObj.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
-              const isHoje = grupo.data === new Date().toISOString().split("T")[0];
-
-              return (
-                <div key={grupo.data} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
-                  {/* Cabeçalho do dia */}
-                  <div className={`px-4 py-2.5 flex items-center justify-between border-b border-[var(--color-border)] ${isHoje ? "bg-emerald-50" : "bg-[var(--color-bg)]"}`}>
-                    <div className="flex items-center gap-2">
-                      <span className={`text-xs font-bold capitalize ${isHoje ? "text-emerald-700" : "text-[var(--color-text)]"}`}>
-                        {diaSem} {dataFmt}
-                      </span>
-                      {isHoje && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-md bg-emerald-100 text-emerald-700 border border-emerald-200">HOJE</span>}
-                      <span className="text-[10px] text-[var(--color-text-muted)]">
-                        {grupo.movs.length} lançamento{grupo.movs.length > 1 ? "s" : ""}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      {entDia > 0 && <span className="text-[11px] font-semibold text-emerald-600">+{fmt(entDia)}</span>}
-                      {saiDia > 0 && <span className="text-[11px] font-semibold text-red-500">–{fmt(saiDia)}</span>}
-                      <span className={`text-xs font-bold px-2 py-0.5 rounded-lg ${saldoDia >= 0 ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-red-50 text-red-600 border border-red-200"}`}>
-                        {saldoDia >= 0 ? "+" : ""}{fmt(saldoDia)}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Linhas compactas */}
-                  <div className="divide-y divide-[var(--color-border)]">
-                    {grupo.movs.map(m => {
-                      const nome = getCategoriaNome(m.categoria_id);
-                      const icon = getCatIcon(nome);
-                      const itens = itensPorMov[m.id];
-                      const temItens = itens && itens.length > 0;
-                      const isDetalhe = detalheId === m.id;
-                      return (
-                        <div key={m.id} id={`mov-${m.id}`}>
-                          <div
-                            className={`px-4 py-2.5 flex items-center gap-3 transition-all ${
-                              highlightId === m.id
-                                ? "bg-yellow-50 ring-2 ring-inset ring-yellow-400"
-                                : temItens ? "cursor-pointer hover:bg-blue-50" : "hover:bg-[var(--color-bg)]"
-                            }`}
-                            onClick={() => { if (temItens) setDetalheId(isDetalhe ? null : m.id); }}
-                          >
-                            <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-xs shrink-0 ${m.tipo === "entrada" ? "bg-emerald-50 text-emerald-600" : "bg-red-50 text-red-500"}`}>
-                              {icon}
-                            </div>
-                            <div className="min-w-0 flex-1">
-                              <p className="text-sm font-medium text-[var(--color-text)] truncate">
-                                {nome}
-                                {m.observacao && <span className="text-[var(--color-text-muted)] font-normal text-xs"> · {m.observacao}</span>}
-                              </p>
-                              {m.comprovante_url && (
-                                <a href={m.comprovante_url} target="_blank" rel="noopener noreferrer"
-                                  onClick={e => e.stopPropagation()}
-                                  className="text-[10px] text-blue-500 hover:underline">📎 comprovante</a>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-2 shrink-0">
-                              {m.revisar && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-700 border border-amber-200">revisar</span>}
-                              {temItens && (
-                                <span className="text-[10px] font-medium text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded-md border border-blue-100">
-                                  {itens!.length}✦ {isDetalhe ? "▲" : "▼"}
-                                </span>
-                              )}
-                              <span className={`text-sm font-bold tabular-nums ${m.tipo === "entrada" ? "text-emerald-600" : "text-red-500"}`}>
-                                {m.tipo === "entrada" ? "+" : "–"} {fmt(m.valor)}
-                              </span>
-                              {!isReadOnly && (
-                                <>
-                                  <button onClick={e => { e.stopPropagation(); editarMov(m); }} className="p-1 rounded-lg hover:bg-[var(--color-bg)] text-[var(--color-text-muted)] hover:text-blue-600 transition text-xs">✏️</button>
-                                  <button onClick={e => { e.stopPropagation(); excluirMov(m.id); }} className="p-1 rounded-lg hover:bg-red-50 text-[var(--color-text-muted)] hover:text-red-500 transition text-xs">🗑️</button>
-                                </>
-                              )}
-                            </div>
-                          </div>
-
-                          {isDetalhe && temItens && (
-                            <div className="bg-blue-50 border-t border-blue-100 px-4 py-3">
-                              <div className="flex flex-wrap gap-2">
-                                {itens!.map((item, i) => (
-                                  <span key={item.id} className="px-2.5 py-1 bg-white border border-blue-200 rounded-lg text-xs font-medium text-blue-700">
-                                    {i + 1}ª {fmt(item.valor)}
-                                  </span>
-                                ))}
-                              </div>
-                              <p className="text-xs font-bold text-blue-800 mt-2 pt-2 border-t border-blue-200 text-right">
-                                {itens!.length} valores · Total {fmt(itens!.reduce((a, b) => a + b.valor, 0))}
-                              </p>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })}
+      {/* Lista / Calendário */}
+      {viewMode === "lista" ? (
+        <div className="space-y-2">
+          {/* Cabeçalho recolhível */}
+          <div className="flex items-center justify-between">
+            <button
+              onClick={() => setListaVisible(v => !v)}
+              className="flex items-center gap-2 text-sm font-semibold text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition py-1"
+            >
+              <span className={`text-[10px] transition-transform inline-block ${listaVisible ? "" : "-rotate-90"}`}>▼</span>
+              <span className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-full px-3 py-0.5 text-xs font-bold text-[var(--color-text)] tabular-nums">
+                {movsFiltrados.length} lançamento{movsFiltrados.length !== 1 ? "s" : ""}
+              </span>
+              <span className="text-xs text-[var(--color-text-muted)] tabular-nums">{fmt(totalEntradas + totalSaidas)}</span>
+            </button>
+            <button
+              onClick={() => setListaVisible(v => !v)}
+              className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition"
+            >
+              {listaVisible ? "Ocultar lista" : "Mostrar lista"}
+            </button>
           </div>
-        );
-      })()}
+
+          {listaVisible && (movsFiltrados.length === 0 ? (
+            <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
+              <EmptyState
+                variant={busca || filtroCatNome ? "search" : "movements"}
+                title={busca ? `Sem resultados para "${busca}"` : filtroCatNome ? `Nenhuma movimentação em "${filtroCatNome}"` : `Nenhuma movimentação em ${mesesNomes[mes]}/${ano}`}
+                description={busca || filtroCatNome ? "Tente outros termos ou remova o filtro." : "Registre sua primeira movimentação deste mês."}
+                action={!busca && !filtroCatNome ? { label: "+ Nova movimentação", onClick: () => {} } : undefined}
+              />
+            </div>
+          ) : (() => {
+            const grupos: { data: string; movs: Movimentacao[] }[] = [];
+            movsFiltrados.forEach(m => {
+              const last = grupos[grupos.length - 1];
+              if (last && last.data === m.data) last.movs.push(m);
+              else grupos.push({ data: m.data, movs: [m] });
+            });
+
+            return (
+              <div className="space-y-2">
+                {grupos.map(grupo => {
+                  const entDia = grupo.movs.filter(m => m.tipo === "entrada").reduce((a, m) => a + m.valor, 0);
+                  const saiDia = grupo.movs.filter(m => m.tipo === "saida").reduce((a, m) => a + m.valor, 0);
+                  const saldoDia = entDia - saiDia;
+                  const dObj = new Date(grupo.data + "T12:00:00");
+                  const diaSem = dObj.toLocaleDateString("pt-BR", { weekday: "short" });
+                  const dataFmt = dObj.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
+                  const isHoje = grupo.data === new Date().toISOString().split("T")[0];
+
+                  return (
+                    <div key={grupo.data} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
+                      {/* Cabeçalho do dia */}
+                      <div className={`px-4 py-2.5 flex items-center justify-between border-b border-[var(--color-border)] ${isHoje ? "bg-emerald-50" : "bg-[var(--color-bg)]"}`}>
+                        <div className="flex items-center gap-2">
+                          <span className={`text-xs font-bold capitalize ${isHoje ? "text-emerald-700" : "text-[var(--color-text)]"}`}>
+                            {diaSem} {dataFmt}
+                          </span>
+                          {isHoje && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-md bg-emerald-100 text-emerald-700 border border-emerald-200">HOJE</span>}
+                          <span className="text-[10px] text-[var(--color-text-muted)]">
+                            {grupo.movs.length} lançamento{grupo.movs.length > 1 ? "s" : ""}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          {entDia > 0 && <span className="text-[11px] font-semibold text-emerald-600">+{fmt(entDia)}</span>}
+                          {saiDia > 0 && <span className="text-[11px] font-semibold text-red-500">–{fmt(saiDia)}</span>}
+                          <span className={`text-xs font-bold px-2 py-0.5 rounded-lg ${saldoDia >= 0 ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-red-50 text-red-600 border border-red-200"}`}>
+                            {saldoDia >= 0 ? "+" : ""}{fmt(saldoDia)}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Linhas compactas */}
+                      <div className="divide-y divide-[var(--color-border)]">
+                        {grupo.movs.map(m => {
+                          const nome = getCategoriaNome(m.categoria_id);
+                          const icon = getCatIcon(nome);
+                          const itens = itensPorMov[m.id];
+                          const temItens = itens && itens.length > 0;
+                          const isDetalhe = detalheId === m.id;
+                          return (
+                            <div key={m.id} id={`mov-${m.id}`}>
+                              <div
+                                className={`px-4 py-2.5 flex items-center gap-3 transition-all ${
+                                  highlightId === m.id
+                                    ? "bg-yellow-50 ring-2 ring-inset ring-yellow-400"
+                                    : temItens ? "cursor-pointer hover:bg-blue-50" : "hover:bg-[var(--color-bg)]"
+                                }`}
+                                onClick={() => { if (temItens) setDetalheId(isDetalhe ? null : m.id); }}
+                              >
+                                <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-xs shrink-0 ${m.tipo === "entrada" ? "bg-emerald-50 text-emerald-600" : "bg-red-50 text-red-500"}`}>
+                                  {icon}
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-sm font-medium text-[var(--color-text)] truncate">
+                                    {nome}
+                                    {m.observacao && <span className="text-[var(--color-text-muted)] font-normal text-xs"> · {m.observacao}</span>}
+                                  </p>
+                                  {m.comprovante_url && (
+                                    <a href={m.comprovante_url} target="_blank" rel="noopener noreferrer"
+                                      onClick={e => e.stopPropagation()}
+                                      className="text-[10px] text-blue-500 hover:underline">📎 comprovante</a>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  {m.revisar && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-700 border border-amber-200">revisar</span>}
+                                  {temItens && (
+                                    <span className="text-[10px] font-medium text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded-md border border-blue-100">
+                                      {itens!.length}✦ {isDetalhe ? "▲" : "▼"}
+                                    </span>
+                                  )}
+                                  <span className={`text-sm font-bold tabular-nums ${m.tipo === "entrada" ? "text-emerald-600" : "text-red-500"}`}>
+                                    {m.tipo === "entrada" ? "+" : "–"} {fmt(m.valor)}
+                                  </span>
+                                  {!isReadOnly && (
+                                    <>
+                                      <button onClick={e => { e.stopPropagation(); editarMov(m); }} className="p-1 rounded-lg hover:bg-[var(--color-bg)] text-[var(--color-text-muted)] hover:text-blue-600 transition text-xs">✏️</button>
+                                      <button onClick={e => { e.stopPropagation(); excluirMov(m.id); }} className="p-1 rounded-lg hover:bg-red-50 text-[var(--color-text-muted)] hover:text-red-500 transition text-xs">🗑️</button>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+
+                              {isDetalhe && temItens && (
+                                <div className="bg-blue-50 border-t border-blue-100 px-4 py-3">
+                                  <div className="flex flex-wrap gap-2">
+                                    {itens!.map((item, i) => (
+                                      <span key={item.id} className="px-2.5 py-1 bg-white border border-blue-200 rounded-lg text-xs font-medium text-blue-700">
+                                        {i + 1}ª {fmt(item.valor)}
+                                      </span>
+                                    ))}
+                                  </div>
+                                  <p className="text-xs font-bold text-blue-800 mt-2 pt-2 border-t border-blue-200 text-right">
+                                    {itens!.length} valores · Total {fmt(itens!.reduce((a, b) => a + b.valor, 0))}
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })())}
+        </div>
+      ) : (
+        /* Calendário */
+        (() => {
+          const primeiroDia = new Date(ano, mes, 1).getDay();
+          const offset = (primeiroDia + 6) % 7;
+          const diasNoMes = new Date(ano, mes + 1, 0).getDate();
+          const hoje = new Date().toISOString().split("T")[0];
+          const diasSemana = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
+          const celulas: (number | null)[] = [
+            ...Array(offset).fill(null),
+            ...Array.from({ length: diasNoMes }, (_, i) => i + 1),
+          ];
+
+          return (
+            <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
+              <div className="grid grid-cols-7 border-b border-[var(--color-border)] bg-[var(--color-bg)]">
+                {diasSemana.map(d => (
+                  <div key={d} className="py-2 text-center text-[10px] font-bold uppercase tracking-widest text-[var(--color-text-muted)]">{d}</div>
+                ))}
+              </div>
+              <div className="grid grid-cols-7">
+                {celulas.map((dia, i) => {
+                  if (dia === null) {
+                    return <div key={`e-${i}`} className="border-r border-b border-[var(--color-border)] bg-[var(--color-bg)] opacity-30 min-h-[80px]" />;
+                  }
+                  const dStr = `${ano}-${String(mes + 1).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
+                  const d = calDados[dStr];
+                  const isHoje = dStr === hoje;
+                  const isSel = calDiaSel === dStr;
+                  const saldo = d ? d.ent - d.sai : 0;
+                  return (
+                    <div
+                      key={dStr}
+                      onClick={() => d ? setCalDiaSel(isSel ? null : dStr) : undefined}
+                      className={`border-r border-b border-[var(--color-border)] p-2 min-h-[80px] relative transition-colors ${
+                        isSel
+                          ? "bg-blue-50"
+                          : isHoje
+                          ? "bg-amber-50"
+                          : d
+                          ? "cursor-pointer hover:bg-[var(--color-bg)]"
+                          : "bg-[var(--color-bg)] opacity-40"
+                      }`}
+                    >
+                      <p className={`text-xs font-bold mb-1 ${isHoje ? "text-amber-600" : isSel ? "text-blue-600" : "text-[var(--color-text-muted)]"}`}>{dia}</p>
+                      {d && (
+                        <>
+                          {d.ent > 0 && <p className="text-[10px] font-bold text-emerald-600 leading-tight tabular-nums">↑ {fmt(d.ent)}</p>}
+                          {d.sai > 0 && <p className="text-[10px] font-bold text-red-500 leading-tight tabular-nums">↓ {fmt(d.sai)}</p>}
+                          <span className={`mt-1 inline-flex items-center justify-center w-[18px] h-[18px] rounded-full text-[9px] font-bold ${
+                            isHoje ? "bg-amber-500 text-white" : isSel ? "bg-blue-500 text-white" : "bg-[var(--color-border)] text-[var(--color-text-muted)]"
+                          }`}>{d.movs.length}</span>
+                          <span className={`absolute bottom-1.5 right-1.5 w-1.5 h-1.5 rounded-full ${saldo >= 0 ? "bg-emerald-500" : "bg-red-500"}`} />
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {calDiaSel && calDados[calDiaSel] && (() => {
+                const d = calDados[calDiaSel];
+                const dObj = new Date(calDiaSel + "T12:00:00");
+                const diaSem = dObj.toLocaleDateString("pt-BR", { weekday: "short" });
+                const dataFmt = dObj.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
+                return (
+                  <div className="border-t border-[var(--color-border)] p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-sm font-bold capitalize">{diaSem} {dataFmt} — {d.movs.length} lançamento{d.movs.length > 1 ? "s" : ""}</span>
+                      <button onClick={() => setCalDiaSel(null)} className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-[var(--color-bg)] text-[var(--color-text-muted)] text-base">✕</button>
+                    </div>
+                    <div className="divide-y divide-[var(--color-border)]">
+                      {d.movs.slice(0, 8).map(m => {
+                        const nome = getCategoriaNome(m.categoria_id);
+                        const icon = getCatIcon(nome);
+                        return (
+                          <div key={m.id} className="flex items-center gap-2 py-2">
+                            <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-xs shrink-0 ${m.tipo === "entrada" ? "bg-emerald-50" : "bg-red-50"}`}>{icon}</div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-semibold text-[var(--color-text)] truncate">{nome}</p>
+                              {m.observacao && <p className="text-[10px] text-[var(--color-text-muted)]">{m.observacao}</p>}
+                            </div>
+                            <span className={`text-xs font-bold tabular-nums shrink-0 ${m.tipo === "entrada" ? "text-emerald-600" : "text-red-500"}`}>
+                              {m.tipo === "entrada" ? "+" : "–"} {fmt(m.valor)}
+                            </span>
+                            {!isReadOnly && (
+                              <div className="flex gap-1 shrink-0">
+                                <button onClick={() => { setViewMode("lista"); editarMov(m); }} className="p-1 rounded hover:bg-[var(--color-bg)] text-[var(--color-text-muted)] text-xs">✏️</button>
+                                <button onClick={() => excluirMov(m.id)} className="p-1 rounded hover:bg-red-50 text-[var(--color-text-muted)] text-xs">🗑️</button>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                      {d.movs.length > 8 && (
+                        <p className="text-xs text-center text-[var(--color-text-muted)] pt-3">{d.movs.length - 8} lançamento{d.movs.length - 8 > 1 ? "s" : ""} adicionais neste dia</p>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          );
+        })()
+      )}
     </div>
   );
 }
