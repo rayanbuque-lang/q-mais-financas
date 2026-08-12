@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { parseOfx, decodificarOfx, OfxParseError } from "@/lib/ofx";
 import { parseRelatorioPix, RelatorioPixParseError } from "@/lib/relatorio-pix";
+import { calcularCobertura, type CandidatoOfx, type LancamentoExistentePix } from "@/lib/cobertura-pix";
 import { aplicarRegras, type RegraExtrato as RegraMotor, type LancamentoClassificavel } from "@/lib/regras-extrato";
 import { calcularTipoMovimentacao, agruparResumoPorDia, type ResumoDia } from "@/lib/preview-movimentacao";
 import EmptyState from "@/components/empty-state";
@@ -367,17 +368,39 @@ export default function ExtratoPage() {
 
       const { data: { user } } = await supabase.auth.getUser();
 
-      const linhas = parsed.transacoes.map((t) => ({
-        conta_id: contaImportId,
-        fitid: t.fitid,
-        data_lancamento: t.data,
+      // Evita duplicar Pix de fim de semana/feriado já importados via relatório
+      // Pix com a data certa — o OFX traz o "eco" desses lançamentos carimbado
+      // com a data do próximo dia útil.
+      const { data: existentesPix, error: erroExistentes } = await supabase
+        .from("extrato_lancamento")
+        .select("id, data_lancamento, valor, descricao_normalizada")
+        .eq("conta_id", contaImportId)
+        .ilike("descricao_normalizada", "%pix recebido%");
+      if (erroExistentes) throw new Error(erroExistentes.message);
+
+      const candidatosCobertura: CandidatoOfx[] = parsed.transacoes.map((t, indice) => ({
+        indice,
+        data: t.data,
         valor: t.valor,
-        tipo: t.tipo,
-        descricao: t.descricao,
-        descricao_normalizada: t.descricaoNormalizada,
-        ocorrencia: t.ocorrencia,
-        status: "nao_classificado" as const,
+        descricaoNormalizada: t.descricaoNormalizada,
       }));
+      const cobertura = calcularCobertura(candidatosCobertura, (existentesPix ?? []) as LancamentoExistentePix[]);
+      const indicesCobertosSet = new Set(cobertura.indicesCobertos);
+      const cobertos = cobertura.indicesCobertos.length;
+
+      const linhas = parsed.transacoes
+        .filter((_, indice) => !indicesCobertosSet.has(indice))
+        .map((t) => ({
+          conta_id: contaImportId,
+          fitid: t.fitid,
+          data_lancamento: t.data,
+          valor: t.valor,
+          tipo: t.tipo,
+          descricao: t.descricao,
+          descricao_normalizada: t.descricaoNormalizada,
+          ocorrencia: t.ocorrencia,
+          status: "nao_classificado" as const,
+        }));
 
       // O FITID do Santander muda a cada export (é derivado do horário do export,
       // não da transação), então a deduplicação usa a chave natural
@@ -397,7 +420,7 @@ export default function ExtratoPage() {
         nome_arquivo: arquivo.name,
         periodo_inicio: parsed.conta.periodoInicio,
         periodo_fim: parsed.conta.periodoFim,
-        qtd_linhas: linhas.length,
+        qtd_linhas: parsed.transacoes.length,
         qtd_novas: novas,
         qtd_duplicadas: duplicadas,
         importado_por: user?.id ?? null,
@@ -409,11 +432,12 @@ export default function ExtratoPage() {
         classificadosAuto = await classificarPorRegras(inseridos as LancamentoClassificavel[]);
       }
 
-      setResumoImportacao({ lidas: linhas.length, novas, duplicadas, avisos: parsed.avisos });
+      setResumoImportacao({ lidas: parsed.transacoes.length, novas, duplicadas, avisos: parsed.avisos });
       setMensagem({
         tipo: "sucesso",
         texto:
-          `${linhas.length} lidas · ${novas} novas · ${duplicadas} já existentes` +
+          `${parsed.transacoes.length} lidas · ${novas} novas · ${duplicadas} já existentes` +
+          (cobertos > 0 ? ` · ${cobertos} já cobertas pelo relatório Pix` : "") +
           (classificadosAuto > 0 ? ` · ${classificadosAuto} classificada(s) automaticamente` : ""),
       });
       setArquivo(null);
