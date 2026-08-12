@@ -1,6 +1,6 @@
 # Pix de fim de semana/feriado: importar do relatório Pix e não duplicar no OFX
 
-Status: aprovado, aguardando implementação.
+Status: implementado.
 
 > Revisão: a primeira versão desta spec propunha corrigir a data de lançamentos
 > já importados do OFX usando o relatório Pix como referência (update depois do
