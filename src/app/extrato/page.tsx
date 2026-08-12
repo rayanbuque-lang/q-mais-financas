@@ -101,6 +101,7 @@ export default function ExtratoPage() {
   const [filtroContaId, setFiltroContaId] = useState("");
   const [filtroStatus, setFiltroStatus] = useState<"todos" | "nao_classificado" | "classificado" | "ignorado">("todos");
   const [resumo, setResumo] = useState({ total: 0, classificados: 0, naoClassificados: 0, automaticos: 0 });
+  const [mostrarResumoDiario, setMostrarResumoDiario] = useState(false);
   const [reprocessando, setReprocessando] = useState(false);
   const [categoriaEmEdicao, setCategoriaEmEdicao] = useState<Record<string, string>>({});
   const [acaoLancamentoId, setAcaoLancamentoId] = useState<string | null>(null);
@@ -125,6 +126,8 @@ export default function ExtratoPage() {
   const categoriasDisponiveis = Array.from(new Set([...categoriasEntrada, ...categoriasSaida])).sort((a, b) =>
     a.localeCompare(b, "pt-BR")
   );
+
+  const resumoPorDia = agruparResumoPorDia(lancamentos);
 
   async function carregarContas() {
     const { data, error } = await supabase.from("extrato_conta").select("*").order("banco").order("apelido");
@@ -751,6 +754,42 @@ export default function ExtratoPage() {
               </button>
             )}
           </div>
+
+          {resumoPorDia.length > 0 && (
+            <div className="mb-4">
+              <button
+                type="button"
+                onClick={() => setMostrarResumoDiario((v) => !v)}
+                className="px-3 py-2 rounded-lg border border-[var(--color-border)] text-xs font-semibold hover:bg-[var(--hover-bg)]"
+              >
+                {mostrarResumoDiario ? "▲" : "▼"} Resumo diário por categoria ({resumoPorDia.length} dia{resumoPorDia.length > 1 ? "s" : ""})
+              </button>
+              {mostrarResumoDiario && (
+                <div className="mt-2 space-y-2 max-h-96 overflow-y-auto">
+                  {resumoPorDia.map((dia) => (
+                    <div key={dia.data} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl p-3">
+                      <div className="flex justify-between items-center mb-2">
+                        <span className="text-xs font-semibold">{formatarData(dia.data)}</span>
+                        <span className={`text-xs font-bold ${dia.totalDia < 0 ? "text-red-600" : "text-emerald-600"}`}>
+                          {formatarMoeda(dia.totalDia)}
+                        </span>
+                      </div>
+                      <div className="space-y-1">
+                        {dia.categorias.map((c) => (
+                          <div key={c.categoria} className="flex justify-between text-[11px] text-[var(--color-text-muted)]">
+                            <span>
+                              {c.categoria} <span className="text-[10px]">×{c.quantidade}</span>
+                            </span>
+                            <span className={c.total < 0 ? "text-red-500" : "text-emerald-600"}>{formatarMoeda(c.total)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {carregandoLancamentos ? (
             <div className="skeleton h-40 rounded-xl" />
