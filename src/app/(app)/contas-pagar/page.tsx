@@ -97,6 +97,7 @@ export default function ContasPagarPage() {
   const [observacao, setObservacao] = useState("");
   const [statusInicial, setStatusInicial] = useState<"pendente" | "pago">("pendente");
   const [statusOriginal, setStatusOriginal] = useState<"pendente" | "pago">("pendente");
+  const [contaOriginal, setContaOriginal] = useState<ContaPagar | null>(null);
   const [dataPagamento, setDataPagamento] = useState("");
 
   // Pagamento inline
@@ -265,13 +266,13 @@ export default function ContasPagarPage() {
   }
 
   function resetarFormulario() {
-    setFornecedor(""); setDescricao(""); setValor(0); setDataVencimento(""); setCategoriaId(""); setObservacao(""); setStatusInicial("pendente"); setStatusOriginal("pendente"); setDataPagamento(""); setEditandoId(null); setComprovanteUrl(null);
+    setFornecedor(""); setDescricao(""); setValor(0); setDataVencimento(""); setCategoriaId(""); setObservacao(""); setStatusInicial("pendente"); setStatusOriginal("pendente"); setDataPagamento(""); setEditandoId(null); setComprovanteUrl(null); setContaOriginal(null);
   }
 
   function abrirNovo() { resetarFormulario(); if (categorias.length > 0) setCategoriaId(categorias[0].id); setShowForm(true); }
 
   function abrirEditar(conta: ContaPagar) {
-    setFornecedor(conta.fornecedor); setDescricao(conta.descricao || ""); setValor(conta.valor); setDataVencimento(conta.data_vencimento); setCategoriaId(conta.categoria_id || ""); setObservacao(conta.observacao || ""); setStatusInicial(conta.status as "pendente" | "pago"); setStatusOriginal(conta.status as "pendente" | "pago"); setDataPagamento(conta.data_pagamento || ""); setComprovanteUrl(conta.comprovante_url ?? null); setEditandoId(conta.id); setShowForm(true);
+    setFornecedor(conta.fornecedor); setDescricao(conta.descricao || ""); setValor(conta.valor); setDataVencimento(conta.data_vencimento); setCategoriaId(conta.categoria_id || ""); setObservacao(conta.observacao || ""); setStatusInicial(conta.status as "pendente" | "pago"); setStatusOriginal(conta.status as "pendente" | "pago"); setDataPagamento(conta.data_pagamento || ""); setComprovanteUrl(conta.comprovante_url ?? null); setEditandoId(conta.id); setContaOriginal(conta); setShowForm(true);
     setPagandoId(null);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -299,19 +300,45 @@ export default function ContasPagarPage() {
     if (error) {
       setMensagem("Erro ao salvar.");
     } else if (statusInicial === "pago" && contaId && !editandoId) {
-      await supabase.from("movimentacoes").insert({ tipo: "saida", data: dados.data_pagamento as string, valor: valor, categoria_id: categoriaId, observacao: `Pagamento: ${fornecedor}${descricao ? ` - ${descricao}` : ""}`, revisar: false });
+      await supabase.from("movimentacoes").insert({ tipo: "saida", data: dados.data_pagamento as string, valor: valor, categoria_id: categoriaId, observacao: `Pagamento: ${fornecedor}${descricao ? ` - ${descricao}` : ""}`, revisar: false, conta_pagar_id: contaId });
       await registrarLog({ acao: "criou", tabela: "contas_pagar", registroId: contaId, dadosNovos: dados, detalhes: `${fornecedor} - ${fmt(valor)}` });
       setMensagem("Cadastrada como paga e lançada nas movimentações!");
     } else if (editandoId && statusOriginal === "pendente" && statusInicial === "pago") {
       const dataPag = dataPagamento || new Date().toISOString().split("T")[0];
-      await supabase.from("movimentacoes").insert({ tipo: "saida", data: dataPag, valor: valor, categoria_id: categoriaId, observacao: `Pagamento: ${fornecedor}${descricao ? ` - ${descricao}` : ""}`, revisar: false });
+      await supabase.from("movimentacoes").insert({ tipo: "saida", data: dataPag, valor: valor, categoria_id: categoriaId, observacao: `Pagamento: ${fornecedor}${descricao ? ` - ${descricao}` : ""}`, revisar: false, conta_pagar_id: editandoId });
       await registrarLog({ acao: "pagou", tabela: "contas_pagar", registroId: editandoId, dadosNovos: dados, detalhes: `${fornecedor} - ${fmt(valor)}` });
       setMensagem("Paga e lançada nas movimentações!");
+    } else if (editandoId && statusOriginal === "pago" && statusInicial === "pendente" && contaOriginal) {
+      // Pagamento desfeito via formulário de edição (não pelo botão "Desfazer pagamento") — mesma limpeza.
+      const movId = await buscarMovimentacaoVinculada(editandoId, contaOriginal.valor, contaOriginal.fornecedor);
+      if (movId) await supabase.from("movimentacoes").delete().eq("id", movId);
+      await registrarLog({ acao: "editou", tabela: "contas_pagar", registroId: editandoId, dadosNovos: dados, detalhes: `${fornecedor} - ${fmt(valor)}` });
+      setMensagem("Atualizada!");
     } else {
+      if (editandoId && statusOriginal === "pago" && statusInicial === "pago" && contaOriginal) {
+        const dataPag = dados.data_pagamento as string;
+        const mudou = contaOriginal.valor !== valor || contaOriginal.fornecedor !== fornecedor || contaOriginal.data_pagamento !== dataPag;
+        if (mudou) {
+          const movId = await buscarMovimentacaoVinculada(editandoId, contaOriginal.valor, contaOriginal.fornecedor);
+          if (movId) {
+            await supabase.from("movimentacoes").update({ data: dataPag, valor, categoria_id: categoriaId, observacao: `Pagamento: ${fornecedor}${descricao ? ` - ${descricao}` : ""}` }).eq("id", movId);
+          }
+        }
+      }
       await registrarLog({ acao: editandoId ? "editou" : "criou", tabela: "contas_pagar", registroId: contaId || undefined, dadosNovos: dados, detalhes: `${fornecedor} - ${fmt(valor)}` });
       setMensagem(editandoId ? "Atualizada!" : "Cadastrada!");
     }
     resetarFormulario(); setShowForm(false); carregarDados(); setLoading(false); setTimeout(() => setMensagem(""), 4000);
+  }
+
+  // Localiza o lançamento em movimentações vinculado ao pagamento de uma conta.
+  // Prioriza o vínculo exato (conta_pagar_id); cai para o casamento por
+  // valor+fornecedor só em lançamentos antigos, criados antes desse vínculo existir.
+  async function buscarMovimentacaoVinculada(contaId: string, valor: number, fornecedor: string) {
+    const porId = await supabase.from("movimentacoes").select("id").eq("conta_pagar_id", contaId).limit(1);
+    if (porId.data && porId.data.length > 0) return porId.data[0].id as string;
+    const porTexto = await supabase.from("movimentacoes").select("id").eq("tipo", "saida").eq("valor", valor).ilike("observacao", `%${fornecedor}%`).limit(1);
+    return porTexto.data && porTexto.data.length > 0 ? (porTexto.data[0].id as string) : null;
   }
 
   function iniciarPagamento(conta: ContaPagar) {
@@ -324,7 +351,7 @@ export default function ContasPagarPage() {
     const dataPag = dataPagamentoInline;
     const { error: err1 } = await supabase.from("contas_pagar").update({ status: "pago", data_pagamento: dataPag }).eq("id", conta.id);
     if (err1) { setMensagem("Erro ao confirmar."); setLoading(false); return; }
-    await supabase.from("movimentacoes").insert({ tipo: "saida", data: dataPag, valor: conta.valor, categoria_id: conta.categoria_id, observacao: `Pagamento: ${conta.fornecedor}${conta.descricao ? ` - ${conta.descricao}` : ""}`, revisar: false });
+    await supabase.from("movimentacoes").insert({ tipo: "saida", data: dataPag, valor: conta.valor, categoria_id: conta.categoria_id, observacao: `Pagamento: ${conta.fornecedor}${conta.descricao ? ` - ${conta.descricao}` : ""}`, revisar: false, conta_pagar_id: conta.id });
     await registrarLog({ acao: "pagou", tabela: "contas_pagar", registroId: conta.id, detalhes: `${conta.fornecedor} - ${fmt(conta.valor)}` });
     setPagandoId(null); setMensagem("Pago!"); setLoading(false); carregarDados(); setTimeout(() => setMensagem(""), 4000);
   }
@@ -362,7 +389,7 @@ export default function ContasPagarPage() {
     for (const conta of contasSelecionadas) {
       const { error } = await supabase.from("contas_pagar").update({ status: "pago", data_pagamento: loteDataPagamento }).eq("id", conta.id);
       if (!error) {
-        await supabase.from("movimentacoes").insert({ tipo: "saida", data: loteDataPagamento, valor: conta.valor, categoria_id: conta.categoria_id, observacao: `Pagamento: ${conta.fornecedor}${conta.descricao ? ` - ${conta.descricao}` : ""}`, revisar: false });
+        await supabase.from("movimentacoes").insert({ tipo: "saida", data: loteDataPagamento, valor: conta.valor, categoria_id: conta.categoria_id, observacao: `Pagamento: ${conta.fornecedor}${conta.descricao ? ` - ${conta.descricao}` : ""}`, revisar: false, conta_pagar_id: conta.id });
         await registrarLog({ acao: "pagou", tabela: "contas_pagar", registroId: conta.id, detalhes: `${conta.fornecedor} - ${fmt(conta.valor)}` });
         pagas++;
       }
@@ -375,16 +402,20 @@ export default function ContasPagarPage() {
   async function desfazerPagamento(conta: ContaPagar) {
     if (!confirm("Desfazer?")) return;
     setLoading(true);
-    const { data: movs } = await supabase.from("movimentacoes").select("id").eq("tipo", "saida").eq("valor", conta.valor).ilike("observacao", `%${conta.fornecedor}%`);
-    if (movs && movs.length > 0) await supabase.from("movimentacoes").delete().eq("id", movs[0].id);
+    const movId = await buscarMovimentacaoVinculada(conta.id, conta.valor, conta.fornecedor);
+    if (movId) await supabase.from("movimentacoes").delete().eq("id", movId);
     await supabase.from("contas_pagar").update({ status: "pendente", data_pagamento: null }).eq("id", conta.id);
     setMensagem("Desfeito!"); setLoading(false); carregarDados(); setTimeout(() => setMensagem(""), 3000);
   }
 
-  async function handleExcluir(id: string) {
+  async function handleExcluir(conta: ContaPagar) {
     if (!confirm("Excluir?")) return;
-    await registrarLog({ acao: "excluiu", tabela: "contas_pagar", registroId: id });
-    await supabase.from("contas_pagar").delete().eq("id", id);
+    if (conta.status === "pago") {
+      const movId = await buscarMovimentacaoVinculada(conta.id, conta.valor, conta.fornecedor);
+      if (movId) await supabase.from("movimentacoes").delete().eq("id", movId);
+    }
+    await registrarLog({ acao: "excluiu", tabela: "contas_pagar", registroId: conta.id });
+    await supabase.from("contas_pagar").delete().eq("id", conta.id);
     setMensagem("Excluída!"); carregarDados(); setTimeout(() => setMensagem(""), 3000);
   }
 
@@ -568,7 +599,7 @@ export default function ContasPagarPage() {
                   <button onClick={() => desfazerPagamento(conta)} title="Desfazer pagamento" className="p-1.5 rounded-lg hover:bg-amber-50 text-amber-500 transition text-sm">↩️</button>
                 )}
                 <button onClick={() => abrirEditar(conta)} title="Editar" className="p-1.5 rounded-lg hover:bg-blue-50 text-[var(--color-text-muted)] hover:text-blue-600 transition text-sm">✏️</button>
-                <button onClick={() => handleExcluir(conta.id)} title="Excluir" className="p-1.5 rounded-lg hover:bg-red-50 text-[var(--color-text-muted)] hover:text-red-500 transition text-sm">🗑️</button>
+                <button onClick={() => handleExcluir(conta)} title="Excluir" className="p-1.5 rounded-lg hover:bg-red-50 text-[var(--color-text-muted)] hover:text-red-500 transition text-sm">🗑️</button>
               </div>
             )}
           </div>
@@ -626,7 +657,7 @@ export default function ContasPagarPage() {
                   <button onClick={() => desfazerPagamento(conta)} title="Desfazer" className="p-1 rounded-lg hover:bg-amber-50 text-amber-500 transition text-xs">↩️</button>
                 )}
                 <button onClick={() => abrirEditar(conta)} title="Editar" className="p-1 rounded-lg hover:bg-blue-50 text-[var(--color-text-muted)] hover:text-blue-600 transition text-xs">✏️</button>
-                <button onClick={() => handleExcluir(conta.id)} title="Excluir" className="p-1 rounded-lg hover:bg-red-50 text-[var(--color-text-muted)] hover:text-red-500 transition text-xs">🗑️</button>
+                <button onClick={() => handleExcluir(conta)} title="Excluir" className="p-1 rounded-lg hover:bg-red-50 text-[var(--color-text-muted)] hover:text-red-500 transition text-xs">🗑️</button>
               </div>
             )}
           </div>

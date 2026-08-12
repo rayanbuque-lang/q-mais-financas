@@ -920,8 +920,8 @@ export default function MovimentacoesPage() {
                       <span className="text-sm font-bold capitalize">{diaSem} {dataFmt} — {d.movs.length} lançamento{d.movs.length > 1 ? "s" : ""}</span>
                       <button onClick={() => setCalDiaSel(null)} className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-[var(--color-bg)] text-[var(--color-text-muted)] text-base">✕</button>
                     </div>
-                    <div className="divide-y divide-[var(--color-border)]">
-                      {d.movs.slice(0, 8).map(m => {
+                    <div className="divide-y divide-[var(--color-border)] max-h-[420px] overflow-y-auto">
+                      {d.movs.map(m => {
                         const nome = getCategoriaNome(m.categoria_id);
                         const icon = getCatIcon(nome);
                         return (
@@ -943,9 +943,6 @@ export default function MovimentacoesPage() {
                           </div>
                         );
                       })}
-                      {d.movs.length > 8 && (
-                        <p className="text-xs text-center text-[var(--color-text-muted)] pt-3">{d.movs.length - 8} lançamento{d.movs.length - 8 > 1 ? "s" : ""} adicionais neste dia</p>
-                      )}
                     </div>
                   </div>
                 );
