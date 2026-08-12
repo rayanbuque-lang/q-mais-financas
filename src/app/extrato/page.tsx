@@ -145,11 +145,12 @@ async function baixarContaPagar(
 // reprocessamento). Nunca decide um empate sozinho -- ver calcularBaixasAutomaticas.
 async function processarBaixasAutomaticas(
   lancamentosNovos: LancamentoParaBaixa[]
-): Promise<{ baixados: number; ambiguos: number; idsBaixados: Set<string> }> {
+): Promise<{ baixados: number; ambiguos: number; idsBaixados: Set<string>; idsAmbiguos: Set<string> }> {
   const supabase = createClient();
   const idsBaixados = new Set<string>();
+  const idsAmbiguos = new Set<string>();
   const saidas = lancamentosNovos.filter((l) => l.valor < 0 && l.status === "nao_classificado");
-  if (saidas.length === 0) return { baixados: 0, ambiguos: 0, idsBaixados };
+  if (saidas.length === 0) return { baixados: 0, ambiguos: 0, idsBaixados, idsAmbiguos };
 
   // .limit(2000) por precaução -- mesma classe de problema já corrigida antes
   // neste projeto (commit 693a921): PostgREST tem teto padrão de linhas.
@@ -159,7 +160,7 @@ async function processarBaixasAutomaticas(
     .select("id, fornecedor, valor, categoria_id")
     .eq("status", "pendente")
     .limit(2000);
-  if (!pendentes || pendentes.length === 0) return { baixados: 0, ambiguos: 0, idsBaixados };
+  if (!pendentes || pendentes.length === 0) return { baixados: 0, ambiguos: 0, idsBaixados, idsAmbiguos };
 
   const { data: categoriasSaidaTodas } = await supabase.from("categorias_saida").select("id, nome");
   const nomeCategoriaPorId = new Map((categoriasSaidaTodas ?? []).map((c) => [c.id as string, c.nome as string]));
@@ -200,10 +201,11 @@ async function processarBaixasAutomaticas(
   for (const a of resultado.ambiguos) {
     const lancamento = saidas[a.indice];
     await supabase.from("extrato_lancamento").update({ contas_pagar_candidatas: a.candidatosIds }).eq("id", lancamento.id);
+    idsAmbiguos.add(lancamento.id);
     ambiguos++;
   }
 
-  return { baixados, ambiguos, idsBaixados };
+  return { baixados, ambiguos, idsBaixados, idsAmbiguos };
 }
 
 export default function ExtratoPage() {
@@ -422,7 +424,7 @@ export default function ExtratoPage() {
 
       const candidatosTipados = (candidatos ?? []) as LancamentoParaBaixa[];
       const baixasAuto = await processarBaixasAutomaticas(candidatosTipados);
-      const paraClassificar = candidatosTipados.filter((l) => !baixasAuto.idsBaixados.has(l.id));
+      const paraClassificar = candidatosTipados.filter((l) => !baixasAuto.idsBaixados.has(l.id) && !baixasAuto.idsAmbiguos.has(l.id));
       const qtd = await classificarPorRegras(paraClassificar as LancamentoClassificavel[]);
 
       const partes: string[] = [];
@@ -596,14 +598,14 @@ export default function ExtratoPage() {
       });
       if (erroImportacao) throw new Error(erroImportacao.message);
 
-      let baixasAuto = { baixados: 0, ambiguos: 0, idsBaixados: new Set<string>() };
+      let baixasAuto = { baixados: 0, ambiguos: 0, idsBaixados: new Set<string>(), idsAmbiguos: new Set<string>() };
       if (inseridos && inseridos.length > 0) {
         baixasAuto = await processarBaixasAutomaticas(inseridos as LancamentoParaBaixa[]);
       }
 
       let classificadosAuto = 0;
       if (inseridos && inseridos.length > 0) {
-        const paraClassificar = (inseridos as LancamentoParaBaixa[]).filter((l) => !baixasAuto.idsBaixados.has(l.id));
+        const paraClassificar = (inseridos as LancamentoParaBaixa[]).filter((l) => !baixasAuto.idsBaixados.has(l.id) && !baixasAuto.idsAmbiguos.has(l.id));
         if (paraClassificar.length > 0) {
           classificadosAuto = await classificarPorRegras(paraClassificar as LancamentoClassificavel[]);
         }
