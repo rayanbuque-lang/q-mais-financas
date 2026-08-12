@@ -371,11 +371,32 @@ export default function ExtratoPage() {
       // Evita duplicar Pix de fim de semana/feriado já importados via relatório
       // Pix com a data certa — o OFX traz o "eco" desses lançamentos carimbado
       // com a data do próximo dia útil.
+      //
+      // A consulta é limitada a uma janela de datas ao redor do próprio arquivo
+      // .ofx (em vez de todo o histórico da conta) para não esbarrar no limite
+      // padrão de linhas do PostgREST em contas com muito Pix acumulado — o mesmo
+      // tipo de bug corrigido no commit 693a921. `calcularCobertura` só casa
+      // lançamentos existentes com `data <= candidato.data` dentro de uma janela
+      // de JANELA_DIAS dias, então nada fora desse intervalo poderia casar de
+      // qualquer forma. `parseOfx` já garante `transacoes.length > 0` (lança
+      // OfxParseError caso contrário), então os reduces abaixo são seguros.
+      const JANELA_DIAS = 5; // deve bater com JANELA_DIAS em lib/cobertura-pix.ts
+      const datasTransacoes = parsed.transacoes.map((t) => t.data);
+      const dataMaxima = datasTransacoes.reduce((max, d) => (d > max ? d : max));
+      const dataMinimaArquivo = datasTransacoes.reduce((min, d) => (d < min ? d : min));
+      const dataMinima = new Date(
+        new Date(dataMinimaArquivo + "T00:00:00Z").getTime() - JANELA_DIAS * 24 * 60 * 60 * 1000
+      )
+        .toISOString()
+        .slice(0, 10);
+
       const { data: existentesPix, error: erroExistentes } = await supabase
         .from("extrato_lancamento")
         .select("id, data_lancamento, valor, descricao_normalizada")
         .eq("conta_id", contaImportId)
-        .ilike("descricao_normalizada", "%pix recebido%");
+        .ilike("descricao_normalizada", "%pix recebido%")
+        .gte("data_lancamento", dataMinima)
+        .lte("data_lancamento", dataMaxima);
       if (erroExistentes) throw new Error(erroExistentes.message);
 
       const candidatosCobertura: CandidatoOfx[] = parsed.transacoes.map((t, indice) => ({
