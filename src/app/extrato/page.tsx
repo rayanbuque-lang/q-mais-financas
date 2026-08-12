@@ -781,9 +781,18 @@ export default function ExtratoPage() {
                       </td>
                       <td className="px-3 py-2.5">
                         {l.categoria ? (
-                          <span className="px-2 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-semibold whitespace-nowrap">
-                            {l.categoria}
-                          </span>
+                          <div className="flex flex-col gap-1 items-start">
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${
+                                calcularTipoMovimentacao(l.valor) === "entrada" ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"
+                              }`}
+                            >
+                              {calcularTipoMovimentacao(l.valor) === "entrada" ? "Entrada" : "Saída"}
+                            </span>
+                            <span className="px-2 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-semibold whitespace-nowrap">
+                              {l.categoria}
+                            </span>
+                          </div>
                         ) : l.status === "ignorado" ? (
                           <span className="text-[10px] text-[var(--color-text-muted)]">—</span>
                         ) : (
