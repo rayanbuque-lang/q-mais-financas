@@ -4,19 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { parseOfx, decodificarOfx, OfxParseError } from "@/lib/ofx";
 import { aplicarRegras, type RegraExtrato as RegraMotor, type LancamentoClassificavel } from "@/lib/regras-extrato";
+import { calcularTipoMovimentacao, agruparResumoPorDia } from "@/lib/preview-movimentacao";
 import EmptyState from "@/components/empty-state";
-
-const CATEGORIAS_INICIAIS = [
-  "repasse de cartao",
-  "pagamento fornecedor",
-  "tarifa bancaria",
-  "imposto",
-  "folha",
-  "transferencia interna",
-  "pix recebido",
-  "pix enviado",
-  "outros",
-];
 
 interface Conta {
   id: string;
@@ -77,7 +66,7 @@ const REGRA_FORM_INICIAL = {
   conta_id: "",
   valor_min: "",
   valor_max: "",
-  categoria: CATEGORIAS_INICIAIS[0],
+  categoria: "",
   prioridade: "100",
   ativa: true,
 };
@@ -128,13 +117,27 @@ export default function ExtratoPage() {
   const [formRegra, setFormRegra] = useState(REGRA_FORM_INICIAL);
   const [salvandoRegra, setSalvandoRegra] = useState(false);
 
-  const categoriasDisponiveis = Array.from(
-    new Set([...CATEGORIAS_INICIAIS, ...regras.map((r) => r.categoria), ...lancamentos.filter((l) => l.categoria).map((l) => l.categoria as string)])
-  ).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  // Categorias reais (categorias_entrada / categorias_saida) — só leitura,
+  // nunca escrevemos nessas tabelas.
+  const [categoriasEntrada, setCategoriasEntrada] = useState<string[]>([]);
+  const [categoriasSaida, setCategoriasSaida] = useState<string[]>([]);
+
+  const categoriasDisponiveis = Array.from(new Set([...categoriasEntrada, ...categoriasSaida])).sort((a, b) =>
+    a.localeCompare(b, "pt-BR")
+  );
 
   async function carregarContas() {
     const { data, error } = await supabase.from("extrato_conta").select("*").order("banco").order("apelido");
     if (!error && data) setContas(data as Conta[]);
+  }
+
+  async function carregarCategoriasReais() {
+    const [{ data: entrada }, { data: saida }] = await Promise.all([
+      supabase.from("categorias_entrada").select("nome").eq("ativo", true).order("nome"),
+      supabase.from("categorias_saida").select("nome").eq("ativo", true).order("nome"),
+    ]);
+    setCategoriasEntrada((entrada ?? []).map((c) => c.nome as string));
+    setCategoriasSaida((saida ?? []).map((c) => c.nome as string));
   }
 
   async function carregarLancamentos() {
@@ -205,6 +208,7 @@ export default function ExtratoPage() {
     })();
     carregarContas();
     carregarRegras();
+    carregarCategoriasReais();
   }, []);
 
   useEffect(() => {
