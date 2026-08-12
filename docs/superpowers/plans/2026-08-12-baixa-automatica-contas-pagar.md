@@ -384,12 +384,20 @@ async function baixarContaPagar(
   categoriaNome: string
 ): Promise<boolean> {
   const supabase = createClient();
-  const { error: erroBaixa } = await supabase
+  // .select("id") depois do update deixa explícito quantas linhas o update
+  // realmente afetou. .eq("status", "pendente") só bate se a conta ainda
+  // estiver pendente -- se dois lançamentos do mesmo lote casarem com a
+  // MESMA conta (mesmo valor, mesmo fornecedor, só uma pendente no banco),
+  // o segundo update aqui afeta zero linhas (a primeira chamada já pagou),
+  // e isso tem que virar "não baixou" -- senão duplicaria a movimentação
+  // de saída para o mesmo pagamento.
+  const { data: linhasAtualizadas, error: erroBaixa } = await supabase
     .from("contas_pagar")
     .update({ status: "pago", data_pagamento: lancamento.data_lancamento })
     .eq("id", conta.id)
-    .eq("status", "pendente");
-  if (erroBaixa) return false;
+    .eq("status", "pendente")
+    .select("id");
+  if (erroBaixa || !linhasAtualizadas || linhasAtualizadas.length === 0) return false;
 
   await supabase.from("movimentacoes").insert({
     tipo: "saida",
@@ -703,7 +711,8 @@ Sem framework de teste automatizado para fluxo E2E de Supabase neste projeto —
 2. Montar (ou usar um real) `.ofx` de teste com um `<STMTTRN>` cujo `MEMO` contenha esse nome e `TRNAMT` igual a `-123.45`.
 3. Importar via `/extrato`.
 4. Confirmar: a conta de teste virou `status='pago'`, existe uma `movimentacoes` nova com `conta_pagar_id` apontando pra ela, e o `extrato_lancamento` correspondente tem `conta_pagar_id` preenchido e `status='classificado'`.
-5. Apagar os dados de teste criados (conta a pagar, movimentação, importação, lançamento) depois de confirmar.
+5. **Caso de duplo-casamento no mesmo lote** (achado na revisão da Task 2, corrigido no Step 3 acima): montar um `.ofx` de teste com **dois** `<STMTTRN>` de mesmo `TRNAMT` e `MEMO` batendo no mesmo único fornecedor pendente. Importar e confirmar que só **um** dos dois lançamentos vira `classificado`/baixado (o outro permanece `nao_classificado`, sem `movimentacoes` duplicada) — nunca os dois.
+6. Apagar os dados de teste criados (conta a pagar, movimentação, importação, lançamento) depois de confirmar.
 
 - [ ] **Step 11: Commit**
 
