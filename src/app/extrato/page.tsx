@@ -253,6 +253,12 @@ export default function ExtratoPage() {
   const [trechoRegra, setTrechoRegra] = useState("");
   const [escopoContaRegra, setEscopoContaRegra] = useState(true);
   const [criandoRegraSugerida, setCriandoRegraSugerida] = useState(false);
+  const [resolvendoAmbiguo, setResolvendoAmbiguo] = useState<{
+    lancamento: Lancamento;
+    candidatos: { id: string; fornecedor: string; valor: number; data_vencimento: string; categoria_id: string | null }[];
+  } | null>(null);
+  const [carregandoCandidatos, setCarregandoCandidatos] = useState(false);
+  const [resolvendoBaixaId, setResolvendoBaixaId] = useState<string | null>(null);
 
   // Regras
   const [regras, setRegras] = useState<Regra[]>([]);
@@ -749,6 +755,56 @@ export default function ExtratoPage() {
     setTrechoRegra(lancamento.descricao_normalizada);
     setEscopoContaRegra(true);
     setSugerirRegraPara({ lancamento, categoria: categoria.trim() });
+  }
+
+  async function handleAbrirResolucaoAmbigua(lancamento: Lancamento) {
+    if (!lancamento.contas_pagar_candidatas || lancamento.contas_pagar_candidatas.length === 0) return;
+    setCarregandoCandidatos(true);
+    const { data, error } = await supabase
+      .from("contas_pagar")
+      .select("id, fornecedor, valor, data_vencimento, categoria_id")
+      .in("id", lancamento.contas_pagar_candidatas);
+    setCarregandoCandidatos(false);
+    if (error || !data) {
+      setMensagem({ tipo: "erro", texto: "Erro ao carregar as contas candidatas: " + (error?.message ?? "") });
+      return;
+    }
+    setResolvendoAmbiguo({
+      lancamento,
+      candidatos: data as { id: string; fornecedor: string; valor: number; data_vencimento: string; categoria_id: string | null }[],
+    });
+  }
+
+  async function handleResolverBaixaAmbigua(contaPagarId: string) {
+    if (!resolvendoAmbiguo) return;
+    const conta = resolvendoAmbiguo.candidatos.find((c) => c.id === contaPagarId);
+    if (!conta) return;
+    setResolvendoBaixaId(contaPagarId);
+
+    let categoriaNome = "Contas a pagar";
+    if (conta.categoria_id) {
+      const { data: categoria } = await supabase.from("categorias_saida").select("nome").eq("id", conta.categoria_id).single();
+      if (categoria?.nome) categoriaNome = categoria.nome as string;
+    }
+
+    const ok = await baixarContaPagar(
+      { id: resolvendoAmbiguo.lancamento.id, data_lancamento: resolvendoAmbiguo.lancamento.data_lancamento },
+      { id: conta.id, fornecedor: conta.fornecedor, valor: conta.valor, categoria_id: conta.categoria_id },
+      categoriaNome
+    );
+
+    setResolvendoBaixaId(null);
+    if (!ok) {
+      setMensagem({ tipo: "erro", texto: "Não foi possível confirmar a baixa — a conta pode já ter sido paga." });
+      return;
+    }
+    setResolvendoAmbiguo(null);
+    setMensagem({ tipo: "sucesso", texto: `Baixa confirmada: ${conta.fornecedor}.` });
+    await Promise.all([carregarLancamentos(), carregarResumo()]);
+  }
+
+  function fecharResolucaoAmbigua() {
+    setResolvendoAmbiguo(null);
   }
 
   async function handleIgnorar(lancamento: Lancamento) {
@@ -1277,10 +1333,11 @@ export default function ExtratoPage() {
                                     ) : l.contas_pagar_candidatas && l.contas_pagar_candidatas.length > 0 ? (
                                       <button
                                         type="button"
+                                        disabled={carregandoCandidatos}
                                         onClick={() => handleAbrirResolucaoAmbigua(l)}
-                                        className="px-2 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-semibold whitespace-nowrap hover:bg-amber-100"
+                                        className="px-2 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-semibold whitespace-nowrap hover:bg-amber-100 disabled:opacity-50"
                                       >
-                                        Baixa ambígua ({l.contas_pagar_candidatas.length})
+                                        {carregandoCandidatos ? "..." : `Baixa ambígua (${l.contas_pagar_candidatas.length})`}
                                       </button>
                                     ) : l.status === "ignorado" ? (
                                       <span className="text-[10px] text-[var(--color-text-muted)]">—</span>
@@ -1375,6 +1432,46 @@ export default function ExtratoPage() {
                     {criandoRegraSugerida ? "Criando..." : "Criar regra e aplicar"}
                   </button>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {resolvendoAmbiguo && (
+            <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={fecharResolucaoAmbigua}>
+              <div className="bg-[var(--color-surface)] rounded-2xl p-5 max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
+                <h3 className="font-semibold text-sm mb-1">Qual conta foi paga?</h3>
+                <p className="text-xs text-[var(--color-text-muted)] mb-3">
+                  {resolvendoAmbiguo.candidatos.length} contas a pagar têm o mesmo fornecedor e o mesmo valor
+                  ({formatarMoeda(Math.abs(resolvendoAmbiguo.lancamento.valor))}) — escolha qual foi paga em{" "}
+                  {formatarData(resolvendoAmbiguo.lancamento.data_lancamento)}.
+                </p>
+                <div className="space-y-2 mb-4">
+                  {resolvendoAmbiguo.candidatos.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      disabled={resolvendoBaixaId !== null}
+                      onClick={() => handleResolverBaixaAmbigua(c.id)}
+                      className="w-full flex justify-between items-center px-3 py-2 rounded-lg border border-[var(--color-border)] text-xs hover:bg-[var(--hover-bg)] disabled:opacity-50 text-left"
+                    >
+                      <span>
+                        <span className="font-semibold">{c.fornecedor}</span>
+                        <br />
+                        <span className="text-[var(--color-text-muted)]">Vencimento: {formatarData(c.data_vencimento)}</span>
+                      </span>
+                      <span className="font-semibold">
+                        {resolvendoBaixaId === c.id ? "..." : formatarMoeda(c.valor)}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={fecharResolucaoAmbigua}
+                  className="w-full px-3 py-2 rounded-lg border border-[var(--color-border)] text-xs font-semibold hover:bg-[var(--hover-bg)]"
+                >
+                  Decidir depois
+                </button>
               </div>
             </div>
           )}
