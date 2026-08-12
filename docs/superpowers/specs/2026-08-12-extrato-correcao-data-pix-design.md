@@ -1,71 +1,82 @@
-# Correção de data de Pix recebido via relatório Pix (fim de semana/feriado)
+# Pix de fim de semana/feriado: importar do relatório Pix e não duplicar no OFX
 
 Status: aprovado, aguardando implementação.
 
+> Revisão: a primeira versão desta spec propunha corrigir a data de lançamentos
+> já importados do OFX usando o relatório Pix como referência (update depois do
+> fato). O usuário propôs um fluxo melhor, adotado aqui: importar o relatório
+> Pix primeiro, com a data certa desde o início, e fazer o upload do OFX
+> reconhecer e descartar o que já foi coberto. Mais simples e não precisa
+> recalcular a chave de deduplicação de nenhum lançamento existente.
+
 ## Contexto
 
-O extrato bancário (OFX) do Santander nunca posta lançamentos em sábado, domingo ou feriado — tudo que acontece nesses dias é atribuído ao próximo dia útil (`DTPOSTED`). Confirmado empiricamente no arquivo real de junho/2026 do usuário: das 18 datas distintas presentes em 67 lançamentos, **nenhuma cai em fim de semana**.
+O extrato bancário (OFX) do Santander nunca posta lançamentos em sábado, domingo ou feriado — tudo cai no próximo dia útil (`DTPOSTED`). Confirmado empiricamente no arquivo real de junho/2026 do usuário: das 18 datas distintas presentes em 67 lançamentos, nenhuma cai em fim de semana. A informação da data real não existe em lugar nenhum do OFX — só existe num relatório separado, específico de Pix, exportável em Excel (`.xlsx`), com colunas `Data, Banco origem, Titularidade, Pagador, Tipo de lançamento, Identificador do pagamento, Valor, ID da Transação` (confirmado com amostra real; `ID da Transação` é o End-to-End ID padrão do Pix e embute a data/hora real).
 
-Isso é um problema porque o usuário usa esses dados também para **fechamento de caixa**, que precisa refletir o dia real em que o dinheiro entrou — não o dia em que o banco decidiu contabilizar.
-
-A informação da data real **não existe em lugar nenhum do OFX** (não é um bug de parsing — o dado já vem descartado do banco). A única fonte com a data real é um relatório separado, específico de Pix, que o Santander permite exportar em Excel (`.xlsx`). Confirmado com uma amostra real: colunas `Data, Banco origem, Titularidade, Pagador, Tipo de lançamento, Identificador do pagamento, Valor, ID da Transação`. A coluna `ID da Transação` é o End-to-End ID padrão do Pix e embute a data/hora real da transação, confirmando que a `Data` da planilha está correta.
+O usuário usa esses dados também pra fechamento de caixa, que precisa refletir o dia real em que o dinheiro entrou.
 
 ## Objetivo
 
-Permitir que o usuário suba esse relatório de Pix (Excel) dentro do `/extrato` e o sistema corrija automaticamente a `data_lancamento` dos lançamentos "PIX RECEBIDO" já importados do OFX, usando o relatório como referência — sinalizando (não adivinhando) quando não houver certeza.
+**Fluxo operacional do usuário**, confirmado por ele:
+
+1. **Segunda-feira**: exporta o relatório Pix do fim de semana (pode conter sábado e domingo juntos no mesmo arquivo — cada linha tem sua própria data, vindas separadas por dia, nunca agrupadas/misturadas) e sobe no `/extrato`. Cada Pix entra com a **data real** do relatório.
+2. **Terça-feira (ou quando for)**: sobe o OFX normal, que traz tudo — inclusive o "eco" dos Pix do fim de semana, todos carimbados com a data de segunda pelo banco. O sistema precisa reconhecer que parte desses lançamentos **já está no sistema** (importados na segunda, com a data certa) e **não duplicar** — só entra como lançamento novo o que sobrar depois de descontar o que já foi coberto.
+
+Exemplo confirmado pelo usuário: 2 Pix de R$ 20,00 no fim de semana (1 sábado, 1 domingo) já importados via relatório na segunda. Na terça, o OFX mostra 3 lançamentos de R$ 20,00 datados segunda (2 são o eco do fim de semana + 1 é uma venda real de segunda). O sistema descarta 2 dessas 3 linhas (já cobertas) e importa só 1 como lançamento novo.
 
 ## Restrição fundamental: não existe chave em comum entre OFX e relatório Pix
 
-O OFX não carrega o "ID da Transação" nem o "Identificador do pagamento" do relatório — o único campo presente nos dois é o **valor**. O casamento (matching) entre um lançamento do OFX e uma linha do relatório só pode ser feito por valor, dentro de uma janela de datas plausível.
+O OFX não carrega o "ID da Transação" nem o "Identificador do pagamento" do relatório — o único campo em comum é o **valor**. O reconhecimento de "isso já foi importado" só pode ser feito por valor, dentro de uma janela de datas plausível (o banco só atrasa, nunca adianta).
 
 ## Design
 
 ### 1. Parser do relatório Pix (`lib/relatorio-pix.ts`)
 
-Excel (`.xlsx`) é um `.zip` por dentro — reaproveita o extrator de zip já existente (`lib/zip.ts`) para abrir `xl/worksheets/sheet1.xml` e `xl/sharedStrings.xml`, sem nenhuma dependência nova.
+Excel (`.xlsx`) é um `.zip` por dentro — reaproveita o extrator de zip já existente (`lib/zip.ts`) pra abrir `xl/worksheets/sheet1.xml` e `xl/sharedStrings.xml`, sem dependência nova.
 
-- Lê a linha de cabeçalho e localiza as colunas pelo **nome** (`Data`, `Valor`, pelo menos — os outros campos ficam disponíveis mas não são usados no matching), não por letra fixa, pra tolerar pequenas mudanças de layout do banco.
-- `Data` vem como texto `dd/mm/yyyy` → converte para `yyyy-mm-dd`.
+- Lê a linha de cabeçalho e localiza as colunas pelo **nome** (`Data`, `Pagador`, `Valor`), não por letra fixa, pra tolerar pequenas mudanças de layout do banco.
+- `Data` vem como texto `dd/mm/yyyy` → converte pra `yyyy-mm-dd`. Cada linha mantém sua própria data — o relatório pode conter várias datas diferentes no mesmo arquivo (ex.: sábado e domingo juntos) e isso é esperado, não é um problema a resolver.
 - `Valor` já vem como número na célula.
-- Cada linha vira `{ data: string; valor: number; pagador: string | null }`.
+- `ID da Transação` (E2E do Pix) é lido e guardado — é globalmente único e estável entre re-exports do mesmo relatório, ao contrário do FITID do OFX.
 - Erros de arquivo inválido/corrompido seguem o mesmo padrão dos outros parsers (`RelatorioPixParseError`, mensagem com o nome do arquivo).
 
-### 2. Motor de casamento (`lib/correcao-data-pix.ts`, função pura testável)
+### 2. Importar o relatório Pix como lançamentos (nova ação na aba Importar)
 
-Entrada: lançamentos já importados do OFX com `categoria` indicando Pix recebido e sua `data_lancamento` atual, mais as linhas do relatório Pix.
+Mesmo pipeline de sempre (`extrato_lancamento` + `aplicarRegras` + resumo), só que a fonte é o relatório Pix em vez do OFX:
 
-Algoritmo, por conta bancária:
+- `data_lancamento`: a data real de cada linha do relatório (não precisa de correção).
+- `valor`, `descricao`/`descricao_normalizada`: sintetizados a partir do pagador (ex.: `"PIX RECEBIDO " + pagador`), normalizados do mesmo jeito que o parser de OFX — assim as regras existentes ("pix recebido" → Pix Santander) continuam classificando automaticamente sem precisar de regra nova.
+- `fitid`: usa o **ID da Transação** (E2E) do Pix como identificador — ao contrário do FITID do OFX, esse é estável entre reimportações do mesmo relatório, então reimportar o mesmo relatório não duplica (constraint natural já existente: `conta_id + data_lancamento + valor + descricao_normalizada + ocorrencia` continua valendo, com `ocorrencia` cobrindo o caso raro de dois Pix de mesmo valor no mesmo dia).
+- Roda `aplicarRegras` nos recém-inseridos, igual à importação de OFX.
 
-1. Agrupa as entradas do relatório por data real.
-2. Para cada lançamento do OFX (ainda não corrigido), procura no relatório uma entrada de **mesmo valor** cuja data seja **igual ou anterior** à data atual do lançamento (o banco só atrasa, nunca adianta) — dentro de uma janela fixa de **até 5 dias antes** (cobre feriado prolongado emendado com fim de semana; janela generosa não aumenta risco de falso positivo porque a exigência de valor exatamente igual já é o filtro forte).
-3. Valores duplicados **no mesmo dia** não são ambíguos — qualquer emparelhamento entre eles produz o resultado correto (são fungíveis). Confirmado com o usuário.
-4. Valores duplicados em **dias diferentes** dentro da mesma janela **são ambíguos** — não há como saber qual lançamento do OFX pertence a qual dia. Esses casos **não são corrigidos automaticamente**; entram numa lista de divergências para revisão manual.
-5. Entradas do relatório sem nenhum lançamento correspondente no OFX (contagem não bate) também viram divergência sinalizada, não são descartadas silenciosamente.
-6. Lançamentos do OFX que não batem com nada no relatório permanecem com a data original (assume-se que são do próprio dia útil).
+### 3. Upload do OFX passa a descartar o que já está coberto
 
-Saída: lista de correções `{ lancamentoId, dataAntiga, dataNova }` e lista de divergências (com valor, data do relatório, e o motivo).
+Antes de inserir cada candidato "PIX RECEBIDO" vindo do OFX, verifica se já existe um lançamento na mesma conta que:
 
-### 3. Aplicação da correção (recomputa `ocorrencia`)
+- tenha o **mesmo valor**,
+- `descricao_normalizada` também case com o padrão de Pix recebido (evita casar por engano com boleto/cartão de valor coincidente),
+- data **igual ou anterior** (até 5 dias antes — cobre feriado emendado com fim de semana),
+- e ainda não tenha sido "reivindicado" por outra linha do OFX nesta mesma importação.
 
-A constraint de deduplicação já existente (`conta_id, data_lancamento, valor, descricao_normalizada, ocorrencia`) usa `data_lancamento` — mudar a data exige recalcular `ocorrencia` para o novo grupo, senão a constraint pode colidir. A aplicação:
+Se achar → **não insere essa linha do OFX** (já está coberta pelo lançamento do relatório Pix), marca o lançamento existente como reivindicado pra não descontar duas vezes. Se não achar (o "sobra" do exemplo) → insere normalmente, com a data do OFX (dia útil real).
 
-1. Calcula, para cada lançamento a corrigir, sua nova `ocorrencia` dentro do grupo de destino (`conta_id + data nova + valor + descricao_normalizada`), considerando tanto lançamentos já existentes nesse grupo quanto os outros que estão sendo movidos para lá na mesma operação.
-2. Aplica as atualizações (data + ocorrência) lançamento por lançamento.
-3. Nunca mexe em `categoria`, `status`, `revisado` ou qualquer outro campo — só `data_lancamento` e `ocorrencia`.
+Como isso é uma contagem (quantos já existem vs. quantos aparecem no OFX), não precisa resolver "qual lançamento é de qual dia" — só decidir quantos descartar. Isso elimina a ambiguidade que a primeira versão desta spec se preocupava em resolver.
+
+O resumo pós-importação do OFX passa a mostrar também quantos foram descartados por já estarem cobertos pelo relatório Pix: "X lidas · Y novas · Z já existentes (FITID) · W já cobertas pelo relatório Pix".
 
 ### 4. Tela
 
-Novo bloco dentro da aba **Importar** do `/extrato`, abaixo do card de upload do `.ofx`: "Corrigir datas de Pix (fim de semana/feriado)". Upload do `.xlsx` do relatório Pix, botão com os três estados (processando/sucesso/erro), e ao final um resumo: "X lançamentos corrigidos · Y divergências para revisar". Divergências aparecem listadas (valor, data do relatório, motivo) para o usuário decidir manualmente — sem gravar nada errado por adivinhação.
+Novo card na aba **Importar** do `/extrato`, ao lado do upload do `.ofx`: "Importar relatório Pix (fim de semana/feriado)" — upload do `.xlsx`, mesma conta selecionada, três estados (processando/sucesso/erro), resumo pós-importação nos mesmos moldes do OFX (lidas/novas/já existentes).
 
 ## Fora de escopo
 
-- Só cobre **Pix recebido**. Pix enviado, cartão, boleto etc. não são afetados.
+- Só cobre Pix recebido. Pix enviado, cartão, boleto etc. não são afetados.
 - Não escreve em `movimentacoes`/`contas_pagar` — continua 100% staging.
-- Não tenta detectar automaticamente "isso é fim de semana" — o motor de casamento funciona genericamente por data e valor, sem regra especial de dia da semana (cobre feriado do mesmo jeito).
-- Não adiciona nenhuma dependência nova (reaproveita `lib/zip.ts`).
+- Não faz nenhuma correção de dado já existente — o design elimina essa necessidade.
+- Não adiciona dependência nova (reaproveita `lib/zip.ts`).
 
 ## Testes previstos
 
-- `lib/relatorio-pix.ts`: parser testado com o `.xlsx` real fornecido pelo usuário (mesmo padrão de teste isomórfico usado nos outros parsers desta fase).
-- `lib/correcao-data-pix.ts`: casamento testado com casos sintéticos (mesmo dia duplicado não é ambíguo; dias diferentes duplicado é ambíguo e não corrige; relatório sem correspondência vira divergência; janela de data respeitada) e com os dados reais (arquivo `.ofx` + `.xlsx` de junho do usuário) para validar o cenário real.
-- Teste E2E no Postgres real simulando a correção de data + recomputo de `ocorrencia` sem violar a constraint.
+- `lib/relatorio-pix.ts`: parser testado com o `.xlsx` real fornecido pelo usuário — múltiplas datas no mesmo arquivo, valores, ID da Transação.
+- Motor de descarte de duplicidade coberta: testado com casos sintéticos (2 de mesmo valor no fim de semana + 3 no OFX = 1 novo; nenhum lançamento prévio = todos novos; valor sem par prévio = importa normal) e com os dados reais do usuário.
+- Teste E2E no Postgres real: importar relatório Pix (datas corretas), depois importar OFX simulando o "eco" de segunda, confirmar que só o excedente entra como novo.
