@@ -8,6 +8,8 @@ import { calcularCobertura, type CandidatoOfx, type LancamentoExistentePix } fro
 import { aplicarRegras, type RegraExtrato as RegraMotor, type LancamentoClassificavel } from "@/lib/regras-extrato";
 import { calcularTipoMovimentacao, agruparResumoPorDia, type ResumoDia } from "@/lib/preview-movimentacao";
 import EmptyState from "@/components/empty-state";
+import { calcularBaixasAutomaticas, type CandidatoBaixa, type ContaPagarPendente } from "@/lib/baixa-contas-pagar";
+import { registrarLog } from "@/lib/audit";
 
 interface Conta {
   id: string;
@@ -31,6 +33,8 @@ interface Lancamento {
   status: "nao_classificado" | "classificado" | "ignorado";
   classificado_em: string | null;
   revisado: boolean;
+  conta_pagar_id: string | null;
+  contas_pagar_candidatas: string[] | null;
 }
 
 interface Regra {
@@ -78,6 +82,130 @@ const REGRA_FORM_INICIAL = {
   ativa: true,
 };
 
+interface LancamentoParaBaixa {
+  id: string;
+  conta_id: string;
+  data_lancamento: string;
+  valor: number;
+  descricao_normalizada: string;
+  status: string;
+}
+
+// Reaproveita exatamente a mesma escrita que a baixa manual já faz em
+// src/app/(app)/contas-pagar/page.tsx (confirmarPagamento) -- nenhum caminho
+// de escrita novo em contas_pagar/movimentacoes. Usada tanto pela baixa
+// automática (candidato único) quanto pela resolução manual de ambíguos.
+async function baixarContaPagar(
+  lancamento: { id: string; data_lancamento: string },
+  conta: { id: string; fornecedor: string; valor: number; categoria_id: string | null },
+  categoriaNome: string
+): Promise<boolean> {
+  const supabase = createClient();
+  // .select("id") depois do update deixa explícito quantas linhas o update
+  // realmente afetou. .eq("status", "pendente") só bate se a conta ainda
+  // estiver pendente -- se dois lançamentos do mesmo lote casarem com a
+  // MESMA conta (mesmo valor, mesmo fornecedor, só uma pendente no banco),
+  // o segundo update aqui afeta zero linhas (a primeira chamada já pagou),
+  // e isso tem que virar "não baixou" -- senão duplicaria a movimentação
+  // de saída para o mesmo pagamento.
+  const { data: linhasAtualizadas, error: erroBaixa } = await supabase
+    .from("contas_pagar")
+    .update({ status: "pago", data_pagamento: lancamento.data_lancamento })
+    .eq("id", conta.id)
+    .eq("status", "pendente")
+    .select("id");
+  if (erroBaixa || !linhasAtualizadas || linhasAtualizadas.length === 0) return false;
+
+  await supabase.from("movimentacoes").insert({
+    tipo: "saida",
+    data: lancamento.data_lancamento,
+    valor: conta.valor,
+    categoria_id: conta.categoria_id,
+    observacao: `Pagamento: ${conta.fornecedor}`,
+    revisar: false,
+    conta_pagar_id: conta.id,
+  });
+
+  await supabase
+    .from("extrato_lancamento")
+    .update({
+      status: "classificado",
+      categoria: categoriaNome,
+      classificado_em: new Date().toISOString(),
+      conta_pagar_id: conta.id,
+      contas_pagar_candidatas: null,
+    })
+    .eq("id", lancamento.id);
+
+  await registrarLog({ acao: "pagou", tabela: "contas_pagar", registroId: conta.id, detalhes: `${conta.fornecedor} - baixa automática via extrato` });
+  return true;
+}
+
+// Roda sobre lançamentos de saída recém-chegados (import de OFX ou
+// reprocessamento). Nunca decide um empate sozinho -- ver calcularBaixasAutomaticas.
+async function processarBaixasAutomaticas(
+  lancamentosNovos: LancamentoParaBaixa[]
+): Promise<{ baixados: number; ambiguos: number; idsBaixados: Set<string> }> {
+  const supabase = createClient();
+  const idsBaixados = new Set<string>();
+  const saidas = lancamentosNovos.filter((l) => l.valor < 0 && l.status === "nao_classificado");
+  if (saidas.length === 0) return { baixados: 0, ambiguos: 0, idsBaixados };
+
+  // .limit(2000) por precaução -- mesma classe de problema já corrigida antes
+  // neste projeto (commit 693a921): PostgREST tem teto padrão de linhas.
+  // contas_pagar pendentes reais nunca chegaram perto disso, mas não custa nada.
+  const { data: pendentes } = await supabase
+    .from("contas_pagar")
+    .select("id, fornecedor, valor, categoria_id")
+    .eq("status", "pendente")
+    .limit(2000);
+  if (!pendentes || pendentes.length === 0) return { baixados: 0, ambiguos: 0, idsBaixados };
+
+  const { data: categoriasSaidaTodas } = await supabase.from("categorias_saida").select("id, nome");
+  const nomeCategoriaPorId = new Map((categoriasSaidaTodas ?? []).map((c) => [c.id as string, c.nome as string]));
+
+  const candidatos: CandidatoBaixa[] = saidas.map((l, indice) => ({
+    indice,
+    valor: Math.abs(Number(l.valor)),
+    descricaoNormalizada: l.descricao_normalizada,
+  }));
+  const contasPendentes: ContaPagarPendente[] = pendentes.map((c) => ({
+    id: c.id as string,
+    fornecedor: c.fornecedor as string,
+    valor: Number(c.valor),
+  }));
+
+  const resultado = calcularBaixasAutomaticas(candidatos, contasPendentes);
+  const pendentesPorId = new Map(pendentes.map((c) => [c.id as string, c]));
+
+  let baixados = 0;
+  for (const b of resultado.baixados) {
+    const lancamento = saidas[b.indice];
+    const conta = pendentesPorId.get(b.contaPagarId);
+    if (!conta) continue;
+    const categoriaId = conta.categoria_id as string | null;
+    const categoriaNome = categoriaId ? nomeCategoriaPorId.get(categoriaId) ?? "Contas a pagar" : "Contas a pagar";
+    const ok = await baixarContaPagar(
+      { id: lancamento.id, data_lancamento: lancamento.data_lancamento },
+      { id: conta.id as string, fornecedor: conta.fornecedor as string, valor: Number(conta.valor), categoria_id: categoriaId },
+      categoriaNome
+    );
+    if (ok) {
+      idsBaixados.add(lancamento.id);
+      baixados++;
+    }
+  }
+
+  let ambiguos = 0;
+  for (const a of resultado.ambiguos) {
+    const lancamento = saidas[a.indice];
+    await supabase.from("extrato_lancamento").update({ contas_pagar_candidatas: a.candidatosIds }).eq("id", lancamento.id);
+    ambiguos++;
+  }
+
+  return { baixados, ambiguos, idsBaixados };
+}
+
 export default function ExtratoPage() {
   const supabase = createClient();
 
@@ -93,7 +221,7 @@ export default function ExtratoPage() {
   const [contaImportId, setContaImportId] = useState("");
   const [arquivo, setArquivo] = useState<File | null>(null);
   const [importando, setImportando] = useState(false);
-  const [resumoImportacao, setResumoImportacao] = useState<{ lidas: number; novas: number; duplicadas: number; cobertos: number; avisos: string[] } | null>(null);
+  const [resumoImportacao, setResumoImportacao] = useState<{ lidas: number; novas: number; duplicadas: number; cobertos: number; baixados: number; ambiguos: number; avisos: string[] } | null>(null);
   const [mostrarNovaConta, setMostrarNovaConta] = useState(false);
   const [novaContaBanco, setNovaContaBanco] = useState("santander");
   const [novaContaApelido, setNovaContaApelido] = useState("");
@@ -286,20 +414,29 @@ export default function ExtratoPage() {
     try {
       let query = supabase
         .from("extrato_lancamento")
-        .select("id, conta_id, descricao_normalizada, valor, status")
+        .select("id, conta_id, descricao_normalizada, valor, status, data_lancamento")
         .eq("status", "nao_classificado");
       if (filtroContaId) query = query.eq("conta_id", filtroContaId);
       const { data: candidatos, error } = await query;
       if (error) throw new Error(error.message);
 
-      const qtd = await classificarPorRegras((candidatos ?? []) as LancamentoClassificavel[]);
+      const candidatosTipados = (candidatos ?? []) as LancamentoParaBaixa[];
+      const baixasAuto = await processarBaixasAutomaticas(candidatosTipados);
+      const paraClassificar = candidatosTipados.filter((l) => !baixasAuto.idsBaixados.has(l.id));
+      const qtd = await classificarPorRegras(paraClassificar as LancamentoClassificavel[]);
+
+      const partes: string[] = [];
+      if (baixasAuto.baixados > 0) partes.push(`${baixasAuto.baixados} baixado(s) automaticamente`);
+      if (baixasAuto.ambiguos > 0) partes.push(`${baixasAuto.ambiguos} ambíguo(s) (revisar)`);
+      if (qtd > 0) partes.push(`${qtd} classificado(s) por regra`);
+
       setMensagem({
         tipo: "sucesso",
-        texto: qtd > 0 ? `${qtd} lançamento(s) classificado(s) automaticamente.` : "Nenhum lançamento pendente casou com as regras ativas.",
+        texto: partes.length > 0 ? partes.join(" · ") : "Nenhum lançamento pendente casou com baixa automática ou regras ativas.",
       });
       await refrescarTudo();
     } catch (e) {
-      setMensagem({ tipo: "erro", texto: e instanceof Error ? e.message : "Erro ao reprocessar regras." });
+      setMensagem({ tipo: "erro", texto: e instanceof Error ? e.message : "Erro ao reprocessar." });
     } finally {
       setReprocessando(false);
     }
@@ -440,7 +577,7 @@ export default function ExtratoPage() {
       const { data: inseridos, error: erroUpsert } = await supabase
         .from("extrato_lancamento")
         .upsert(linhas, { onConflict: "conta_id,data_lancamento,valor,descricao_normalizada,ocorrencia", ignoreDuplicates: true })
-        .select("id, conta_id, descricao_normalizada, valor, status");
+        .select("id, conta_id, descricao_normalizada, valor, status, data_lancamento");
 
       if (erroUpsert) throw new Error(erroUpsert.message);
 
@@ -459,17 +596,27 @@ export default function ExtratoPage() {
       });
       if (erroImportacao) throw new Error(erroImportacao.message);
 
-      let classificadosAuto = 0;
+      let baixasAuto = { baixados: 0, ambiguos: 0, idsBaixados: new Set<string>() };
       if (inseridos && inseridos.length > 0) {
-        classificadosAuto = await classificarPorRegras(inseridos as LancamentoClassificavel[]);
+        baixasAuto = await processarBaixasAutomaticas(inseridos as LancamentoParaBaixa[]);
       }
 
-      setResumoImportacao({ lidas: parsed.transacoes.length, novas, duplicadas, cobertos, avisos: parsed.avisos });
+      let classificadosAuto = 0;
+      if (inseridos && inseridos.length > 0) {
+        const paraClassificar = (inseridos as LancamentoParaBaixa[]).filter((l) => !baixasAuto.idsBaixados.has(l.id));
+        if (paraClassificar.length > 0) {
+          classificadosAuto = await classificarPorRegras(paraClassificar as LancamentoClassificavel[]);
+        }
+      }
+
+      setResumoImportacao({ lidas: parsed.transacoes.length, novas, duplicadas, cobertos, baixados: baixasAuto.baixados, ambiguos: baixasAuto.ambiguos, avisos: parsed.avisos });
       setMensagem({
         tipo: "sucesso",
         texto:
           `${parsed.transacoes.length} lidas · ${novas} novas · ${duplicadas} já existentes` +
           (cobertos > 0 ? ` · ${cobertos} já cobertas pelo relatório Pix` : "") +
+          (baixasAuto.baixados > 0 ? ` · ${baixasAuto.baixados} baixado(s) automaticamente` : "") +
+          (baixasAuto.ambiguos > 0 ? ` · ${baixasAuto.ambiguos} ambígua(s) (revisar)` : "") +
           (classificadosAuto > 0 ? ` · ${classificadosAuto} classificada(s) automaticamente` : ""),
       });
       setArquivo(null);
@@ -878,6 +1025,12 @@ export default function ExtratoPage() {
                   {resumoImportacao.lidas} lidas · {resumoImportacao.novas} novas · {resumoImportacao.duplicadas} já existentes
                   {resumoImportacao.cobertos > 0 && ` · ${resumoImportacao.cobertos} já cobertas pelo relatório Pix`}
                 </p>
+                {(resumoImportacao.baixados > 0 || resumoImportacao.ambiguos > 0) && (
+                  <p className="mt-1 font-semibold">
+                    {resumoImportacao.baixados} lançamento(s) de saída baixados automaticamente em Contas a Pagar
+                    {resumoImportacao.ambiguos > 0 && ` · ${resumoImportacao.ambiguos} ambíguo(s) — revisar na aba Lançamentos`}
+                  </p>
+                )}
                 {resumoImportacao.avisos.length > 0 && (
                   <ul className="mt-2 list-disc list-inside text-amber-700">
                     {resumoImportacao.avisos.map((a, i) => (
