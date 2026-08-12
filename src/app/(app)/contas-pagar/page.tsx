@@ -97,6 +97,7 @@ export default function ContasPagarPage() {
   const [observacao, setObservacao] = useState("");
   const [statusInicial, setStatusInicial] = useState<"pendente" | "pago">("pendente");
   const [statusOriginal, setStatusOriginal] = useState<"pendente" | "pago">("pendente");
+  const [contaOriginal, setContaOriginal] = useState<ContaPagar | null>(null);
   const [dataPagamento, setDataPagamento] = useState("");
 
   // Pagamento inline
@@ -265,13 +266,13 @@ export default function ContasPagarPage() {
   }
 
   function resetarFormulario() {
-    setFornecedor(""); setDescricao(""); setValor(0); setDataVencimento(""); setCategoriaId(""); setObservacao(""); setStatusInicial("pendente"); setStatusOriginal("pendente"); setDataPagamento(""); setEditandoId(null); setComprovanteUrl(null);
+    setFornecedor(""); setDescricao(""); setValor(0); setDataVencimento(""); setCategoriaId(""); setObservacao(""); setStatusInicial("pendente"); setStatusOriginal("pendente"); setDataPagamento(""); setEditandoId(null); setComprovanteUrl(null); setContaOriginal(null);
   }
 
   function abrirNovo() { resetarFormulario(); if (categorias.length > 0) setCategoriaId(categorias[0].id); setShowForm(true); }
 
   function abrirEditar(conta: ContaPagar) {
-    setFornecedor(conta.fornecedor); setDescricao(conta.descricao || ""); setValor(conta.valor); setDataVencimento(conta.data_vencimento); setCategoriaId(conta.categoria_id || ""); setObservacao(conta.observacao || ""); setStatusInicial(conta.status as "pendente" | "pago"); setStatusOriginal(conta.status as "pendente" | "pago"); setDataPagamento(conta.data_pagamento || ""); setComprovanteUrl(conta.comprovante_url ?? null); setEditandoId(conta.id); setShowForm(true);
+    setFornecedor(conta.fornecedor); setDescricao(conta.descricao || ""); setValor(conta.valor); setDataVencimento(conta.data_vencimento); setCategoriaId(conta.categoria_id || ""); setObservacao(conta.observacao || ""); setStatusInicial(conta.status as "pendente" | "pago"); setStatusOriginal(conta.status as "pendente" | "pago"); setDataPagamento(conta.data_pagamento || ""); setComprovanteUrl(conta.comprovante_url ?? null); setEditandoId(conta.id); setContaOriginal(conta); setShowForm(true);
     setPagandoId(null);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -307,7 +308,23 @@ export default function ContasPagarPage() {
       await supabase.from("movimentacoes").insert({ tipo: "saida", data: dataPag, valor: valor, categoria_id: categoriaId, observacao: `Pagamento: ${fornecedor}${descricao ? ` - ${descricao}` : ""}`, revisar: false });
       await registrarLog({ acao: "pagou", tabela: "contas_pagar", registroId: editandoId, dadosNovos: dados, detalhes: `${fornecedor} - ${fmt(valor)}` });
       setMensagem("Paga e lançada nas movimentações!");
+    } else if (editandoId && statusOriginal === "pago" && statusInicial === "pendente" && contaOriginal) {
+      // Pagamento desfeito via formulário de edição (não pelo botão "Desfazer pagamento") — mesma limpeza.
+      const { data: movs } = await supabase.from("movimentacoes").select("id").eq("tipo", "saida").eq("valor", contaOriginal.valor).ilike("observacao", `%${contaOriginal.fornecedor}%`);
+      if (movs && movs.length > 0) await supabase.from("movimentacoes").delete().eq("id", movs[0].id);
+      await registrarLog({ acao: "editou", tabela: "contas_pagar", registroId: editandoId, dadosNovos: dados, detalhes: `${fornecedor} - ${fmt(valor)}` });
+      setMensagem("Atualizada!");
     } else {
+      if (editandoId && statusOriginal === "pago" && statusInicial === "pago" && contaOriginal) {
+        const dataPag = dados.data_pagamento as string;
+        const mudou = contaOriginal.valor !== valor || contaOriginal.fornecedor !== fornecedor || contaOriginal.data_pagamento !== dataPag;
+        if (mudou) {
+          const { data: movs } = await supabase.from("movimentacoes").select("id").eq("tipo", "saida").eq("valor", contaOriginal.valor).ilike("observacao", `%${contaOriginal.fornecedor}%`);
+          if (movs && movs.length > 0) {
+            await supabase.from("movimentacoes").update({ data: dataPag, valor, categoria_id: categoriaId, observacao: `Pagamento: ${fornecedor}${descricao ? ` - ${descricao}` : ""}` }).eq("id", movs[0].id);
+          }
+        }
+      }
       await registrarLog({ acao: editandoId ? "editou" : "criou", tabela: "contas_pagar", registroId: contaId || undefined, dadosNovos: dados, detalhes: `${fornecedor} - ${fmt(valor)}` });
       setMensagem(editandoId ? "Atualizada!" : "Cadastrada!");
     }
