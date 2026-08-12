@@ -122,11 +122,13 @@ export async function parseRelatorioPix(bytes: Uint8Array, nomeArquivo: string):
   let indiceValor = -1;
   let indicePagador = -1;
   let indiceIdTransacao = -1;
+  let indiceTipoLancamento = -1;
   for (const [coluna, nome] of cabecalho.entries()) {
     if (nome === "data") indiceData = coluna;
     else if (nome === "valor") indiceValor = coluna;
     else if (nome === "pagador") indicePagador = coluna;
     else if (nome === "id da transação") indiceIdTransacao = coluna;
+    else if (nome === "tipo de lançamento" || nome === "tipo de lancamento") indiceTipoLancamento = coluna;
   }
 
   if (indiceData === -1 || indiceValor === -1) {
@@ -145,6 +147,20 @@ export async function parseRelatorioPix(bytes: Uint8Array, nomeArquivo: string):
     if (!data || Number.isNaN(valor)) {
       avisos.push(`Linha ${i + 1} ignorada: data ou valor inválido/ausente.`);
       continue;
+    }
+
+    // Este importador só sabe registrar Pix RECEBIDO (vira lançamento CREDIT em
+    // page.tsx). Se o relatório trouxer a coluna "Tipo de lançamento" e a linha
+    // disser qualquer outra coisa (ex.: "Enviado"), pula com aviso em vez de
+    // virar receita silenciosamente. Relatórios antigos sem essa coluna mantêm o
+    // comportamento anterior (assume recebido).
+    if (indiceTipoLancamento !== -1) {
+      const tipoBruto = valorCelula(porColuna.get(indiceTipoLancamento), sharedStrings);
+      const tipo = tipoBruto?.trim() ?? "";
+      if (tipo !== "" && tipo.toLowerCase() !== "recebido") {
+        avisos.push(`Linha ${i + 1} ignorada: tipo de lançamento "${tipo}" não é "Recebido".`);
+        continue;
+      }
     }
 
     const pagador = indicePagador !== -1 ? valorCelula(porColuna.get(indicePagador), sharedStrings) : null;

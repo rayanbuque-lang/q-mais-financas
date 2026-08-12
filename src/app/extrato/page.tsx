@@ -93,7 +93,7 @@ export default function ExtratoPage() {
   const [contaImportId, setContaImportId] = useState("");
   const [arquivo, setArquivo] = useState<File | null>(null);
   const [importando, setImportando] = useState(false);
-  const [resumoImportacao, setResumoImportacao] = useState<{ lidas: number; novas: number; duplicadas: number; avisos: string[] } | null>(null);
+  const [resumoImportacao, setResumoImportacao] = useState<{ lidas: number; novas: number; duplicadas: number; cobertos: number; avisos: string[] } | null>(null);
   const [mostrarNovaConta, setMostrarNovaConta] = useState(false);
   const [novaContaBanco, setNovaContaBanco] = useState("santander");
   const [novaContaApelido, setNovaContaApelido] = useState("");
@@ -390,11 +390,23 @@ export default function ExtratoPage() {
         .toISOString()
         .slice(0, 10);
 
+      // O pool de cobertura tem que conter SÓ linhas que vieram do relatório Pix
+      // (que carregam a data real do Pix). Uma linha vinda de um .ofx anterior
+      // não pode cobrir nada: ela já tem a data do banco, e deixá-la no pool faz
+      // uma venda nova e legítima de mesmo valor dentro da janela ser descartada
+      // sem nunca ser gravada — perda silenciosa de receita.
+      //
+      // O fitid separa as duas origens: o relatório Pix grava o EndToEndId real
+      // ("E" + resto, ex. E0000000020260809145541723483416) ou o sintético
+      // "PIXREL:<data>:<valor>:<ocorrencia>"; o FITID do .ofx do Santander é
+      // puramente numérico (conta + timestamp do export + índice), então nunca
+      // começa com letra e nunca cai neste filtro.
       const { data: existentesPix, error: erroExistentes } = await supabase
         .from("extrato_lancamento")
         .select("id, data_lancamento, valor, descricao_normalizada")
         .eq("conta_id", contaImportId)
         .ilike("descricao_normalizada", "%pix recebido%")
+        .or("fitid.like.E%,fitid.like.PIXREL:%")
         .gte("data_lancamento", dataMinima)
         .lte("data_lancamento", dataMaxima);
       if (erroExistentes) throw new Error(erroExistentes.message);
@@ -453,7 +465,7 @@ export default function ExtratoPage() {
         classificadosAuto = await classificarPorRegras(inseridos as LancamentoClassificavel[]);
       }
 
-      setResumoImportacao({ lidas: parsed.transacoes.length, novas, duplicadas, avisos: parsed.avisos });
+      setResumoImportacao({ lidas: parsed.transacoes.length, novas, duplicadas, cobertos, avisos: parsed.avisos });
       setMensagem({
         tipo: "sucesso",
         texto:
@@ -865,6 +877,7 @@ export default function ExtratoPage() {
               <div className="mt-4 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800">
                 <p className="font-semibold">
                   {resumoImportacao.lidas} lidas · {resumoImportacao.novas} novas · {resumoImportacao.duplicadas} já existentes
+                  {resumoImportacao.cobertos > 0 && ` · ${resumoImportacao.cobertos} já cobertas pelo relatório Pix`}
                 </p>
                 {resumoImportacao.avisos.length > 0 && (
                   <ul className="mt-2 list-disc list-inside text-amber-700">
