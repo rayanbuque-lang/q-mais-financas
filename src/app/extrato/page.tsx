@@ -9,7 +9,7 @@ import { aplicarRegras, type RegraExtrato as RegraMotor, type LancamentoClassifi
 import { calcularTipoMovimentacao, agruparResumoPorDia, type ResumoDia } from "@/lib/preview-movimentacao";
 import EmptyState from "@/components/empty-state";
 import { calcularBaixasAutomaticas, type CandidatoBaixa, type ContaPagarPendente } from "@/lib/baixa-contas-pagar";
-import { registrarLog } from "@/lib/audit";
+import { registrarLog, verificarMesFechado } from "@/lib/audit";
 
 interface Conta {
   id: string;
@@ -89,20 +89,51 @@ interface LancamentoParaBaixa {
   valor: number;
   descricao_normalizada: string;
   status: string;
+  contas_pagar_candidatas?: string[] | null;
 }
+
+// "ok" baixou; "mes_fechado" recusou de propósito (competência já fechada);
+// "falhou" perdeu uma corrida ou algum write deu erro. Só "ok" conta como
+// baixado nos resumos.
+type ResultadoEscritaBaixa = "ok" | "mes_fechado" | "falhou";
 
 // Reaproveita exatamente a mesma escrita que a baixa manual já faz em
 // src/app/(app)/contas-pagar/page.tsx (confirmarPagamento) -- nenhum caminho
 // de escrita novo em contas_pagar/movimentacoes. Usada tanto pela baixa
 // automática (candidato único) quanto pela resolução manual de ambíguos.
+//
+// ORDEM DAS ESCRITAS (importa): claim do LANÇAMENTO -> claim da CONTA ->
+// movimentação -> finalização do lançamento. Cada claim é um update
+// condicional com .select("id") pra saber quantas linhas realmente mudaram.
+// Proteger só a conta não bastava: duas abas podiam resolver o MESMO
+// lançamento ambíguo contra contas DIFERENTES (ambas pendentes), passando
+// as duas pelo guard da conta e gerando duas movimentações de saída para um
+// único débito bancário. Reivindicando o lançamento primeiro, o segundo
+// resolvedor para antes de escrever qualquer coisa.
 async function baixarContaPagar(
   lancamento: { id: string; data_lancamento: string },
   conta: { id: string; fornecedor: string; valor: number; categoria_id: string | null },
-  categoriaNome: string
-): Promise<boolean> {
+  categoriaNome: string,
+  origem: "automatica" | "manual"
+): Promise<ResultadoEscritaBaixa> {
   const supabase = createClient();
-  // .select("id") depois do update deixa explícito quantas linhas o update
-  // realmente afetou. .eq("status", "pendente") só bate se a conta ainda
+
+  // A movimentação é gravada com a data real do banco (data_lancamento), que
+  // pode cair num mês já fechado contabilmente — o resto do sistema bloqueia
+  // esse tipo de escrita, a baixa automática também tem que bloquear.
+  const { fechado } = await verificarMesFechado(lancamento.data_lancamento);
+  if (fechado) return "mes_fechado";
+
+  // 1) Claim do lançamento: só vence quem encontrar conta_pagar_id ainda nulo.
+  const { data: lancamentoReivindicado, error: erroClaim } = await supabase
+    .from("extrato_lancamento")
+    .update({ conta_pagar_id: conta.id })
+    .eq("id", lancamento.id)
+    .is("conta_pagar_id", null)
+    .select("id");
+  if (erroClaim || !lancamentoReivindicado || lancamentoReivindicado.length === 0) return "falhou";
+
+  // 2) Claim da conta: .eq("status","pendente") só bate se a conta ainda
   // estiver pendente -- se dois lançamentos do mesmo lote casarem com a
   // MESMA conta (mesmo valor, mesmo fornecedor, só uma pendente no banco),
   // o segundo update aqui afeta zero linhas (a primeira chamada já pagou),
@@ -114,9 +145,28 @@ async function baixarContaPagar(
     .eq("id", conta.id)
     .eq("status", "pendente")
     .select("id");
-  if (erroBaixa || !linhasAtualizadas || linhasAtualizadas.length === 0) return false;
+  if (erroBaixa || !linhasAtualizadas || linhasAtualizadas.length === 0) {
+    // Zero linhas SEM erro = a conta não estava mais pendente, logo nada foi
+    // escrito por nós: devolvemos o lançamento pro pool (guardado por
+    // .eq("conta_pagar_id", conta.id) pra não pisar em claim de terceiro),
+    // senão ele ficaria travado pra sempre — nenhuma outra tentativa
+    // conseguiria reivindicá-lo. Se veio ERRO, o estado da conta é
+    // desconhecido: aí mantemos o claim de propósito, porque "lançamento
+    // reivindicado sem baixa completa" é detectável, enquanto desfazer o
+    // claim por cima de uma conta possivelmente paga não é.
+    if (!erroBaixa) {
+      await supabase
+        .from("extrato_lancamento")
+        .update({ conta_pagar_id: null })
+        .eq("id", lancamento.id)
+        .eq("conta_pagar_id", conta.id);
+    }
+    return "falhou";
+  }
 
-  await supabase.from("movimentacoes").insert({
+  // 3) Movimentação. Erro aqui não pode virar sucesso silencioso: em lote o
+  // resumo diria "N baixados" contando uma saída que nunca foi lançada.
+  const { error: erroMovimentacao } = await supabase.from("movimentacoes").insert({
     tipo: "saida",
     data: lancamento.data_lancamento,
     valor: conta.valor,
@@ -125,32 +175,47 @@ async function baixarContaPagar(
     revisar: false,
     conta_pagar_id: conta.id,
   });
+  if (erroMovimentacao) return "falhou";
 
-  await supabase
+  // 4) Finaliza a classificação do lançamento (o vínculo já foi gravado no
+  // passo 1). Resolução manual é decisão humana: carimba classificado_por,
+  // igual handleClassificarManual.
+  let classificadoPor: string | null = null;
+  if (origem === "manual") {
+    const { data: { user } } = await supabase.auth.getUser();
+    classificadoPor = user?.id ?? null;
+  }
+  const { error: erroLancamento } = await supabase
     .from("extrato_lancamento")
     .update({
       status: "classificado",
       categoria: categoriaNome,
       classificado_em: new Date().toISOString(),
-      conta_pagar_id: conta.id,
+      classificado_por: classificadoPor,
       contas_pagar_candidatas: null,
     })
     .eq("id", lancamento.id);
+  if (erroLancamento) return "falhou";
 
-  await registrarLog({ acao: "pagou", tabela: "contas_pagar", registroId: conta.id, detalhes: `${conta.fornecedor} - baixa automática via extrato` });
-  return true;
+  await registrarLog({
+    acao: "pagou",
+    tabela: "contas_pagar",
+    registroId: conta.id,
+    detalhes: `${conta.fornecedor} - ${origem === "manual" ? "baixa manual (ambiguidade resolvida) via extrato" : "baixa automática via extrato"}`,
+  });
+  return "ok";
 }
 
 // Roda sobre lançamentos de saída recém-chegados (import de OFX ou
 // reprocessamento). Nunca decide um empate sozinho -- ver calcularBaixasAutomaticas.
 async function processarBaixasAutomaticas(
   lancamentosNovos: LancamentoParaBaixa[]
-): Promise<{ baixados: number; ambiguos: number; idsBaixados: Set<string>; idsAmbiguos: Set<string> }> {
+): Promise<{ baixados: number; ambiguos: number; mesFechado: number; idsBaixados: Set<string>; idsAmbiguos: Set<string> }> {
   const supabase = createClient();
   const idsBaixados = new Set<string>();
   const idsAmbiguos = new Set<string>();
   const saidas = lancamentosNovos.filter((l) => l.valor < 0 && l.status === "nao_classificado");
-  if (saidas.length === 0) return { baixados: 0, ambiguos: 0, idsBaixados, idsAmbiguos };
+  if (saidas.length === 0) return { baixados: 0, ambiguos: 0, mesFechado: 0, idsBaixados, idsAmbiguos };
 
   // .limit(2000) por precaução -- mesma classe de problema já corrigida antes
   // neste projeto (commit 693a921): PostgREST tem teto padrão de linhas.
@@ -160,7 +225,10 @@ async function processarBaixasAutomaticas(
     .select("id, fornecedor, valor, categoria_id")
     .eq("status", "pendente")
     .limit(2000);
-  if (!pendentes || pendentes.length === 0) return { baixados: 0, ambiguos: 0, idsBaixados, idsAmbiguos };
+  if (!pendentes || pendentes.length === 0) {
+    await limparCandidatasObsoletas(saidas, new Set<number>());
+    return { baixados: 0, ambiguos: 0, mesFechado: 0, idsBaixados, idsAmbiguos };
+  }
 
   const { data: categoriasSaidaTodas } = await supabase.from("categorias_saida").select("id, nome");
   const nomeCategoriaPorId = new Map((categoriasSaidaTodas ?? []).map((c) => [c.id as string, c.nome as string]));
@@ -180,20 +248,24 @@ async function processarBaixasAutomaticas(
   const pendentesPorId = new Map(pendentes.map((c) => [c.id as string, c]));
 
   let baixados = 0;
+  let mesFechado = 0;
   for (const b of resultado.baixados) {
     const lancamento = saidas[b.indice];
     const conta = pendentesPorId.get(b.contaPagarId);
     if (!conta) continue;
     const categoriaId = conta.categoria_id as string | null;
     const categoriaNome = categoriaId ? nomeCategoriaPorId.get(categoriaId) ?? "Contas a pagar" : "Contas a pagar";
-    const ok = await baixarContaPagar(
+    const resultadoEscrita = await baixarContaPagar(
       { id: lancamento.id, data_lancamento: lancamento.data_lancamento },
       { id: conta.id as string, fornecedor: conta.fornecedor as string, valor: Number(conta.valor), categoria_id: categoriaId },
-      categoriaNome
+      categoriaNome,
+      "automatica"
     );
-    if (ok) {
+    if (resultadoEscrita === "ok") {
       idsBaixados.add(lancamento.id);
       baixados++;
+    } else if (resultadoEscrita === "mes_fechado") {
+      mesFechado++;
     }
   }
 
@@ -205,7 +277,28 @@ async function processarBaixasAutomaticas(
     ambiguos++;
   }
 
-  return { baixados, ambiguos, idsBaixados, idsAmbiguos };
+  const indicesComResultado = new Set<number>([
+    ...resultado.baixados.map((b) => b.indice),
+    ...resultado.ambiguos.map((a) => a.indice),
+  ]);
+  await limparCandidatasObsoletas(saidas, indicesComResultado);
+
+  return { baixados, ambiguos, mesFechado, idsBaixados, idsAmbiguos };
+}
+
+// Um lançamento que já ficou ambíguo carrega contas_pagar_candidatas até
+// alguém resolver. Se num reprocessamento posterior o motor não encontra mais
+// candidato nenhum (as contas empatadas foram pagas por outro meio, ou o
+// fornecedor curto demais deixou de casar), esse array vira lixo: a UI segue
+// mostrando "Baixa ambígua (N)" e todo clique falha. Limpa quem tinha
+// candidatas e não produziu nem baixa nem ambiguidade nesta rodada.
+async function limparCandidatasObsoletas(saidas: LancamentoParaBaixa[], indicesComResultado: Set<number>) {
+  const idsObsoletos = saidas
+    .filter((l, indice) => !indicesComResultado.has(indice) && (l.contas_pagar_candidatas?.length ?? 0) > 0)
+    .map((l) => l.id);
+  if (idsObsoletos.length === 0) return;
+  const supabase = createClient();
+  await supabase.from("extrato_lancamento").update({ contas_pagar_candidatas: null }).in("id", idsObsoletos);
 }
 
 export default function ExtratoPage() {
@@ -223,7 +316,7 @@ export default function ExtratoPage() {
   const [contaImportId, setContaImportId] = useState("");
   const [arquivo, setArquivo] = useState<File | null>(null);
   const [importando, setImportando] = useState(false);
-  const [resumoImportacao, setResumoImportacao] = useState<{ lidas: number; novas: number; duplicadas: number; cobertos: number; baixados: number; ambiguos: number; avisos: string[] } | null>(null);
+  const [resumoImportacao, setResumoImportacao] = useState<{ lidas: number; novas: number; duplicadas: number; cobertos: number; baixados: number; ambiguos: number; mesFechado: number; avisos: string[] } | null>(null);
   const [mostrarNovaConta, setMostrarNovaConta] = useState(false);
   const [novaContaBanco, setNovaContaBanco] = useState("santander");
   const [novaContaApelido, setNovaContaApelido] = useState("");
@@ -324,11 +417,14 @@ export default function ExtratoPage() {
     let totalQ = supabase.from("extrato_lancamento").select("*", { count: "exact", head: true });
     let classQ = supabase.from("extrato_lancamento").select("*", { count: "exact", head: true }).eq("status", "classificado");
     let naoQ = supabase.from("extrato_lancamento").select("*", { count: "exact", head: true }).eq("status", "nao_classificado");
+    // "Automático" = classificado sem alguém digitar a categoria: por regra OU
+    // por baixa de conta a pagar (a baixa também é uma classificação automática,
+    // só que vinda do casamento com contas_pagar em vez do motor de regras).
     let autoQ = supabase
       .from("extrato_lancamento")
       .select("*", { count: "exact", head: true })
       .eq("status", "classificado")
-      .not("regra_id", "is", null);
+      .or("regra_id.not.is.null,conta_pagar_id.not.is.null");
 
     if (filtroContaId) {
       totalQ = totalQ.eq("conta_id", filtroContaId);
@@ -422,8 +518,11 @@ export default function ExtratoPage() {
     try {
       let query = supabase
         .from("extrato_lancamento")
-        .select("id, conta_id, descricao_normalizada, valor, status, data_lancamento")
-        .eq("status", "nao_classificado");
+        .select("id, conta_id, descricao_normalizada, valor, status, data_lancamento, contas_pagar_candidatas")
+        .eq("status", "nao_classificado")
+        // Mesmo teto de carregarLancamentos — sem .limit() o PostgREST corta na
+        // sua página padrão e o reprocessamento silenciosamente ignora o resto.
+        .limit(LIMITE_LANCAMENTOS);
       if (filtroContaId) query = query.eq("conta_id", filtroContaId);
       const { data: candidatos, error } = await query;
       if (error) throw new Error(error.message);
@@ -436,6 +535,7 @@ export default function ExtratoPage() {
       const partes: string[] = [];
       if (baixasAuto.baixados > 0) partes.push(`${baixasAuto.baixados} baixado(s) automaticamente`);
       if (baixasAuto.ambiguos > 0) partes.push(`${baixasAuto.ambiguos} ambíguo(s) (revisar)`);
+      if (baixasAuto.mesFechado > 0) partes.push(`${baixasAuto.mesFechado} não baixado(s): mês contábil fechado`);
       if (qtd > 0) partes.push(`${qtd} classificado(s) por regra`);
 
       setMensagem({
@@ -604,7 +704,7 @@ export default function ExtratoPage() {
       });
       if (erroImportacao) throw new Error(erroImportacao.message);
 
-      let baixasAuto = { baixados: 0, ambiguos: 0, idsBaixados: new Set<string>(), idsAmbiguos: new Set<string>() };
+      let baixasAuto = { baixados: 0, ambiguos: 0, mesFechado: 0, idsBaixados: new Set<string>(), idsAmbiguos: new Set<string>() };
       if (inseridos && inseridos.length > 0) {
         baixasAuto = await processarBaixasAutomaticas(inseridos as LancamentoParaBaixa[]);
       }
@@ -617,7 +717,7 @@ export default function ExtratoPage() {
         }
       }
 
-      setResumoImportacao({ lidas: parsed.transacoes.length, novas, duplicadas, cobertos, baixados: baixasAuto.baixados, ambiguos: baixasAuto.ambiguos, avisos: parsed.avisos });
+      setResumoImportacao({ lidas: parsed.transacoes.length, novas, duplicadas, cobertos, baixados: baixasAuto.baixados, ambiguos: baixasAuto.ambiguos, mesFechado: baixasAuto.mesFechado, avisos: parsed.avisos });
       setMensagem({
         tipo: "sucesso",
         texto:
@@ -625,6 +725,7 @@ export default function ExtratoPage() {
           (cobertos > 0 ? ` · ${cobertos} já cobertas pelo relatório Pix` : "") +
           (baixasAuto.baixados > 0 ? ` · ${baixasAuto.baixados} baixado(s) automaticamente` : "") +
           (baixasAuto.ambiguos > 0 ? ` · ${baixasAuto.ambiguos} ambígua(s) (revisar)` : "") +
+          (baixasAuto.mesFechado > 0 ? ` · ${baixasAuto.mesFechado} não baixada(s): mês contábil fechado` : "") +
           (classificadosAuto > 0 ? ` · ${classificadosAuto} classificada(s) automaticamente` : ""),
       });
       setArquivo(null);
@@ -760,13 +861,21 @@ export default function ExtratoPage() {
   async function handleAbrirResolucaoAmbigua(lancamento: Lancamento) {
     if (!lancamento.contas_pagar_candidatas || lancamento.contas_pagar_candidatas.length === 0) return;
     setCarregandoCandidatos(true);
+    // Só contas AINDA pendentes podem ser oferecidas: uma delas pode ter sido
+    // paga por outro caminho (ou por outra aba) depois que a ambiguidade foi
+    // registrada, e escolher uma conta já paga só resultaria em erro.
     const { data, error } = await supabase
       .from("contas_pagar")
       .select("id, fornecedor, valor, data_vencimento, categoria_id")
-      .in("id", lancamento.contas_pagar_candidatas);
+      .in("id", lancamento.contas_pagar_candidatas)
+      .eq("status", "pendente");
     setCarregandoCandidatos(false);
     if (error || !data) {
       setMensagem({ tipo: "erro", texto: "Erro ao carregar as contas candidatas: " + (error?.message ?? "") });
+      return;
+    }
+    if (data.length === 0) {
+      setMensagem({ tipo: "erro", texto: "Nenhuma das contas candidatas continua pendente — todas já foram pagas por outro caminho. Use 'Reprocessar regras' para reavaliar este lançamento." });
       return;
     }
     setResolvendoAmbiguo({
@@ -776,6 +885,7 @@ export default function ExtratoPage() {
   }
 
   async function handleResolverBaixaAmbigua(contaPagarId: string) {
+    if (!podeEscrever) return;
     if (!resolvendoAmbiguo) return;
     const conta = resolvendoAmbiguo.candidatos.find((c) => c.id === contaPagarId);
     if (!conta) return;
@@ -787,15 +897,24 @@ export default function ExtratoPage() {
       if (categoria?.nome) categoriaNome = categoria.nome as string;
     }
 
-    const ok = await baixarContaPagar(
+    const resultadoEscrita = await baixarContaPagar(
       { id: resolvendoAmbiguo.lancamento.id, data_lancamento: resolvendoAmbiguo.lancamento.data_lancamento },
-      { id: conta.id, fornecedor: conta.fornecedor, valor: conta.valor, categoria_id: conta.categoria_id },
-      categoriaNome
+      { id: conta.id, fornecedor: conta.fornecedor, valor: Number(conta.valor), categoria_id: conta.categoria_id },
+      categoriaNome,
+      "manual"
     );
 
     setResolvendoBaixaId(null);
-    if (!ok) {
-      setMensagem({ tipo: "erro", texto: "Não foi possível confirmar a baixa — a conta pode já ter sido paga." });
+    if (resultadoEscrita === "mes_fechado") {
+      setMensagem({
+        tipo: "erro",
+        texto: `Não foi possível confirmar a baixa: ${formatarData(resolvendoAmbiguo.lancamento.data_lancamento)} está num mês contábil já fechado.`,
+      });
+      return;
+    }
+    if (resultadoEscrita !== "ok") {
+      setMensagem({ tipo: "erro", texto: "Não foi possível confirmar a baixa — a conta pode já ter sido paga, ou este lançamento já foi baixado em outra aba." });
+      await Promise.all([carregarLancamentos(), carregarResumo()]);
       return;
     }
     setResolvendoAmbiguo(null);
@@ -943,7 +1062,8 @@ export default function ExtratoPage() {
       <div className="mb-6">
         <h1 className="text-xl font-bold text-[var(--color-text)]">Extrato Bancário (OFX)</h1>
         <p className="text-sm text-[var(--color-text-muted)] mt-1">
-          Fase 1 do projeto de conciliação — camada de staging, isolada do sistema principal. Nada aqui é gravado em Movimentações ou Contas a Pagar.
+          Fase 1 do projeto de conciliação — a classificação por categoria e as regras continuam sendo staging, isoladas do sistema
+          principal. <b>Exceção:</b> a baixa automática de contas a pagar grava de verdade em Contas a Pagar e Movimentações.
         </p>
       </div>
 
@@ -1087,6 +1207,12 @@ export default function ExtratoPage() {
                   <p className="mt-1 font-semibold">
                     {resumoImportacao.baixados} lançamento(s) de saída baixados automaticamente em Contas a Pagar
                     {resumoImportacao.ambiguos > 0 && ` · ${resumoImportacao.ambiguos} ambíguo(s) — revisar na aba Lançamentos`}
+                  </p>
+                )}
+                {resumoImportacao.mesFechado > 0 && (
+                  <p className="mt-1 font-semibold text-amber-700">
+                    {resumoImportacao.mesFechado} lançamento(s) casaram com uma conta a pagar mas NÃO foram baixados: a data do
+                    pagamento cai num mês contábil já fechado. Reabra o mês (ou baixe a conta manualmente) se for o caso.
                   </p>
                 )}
                 {resumoImportacao.avisos.length > 0 && (
@@ -1330,7 +1456,7 @@ export default function ExtratoPage() {
                                           </span>
                                         )}
                                       </div>
-                                    ) : l.contas_pagar_candidatas && l.contas_pagar_candidatas.length > 0 ? (
+                                    ) : podeEscrever && l.contas_pagar_candidatas && l.contas_pagar_candidatas.length > 0 ? (
                                       <button
                                         type="button"
                                         disabled={carregandoCandidatos}
@@ -1346,7 +1472,7 @@ export default function ExtratoPage() {
                                     )}
                                   </td>
                                   <td className="px-3 py-2 whitespace-nowrap text-[10px] text-[var(--color-text-muted)]">
-                                    {l.status === "ignorado" ? "ignorado" : l.regra_id ? "regra" : l.categoria ? "manual" : "—"}
+                                    {l.status === "ignorado" ? "ignorado" : l.regra_id ? "regra" : l.conta_pagar_id ? "baixa" : l.categoria ? "manual" : "—"}
                                   </td>
                                   <td className="px-3 py-2">
                                     {l.status === "nao_classificado" && podeEscrever ? (

@@ -46,7 +46,10 @@ export default function ExtratoLayout({ children }: { children: React.ReactNode 
         <div className="flex items-center gap-3">
           <Logo />
           <span className="text-[10px] font-semibold px-2 py-1 rounded-full bg-amber-100 text-amber-700 border border-amber-200 whitespace-nowrap">
-            🧪 Área experimental — dados de staging
+            🧪 Área experimental — classificação e regras são staging
+          </span>
+          <span className="text-[10px] font-semibold px-2 py-1 rounded-full bg-red-100 text-red-700 border border-red-200 whitespace-nowrap">
+            ⚠️ Baixa de contas a pagar grava em produção
           </span>
         </div>
         <a

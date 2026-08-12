@@ -405,6 +405,16 @@ export default function ContasPagarPage() {
     const movId = await buscarMovimentacaoVinculada(conta.id, conta.valor, conta.fornecedor);
     if (movId) await supabase.from("movimentacoes").delete().eq("id", movId);
     await supabase.from("contas_pagar").update({ status: "pendente", data_pagamento: null }).eq("id", conta.id);
+    // A baixa automática via /extrato marca o lançamento do extrato como
+    // classificado e o amarra nesta conta. Desfazer o pagamento sem reverter
+    // isso deixaria o lançamento órfão: continuaria exibido como "baixa
+    // automática" apontando para uma conta que voltou a ficar pendente, e o
+    // "Reprocessar" (que só olha status='nao_classificado') nunca mais o
+    // reconsideraria. Nenhuma linha é afetada quando a baixa foi manual.
+    await supabase
+      .from("extrato_lancamento")
+      .update({ status: "nao_classificado", categoria: null, classificado_em: null, conta_pagar_id: null })
+      .eq("conta_pagar_id", conta.id);
     setMensagem("Desfeito!"); setLoading(false); carregarDados(); setTimeout(() => setMensagem(""), 3000);
   }
 
