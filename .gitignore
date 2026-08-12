@@ -41,3 +41,6 @@ yarn-error.log*
 next-env.d.ts
 
 .vercel
+
+# dados financeiros reais usados para testar o /extrato — nunca versionar
+/arquivos e extratos/

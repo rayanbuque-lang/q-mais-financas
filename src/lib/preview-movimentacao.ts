@@ -15,6 +15,7 @@ export interface LancamentoParaResumo {
   descricao: string;
   categoria: string | null;
   status: string;
+  revisado: boolean;
 }
 
 export interface LancamentoResumido {
@@ -38,26 +39,45 @@ export interface ResumoDia {
   data: string; // yyyy-mm-dd
   categorias: ResumoCategoriaDia[];
   totalDia: number;
+  pendentes: number; // lançamentos do dia ainda não classificados/ignorados
+  classificadosIds: string[]; // ids dos lançamentos classificados do dia (para o "confirmar dia")
+  revisado: boolean; // true só quando existe ao menos 1 classificado e todos já foram confirmados
 }
 
 export function agruparResumoPorDia(lancamentos: LancamentoParaResumo[]): ResumoDia[] {
-  const porDia = new Map<string, Map<string, { quantidade: number; total: number; lancamentos: LancamentoResumido[] }>>();
+  interface AcumuladorDia {
+    categorias: Map<string, { quantidade: number; total: number; lancamentos: LancamentoResumido[] }>;
+    pendentes: number;
+    classificadosIds: string[];
+    todosRevisados: boolean;
+  }
+
+  const porDia = new Map<string, AcumuladorDia>();
 
   for (const l of lancamentos) {
+    if (!porDia.has(l.data_lancamento)) {
+      porDia.set(l.data_lancamento, { categorias: new Map(), pendentes: 0, classificadosIds: [], todosRevisados: true });
+    }
+    const dia = porDia.get(l.data_lancamento)!;
+
+    if (l.status === "nao_classificado") {
+      dia.pendentes += 1;
+      continue;
+    }
     if (l.status !== "classificado" || !l.categoria) continue;
 
-    if (!porDia.has(l.data_lancamento)) porDia.set(l.data_lancamento, new Map());
-    const porCategoria = porDia.get(l.data_lancamento)!;
+    dia.classificadosIds.push(l.id);
+    if (!l.revisado) dia.todosRevisados = false;
 
-    const atual = porCategoria.get(l.categoria) ?? { quantidade: 0, total: 0, lancamentos: [] };
+    const atual = dia.categorias.get(l.categoria) ?? { quantidade: 0, total: 0, lancamentos: [] };
     atual.quantidade += 1;
     atual.total += l.valor;
     atual.lancamentos.push({ id: l.id, descricao: l.descricao, valor: l.valor });
-    porCategoria.set(l.categoria, atual);
+    dia.categorias.set(l.categoria, atual);
   }
 
-  const dias: ResumoDia[] = Array.from(porDia.entries()).map(([data, porCategoria]) => {
-    const categorias = Array.from(porCategoria.entries())
+  const dias: ResumoDia[] = Array.from(porDia.entries()).map(([data, acumulado]) => {
+    const categorias = Array.from(acumulado.categorias.entries())
       .map(([categoria, { quantidade, total, lancamentos: itens }]) => ({
         categoria,
         quantidade,
@@ -66,8 +86,17 @@ export function agruparResumoPorDia(lancamentos: LancamentoParaResumo[]): Resumo
       }))
       .sort((a, b) => a.categoria.localeCompare(b.categoria, "pt-BR"));
     const totalDia = categorias.reduce((soma, c) => soma + c.total, 0);
-    return { data, categorias, totalDia };
+    return {
+      data,
+      categorias,
+      totalDia,
+      pendentes: acumulado.pendentes,
+      classificadosIds: acumulado.classificadosIds,
+      revisado: acumulado.classificadosIds.length > 0 && acumulado.todosRevisados,
+    };
   });
 
-  return dias.sort((a, b) => b.data.localeCompare(a.data));
+  return dias
+    .filter((d) => d.categorias.length > 0) // dias só com pendentes/ignorados não entram no resumo (nada a somar)
+    .sort((a, b) => b.data.localeCompare(a.data));
 }

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { parseOfx, decodificarOfx, OfxParseError } from "@/lib/ofx";
 import { aplicarRegras, type RegraExtrato as RegraMotor, type LancamentoClassificavel } from "@/lib/regras-extrato";
-import { calcularTipoMovimentacao, agruparResumoPorDia } from "@/lib/preview-movimentacao";
+import { calcularTipoMovimentacao, agruparResumoPorDia, type ResumoDia } from "@/lib/preview-movimentacao";
 import EmptyState from "@/components/empty-state";
 
 interface Conta {
@@ -28,6 +28,7 @@ interface Lancamento {
   regra_id: string | null;
   status: "nao_classificado" | "classificado" | "ignorado";
   classificado_em: string | null;
+  revisado: boolean;
 }
 
 interface Regra {
@@ -107,6 +108,7 @@ export default function ExtratoPage() {
   const [resumo, setResumo] = useState({ total: 0, classificados: 0, naoClassificados: 0, automaticos: 0 });
   const [mostrarResumoDiario, setMostrarResumoDiario] = useState(false);
   const [categoriaDiaExpandida, setCategoriaDiaExpandida] = useState<string | null>(null);
+  const [confirmandoDia, setConfirmandoDia] = useState<string | null>(null);
   const [reprocessando, setReprocessando] = useState(false);
   const [categoriaEmEdicao, setCategoriaEmEdicao] = useState<Record<string, string>>({});
   const [acaoLancamentoId, setAcaoLancamentoId] = useState<string | null>(null);
@@ -455,6 +457,24 @@ export default function ExtratoPage() {
     await Promise.all([carregarLancamentos(), carregarResumo()]);
   }
 
+  // "Revisado" é um estado interno do staging /extrato — nunca grava em
+  // movimentacoes/contas_pagar. Marca que o usuário já conferiu visualmente a
+  // classificação daquele dia. Só pode confirmar se não sobrar pendente no dia.
+  async function handleConfirmarDia(dia: ResumoDia) {
+    if (!podeEscrever || dia.pendentes > 0) return;
+    setConfirmandoDia(dia.data);
+    setMensagem(null);
+    const novoValor = !dia.revisado;
+    const { error } = await supabase.from("extrato_lancamento").update({ revisado: novoValor }).in("id", dia.classificadosIds);
+    setConfirmandoDia(null);
+    if (error) {
+      setMensagem({ tipo: "erro", texto: "Erro ao confirmar dia: " + error.message });
+      return;
+    }
+    setMensagem({ tipo: "sucesso", texto: novoValor ? `Dia ${formatarData(dia.data)} confirmado.` : `Confirmação do dia ${formatarData(dia.data)} desfeita.` });
+    await carregarLancamentos();
+  }
+
   async function handleCriarRegraSugerida() {
     if (!sugerirRegraPara || !trechoRegra.trim()) return;
     setCriandoRegraSugerida(true);
@@ -785,12 +805,40 @@ export default function ExtratoPage() {
               {mostrarResumoDiario && (
                 <div className="mt-2 space-y-2 max-h-96 overflow-y-auto">
                   {resumoPorDia.map((dia) => (
-                    <div key={dia.data} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl p-3">
-                      <div className="flex justify-between items-center mb-2">
-                        <span className="text-xs font-semibold">{formatarData(dia.data)}</span>
-                        <span className={`text-xs font-bold ${dia.totalDia < 0 ? "text-red-600" : "text-emerald-600"}`}>
-                          {formatarMoeda(dia.totalDia)}
-                        </span>
+                    <div
+                      key={dia.data}
+                      className={`bg-[var(--color-surface)] border rounded-xl p-3 ${dia.revisado ? "border-emerald-300" : "border-[var(--color-border)]"}`}
+                    >
+                      <div className="flex justify-between items-center mb-2 gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-xs font-semibold whitespace-nowrap">
+                            {dia.revisado && "✅ "}
+                            {formatarData(dia.data)}
+                          </span>
+                          {dia.pendentes > 0 && (
+                            <span className="px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-[9px] font-semibold whitespace-nowrap">
+                              {dia.pendentes} pendente{dia.pendentes > 1 ? "s" : ""}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className={`text-xs font-bold ${dia.totalDia < 0 ? "text-red-600" : "text-emerald-600"}`}>
+                            {formatarMoeda(dia.totalDia)}
+                          </span>
+                          {podeEscrever && (
+                            <button
+                              type="button"
+                              disabled={dia.pendentes > 0 || confirmandoDia === dia.data}
+                              onClick={() => handleConfirmarDia(dia)}
+                              title={dia.pendentes > 0 ? "Classifique todos os lançamentos pendentes deste dia antes de confirmar" : "Marca este dia como revisado (não lança em Movimentações)"}
+                              className={`px-2 py-1 rounded-lg text-[10px] font-semibold whitespace-nowrap disabled:opacity-40 ${
+                                dia.revisado ? "bg-emerald-100 text-emerald-700" : "border border-[var(--color-border)] hover:bg-[var(--hover-bg)]"
+                              }`}
+                            >
+                              {confirmandoDia === dia.data ? "..." : dia.revisado ? "✓ Revisado" : "Confirmar dia"}
+                            </button>
+                          )}
+                        </div>
                       </div>
                       <div className="space-y-1">
                         {dia.categorias.map((c) => {
