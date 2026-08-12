@@ -17,6 +17,7 @@ export interface OfxTransacao {
   tipo: string | null;
   descricao: string;
   descricaoNormalizada: string;
+  ocorrencia: number;
 }
 
 export interface OfxContaInfo {
@@ -128,11 +129,29 @@ export function parseOfx(texto: string, nomeArquivo: string): OfxParseResult {
       tipo,
       descricao,
       descricaoNormalizada: normalizarDescricao(descricao),
+      ocorrencia: 0, // preenchido abaixo
     });
   });
 
   if (transacoes.length === 0) {
     throw new OfxParseError(`Arquivo "${nomeArquivo}" tem ${blocos.length} lançamento(s), mas nenhum com os campos obrigatórios completos.`);
+  }
+
+  // O FITID do Santander é gerado a partir do horário do export, não da transação:
+  // reexportar o mesmo período produz FITIDs diferentes para os mesmos lançamentos
+  // (confirmado comparando dois exports reais do mesmo mês). Por isso a deduplicação
+  // não pode depender do FITID — usamos data + valor + descrição normalizada como
+  // chave natural, com "ocorrencia" como desempate para o caso raro de duas transações
+  // genuinamente distintas com essa mesma combinação no mesmo dia (ex.: a mesma pessoa
+  // enviando o mesmo valor por Pix duas vezes). A ordem do arquivo é estável entre
+  // exports do mesmo período fechado, então a contagem por ordem de aparição reproduz
+  // o mesmo resultado ao reimportar.
+  const contagem = new Map<string, number>();
+  for (const t of transacoes) {
+    const chave = `${t.data}|${t.valor}|${t.descricaoNormalizada}`;
+    const ocorrencia = contagem.get(chave) ?? 0;
+    t.ocorrencia = ocorrencia;
+    contagem.set(chave, ocorrencia + 1);
   }
 
   return {

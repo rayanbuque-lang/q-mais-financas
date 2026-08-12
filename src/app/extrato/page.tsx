@@ -357,12 +357,16 @@ export default function ExtratoPage() {
         tipo: t.tipo,
         descricao: t.descricao,
         descricao_normalizada: t.descricaoNormalizada,
+        ocorrencia: t.ocorrencia,
         status: "nao_classificado" as const,
       }));
 
+      // O FITID do Santander muda a cada export (é derivado do horário do export,
+      // não da transação), então a deduplicação usa a chave natural
+      // (conta + data + valor + descrição + ocorrência) em vez do FITID.
       const { data: inseridos, error: erroUpsert } = await supabase
         .from("extrato_lancamento")
-        .upsert(linhas, { onConflict: "conta_id,fitid", ignoreDuplicates: true })
+        .upsert(linhas, { onConflict: "conta_id,data_lancamento,valor,descricao_normalizada,ocorrencia", ignoreDuplicates: true })
         .select("id, conta_id, descricao_normalizada, valor, status");
 
       if (erroUpsert) throw new Error(erroUpsert.message);
