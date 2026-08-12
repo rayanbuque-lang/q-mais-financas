@@ -46,6 +46,10 @@ interface Regra {
 
 type Mensagem = { tipo: "sucesso" | "erro"; texto: string } | null;
 
+// Teto de linhas por consulta a extrato_lancamento — supera o limite padrão do
+// PostgREST (ver commit 693a921, mesmo problema em contas_pagar).
+const LIMITE_LANCAMENTOS = 5000;
+
 function formatarMoeda(v: number) {
   return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
@@ -123,10 +127,6 @@ export default function ExtratoPage() {
   const [categoriasEntrada, setCategoriasEntrada] = useState<string[]>([]);
   const [categoriasSaida, setCategoriasSaida] = useState<string[]>([]);
 
-  const categoriasDisponiveis = Array.from(new Set([...categoriasEntrada, ...categoriasSaida])).sort((a, b) =>
-    a.localeCompare(b, "pt-BR")
-  );
-
   const resumoPorDia = agruparResumoPorDia(lancamentos);
 
   async function carregarContas() {
@@ -135,10 +135,18 @@ export default function ExtratoPage() {
   }
 
   async function carregarCategoriasReais() {
-    const [{ data: entrada }, { data: saida }] = await Promise.all([
+    const [
+      { data: entrada, error: erroEntrada },
+      { data: saida, error: erroSaida },
+    ] = await Promise.all([
       supabase.from("categorias_entrada").select("nome").eq("ativo", true).order("nome"),
       supabase.from("categorias_saida").select("nome").eq("ativo", true).order("nome"),
     ]);
+    if (erroEntrada || erroSaida) {
+      const detalhes = [erroEntrada?.message, erroSaida?.message].filter(Boolean).join("; ");
+      setMensagem({ tipo: "erro", texto: "Erro ao carregar categorias reais: " + detalhes });
+      return;
+    }
     setCategoriasEntrada((entrada ?? []).map((c) => c.nome as string));
     setCategoriasSaida((saida ?? []).map((c) => c.nome as string));
   }
@@ -150,7 +158,7 @@ export default function ExtratoPage() {
       .select("*")
       .order("data_lancamento", { ascending: false })
       .order("id", { ascending: false })
-      .limit(500);
+      .limit(LIMITE_LANCAMENTOS);
     if (filtroContaId) query = query.eq("conta_id", filtroContaId);
     if (filtroStatus !== "todos") query = query.eq("status", filtroStatus);
     const { data, error } = await query;
@@ -764,6 +772,11 @@ export default function ExtratoPage() {
               >
                 {mostrarResumoDiario ? "▲" : "▼"} Resumo diário por categoria ({resumoPorDia.length} dia{resumoPorDia.length > 1 ? "s" : ""})
               </button>
+              {lancamentos.length >= LIMITE_LANCAMENTOS && (
+                <p className="mt-1 text-[10px] text-[var(--color-text-muted)]">
+                  Mostrando apenas os últimos {LIMITE_LANCAMENTOS} lançamentos — o resumo do dia mais antigo pode estar incompleto.
+                </p>
+              )}
               {mostrarResumoDiario && (
                 <div className="mt-2 space-y-2 max-h-96 overflow-y-auto">
                   {resumoPorDia.map((dia) => (
@@ -1056,6 +1069,13 @@ export default function ExtratoPage() {
                     className="w-full px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-sm"
                   >
                     <option value="">Selecione...</option>
+                    {formRegra.categoria &&
+                      !categoriasEntrada.includes(formRegra.categoria) &&
+                      !categoriasSaida.includes(formRegra.categoria) && (
+                        <optgroup label="Atual (fora das categorias ativas)">
+                          <option value={formRegra.categoria}>{formRegra.categoria}</option>
+                        </optgroup>
+                      )}
                     <optgroup label="Entrada">
                       {categoriasEntrada.map((c) => (
                         <option key={c} value={c}>
