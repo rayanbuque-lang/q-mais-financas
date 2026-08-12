@@ -1268,7 +1268,20 @@ export default function ExtratoPage() {
                                         <span className="px-2 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-semibold whitespace-nowrap">
                                           {l.categoria}
                                         </span>
+                                        {l.conta_pagar_id && (
+                                          <span className="px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 text-[9px] font-semibold whitespace-nowrap">
+                                            Baixa automática
+                                          </span>
+                                        )}
                                       </div>
+                                    ) : l.contas_pagar_candidatas && l.contas_pagar_candidatas.length > 0 ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleAbrirResolucaoAmbigua(l)}
+                                        className="px-2 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-semibold whitespace-nowrap hover:bg-amber-100"
+                                      >
+                                        Baixa ambígua ({l.contas_pagar_candidatas.length})
+                                      </button>
                                     ) : l.status === "ignorado" ? (
                                       <span className="text-[10px] text-[var(--color-text-muted)]">—</span>
                                     ) : (
