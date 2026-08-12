@@ -106,6 +106,7 @@ export default function ExtratoPage() {
   const [filtroStatus, setFiltroStatus] = useState<"todos" | "nao_classificado" | "classificado" | "ignorado">("todos");
   const [resumo, setResumo] = useState({ total: 0, classificados: 0, naoClassificados: 0, automaticos: 0 });
   const [mostrarResumoDiario, setMostrarResumoDiario] = useState(false);
+  const [categoriaDiaExpandida, setCategoriaDiaExpandida] = useState<string | null>(null);
   const [reprocessando, setReprocessando] = useState(false);
   const [categoriaEmEdicao, setCategoriaEmEdicao] = useState<Record<string, string>>({});
   const [acaoLancamentoId, setAcaoLancamentoId] = useState<string | null>(null);
@@ -792,14 +793,37 @@ export default function ExtratoPage() {
                         </span>
                       </div>
                       <div className="space-y-1">
-                        {dia.categorias.map((c) => (
-                          <div key={c.categoria} className="flex justify-between text-[11px] text-[var(--color-text-muted)]">
-                            <span>
-                              {c.categoria} <span className="text-[10px]">×{c.quantidade}</span>
-                            </span>
-                            <span className={c.total < 0 ? "text-red-500" : "text-emerald-600"}>{formatarMoeda(c.total)}</span>
-                          </div>
-                        ))}
+                        {dia.categorias.map((c) => {
+                          const chave = `${dia.data}|${c.categoria}`;
+                          const expandida = categoriaDiaExpandida === chave;
+                          return (
+                            <div key={c.categoria}>
+                              <button
+                                type="button"
+                                onClick={() => setCategoriaDiaExpandida(expandida ? null : chave)}
+                                className="w-full flex justify-between items-center text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                                title="Ver os lançamentos que compõem este total"
+                              >
+                                <span>
+                                  {expandida ? "▾" : "▸"} {c.categoria} <span className="text-[10px]">×{c.quantidade}</span>
+                                </span>
+                                <span className={c.total < 0 ? "text-red-500" : "text-emerald-600"}>{formatarMoeda(c.total)}</span>
+                              </button>
+                              {expandida && (
+                                <div className="mt-1 mb-1.5 ml-3.5 pl-2 border-l border-[var(--color-border)] space-y-0.5">
+                                  {c.lancamentos.map((l) => (
+                                    <div key={l.id} className="flex justify-between gap-3 text-[10px] text-[var(--color-text-muted)]">
+                                      <span className="truncate" title={l.descricao}>
+                                        {l.descricao}
+                                      </span>
+                                      <span className="shrink-0">{formatarMoeda(l.valor)}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   ))}
