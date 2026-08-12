@@ -105,6 +105,8 @@ export default function ExtratoPage() {
   const [carregandoLancamentos, setCarregandoLancamentos] = useState(false);
   const [filtroContaId, setFiltroContaId] = useState("");
   const [filtroStatus, setFiltroStatus] = useState<"todos" | "nao_classificado" | "classificado" | "ignorado">("todos");
+  const [ocultarRevisados, setOcultarRevisados] = useState(true);
+  const [ocultarIgnorados, setOcultarIgnorados] = useState(true);
   const [resumo, setResumo] = useState({ total: 0, classificados: 0, naoClassificados: 0, automaticos: 0 });
   const [mostrarResumoDiario, setMostrarResumoDiario] = useState(false);
   const [categoriaDiaExpandida, setCategoriaDiaExpandida] = useState<string | null>(null);
@@ -164,6 +166,14 @@ export default function ExtratoPage() {
       .limit(LIMITE_LANCAMENTOS);
     if (filtroContaId) query = query.eq("conta_id", filtroContaId);
     if (filtroStatus !== "todos") query = query.eq("status", filtroStatus);
+    // Ignorado = "isso não é uma movimentação real", não deve poluir a lista de
+    // trabalho. Some por padrão; só reaparece se o usuário filtrar status=ignorado
+    // de propósito pra conferir o que já foi descartado.
+    if (ocultarIgnorados && filtroStatus !== "ignorado") query = query.neq("status", "ignorado");
+    // "Confirmar dia" marca revisado=true; ocultar por padrão pra lista de trabalho
+    // ir esvaziando conforme o usuário revisa (o dia inteiro some da tabela e do
+    // resumo). Continua tudo lá no banco, só não aparece nessa visão por padrão.
+    if (ocultarRevisados) query = query.eq("revisado", false);
     const { data, error } = await query;
     if (!error && data) setLancamentos(data as Lancamento[]);
     setCarregandoLancamentos(false);
@@ -228,7 +238,7 @@ export default function ExtratoPage() {
   useEffect(() => {
     carregarLancamentos();
     carregarResumo();
-  }, [filtroContaId, filtroStatus]);
+  }, [filtroContaId, filtroStatus, ocultarRevisados, ocultarIgnorados]);
 
   // ---------- Motor de regras ----------
 
@@ -775,6 +785,14 @@ export default function ExtratoPage() {
               <option value="classificado">Classificados</option>
               <option value="ignorado">Ignorados</option>
             </select>
+            <label className="flex items-center gap-1.5 text-xs text-[var(--color-text-muted)] px-1">
+              <input type="checkbox" checked={ocultarRevisados} onChange={(e) => setOcultarRevisados(e.target.checked)} />
+              Ocultar dias já revisados
+            </label>
+            <label className="flex items-center gap-1.5 text-xs text-[var(--color-text-muted)] px-1">
+              <input type="checkbox" checked={ocultarIgnorados} onChange={(e) => setOcultarIgnorados(e.target.checked)} />
+              Ocultar ignorados
+            </label>
             {podeEscrever && (
               <button
                 type="button"
