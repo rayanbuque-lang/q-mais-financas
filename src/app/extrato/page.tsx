@@ -752,12 +752,6 @@ export default function ExtratoPage() {
             )}
           </div>
 
-          <datalist id="categorias-extrato">
-            {categoriasDisponiveis.map((c) => (
-              <option key={c} value={c} />
-            ))}
-          </datalist>
-
           {carregandoLancamentos ? (
             <div className="skeleton h-40 rounded-xl" />
           ) : lancamentos.length === 0 ? (
@@ -802,13 +796,18 @@ export default function ExtratoPage() {
                       <td className="px-3 py-2.5">
                         {l.status === "nao_classificado" && podeEscrever ? (
                           <div className="flex gap-1.5 items-center">
-                            <input
-                              list="categorias-extrato"
-                              placeholder="categoria..."
+                            <select
                               value={categoriaEmEdicao[l.id] ?? ""}
                               onChange={(e) => setCategoriaEmEdicao((prev) => ({ ...prev, [l.id]: e.target.value }))}
-                              className="w-28 px-2 py-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-[11px]"
-                            />
+                              className="w-32 px-2 py-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-[11px]"
+                            >
+                              <option value="">categoria...</option>
+                              {(calcularTipoMovimentacao(l.valor) === "entrada" ? categoriasEntrada : categoriasSaida).map((c) => (
+                                <option key={c} value={c}>
+                                  {c}
+                                </option>
+                              ))}
+                            </select>
                             <button
                               type="button"
                               disabled={!categoriaEmEdicao[l.id]?.trim() || acaoLancamentoId === l.id}
@@ -1003,12 +1002,27 @@ export default function ExtratoPage() {
 
                 <div>
                   <label className="block text-[11px] font-semibold mb-1 text-[var(--color-text-muted)]">Categoria</label>
-                  <input
-                    list="categorias-extrato"
+                  <select
                     value={formRegra.categoria}
                     onChange={(e) => setFormRegra((f) => ({ ...f, categoria: e.target.value }))}
                     className="w-full px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-sm"
-                  />
+                  >
+                    <option value="">Selecione...</option>
+                    <optgroup label="Entrada">
+                      {categoriasEntrada.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Saída">
+                      {categoriasSaida.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </optgroup>
+                  </select>
                 </div>
 
                 <div>
