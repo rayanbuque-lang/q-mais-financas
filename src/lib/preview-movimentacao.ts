@@ -96,7 +96,8 @@ export function agruparResumoPorDia(lancamentos: LancamentoParaResumo[]): Resumo
     };
   });
 
-  return dias
-    .filter((d) => d.categorias.length > 0) // dias só com pendentes/ignorados não entram no resumo (nada a somar)
-    .sort((a, b) => b.data.localeCompare(a.data));
+  // Todo dia com pelo menos um lançamento vira um bloco — inclusive os 100%
+  // pendentes, sem isso o usuário não teria como alcançar esses lançamentos
+  // pra classificar (a lista corrida separada foi removida da tela).
+  return dias.sort((a, b) => b.data.localeCompare(a.data));
 }

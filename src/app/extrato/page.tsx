@@ -114,8 +114,7 @@ export default function ExtratoPage() {
   const [ocultarRevisados, setOcultarRevisados] = useState(true);
   const [ocultarIgnorados, setOcultarIgnorados] = useState(true);
   const [resumo, setResumo] = useState({ total: 0, classificados: 0, naoClassificados: 0, automaticos: 0 });
-  const [mostrarResumoDiario, setMostrarResumoDiario] = useState(false);
-  const [categoriaDiaExpandida, setCategoriaDiaExpandida] = useState<string | null>(null);
+  const [diaExpandido, setDiaExpandido] = useState<string | null>(null);
   const [confirmandoDia, setConfirmandoDia] = useState<string | null>(null);
   const [reprocessando, setReprocessando] = useState(false);
   const [categoriaEmEdicao, setCategoriaEmEdicao] = useState<Record<string, string>>({});
@@ -1003,190 +1002,175 @@ export default function ExtratoPage() {
             )}
           </div>
 
-          {resumoPorDia.length > 0 && (
-            <div className="mb-4">
-              <button
-                type="button"
-                onClick={() => setMostrarResumoDiario((v) => !v)}
-                className="px-3 py-2 rounded-lg border border-[var(--color-border)] text-xs font-semibold hover:bg-[var(--hover-bg)]"
-              >
-                {mostrarResumoDiario ? "▲" : "▼"} Resumo diário por categoria ({resumoPorDia.length} dia{resumoPorDia.length > 1 ? "s" : ""})
-              </button>
-              {lancamentos.length >= LIMITE_LANCAMENTOS && (
-                <p className="mt-1 text-[10px] text-[var(--color-text-muted)]">
-                  Mostrando apenas os últimos {LIMITE_LANCAMENTOS} lançamentos — o resumo do dia mais antigo pode estar incompleto.
-                </p>
-              )}
-              {mostrarResumoDiario && (
-                <div className="mt-2 space-y-2 max-h-96 overflow-y-auto">
-                  {resumoPorDia.map((dia) => (
-                    <div
-                      key={dia.data}
-                      className={`bg-[var(--color-surface)] border rounded-xl p-3 ${dia.revisado ? "border-emerald-300" : "border-[var(--color-border)]"}`}
-                    >
-                      <div className="flex justify-between items-center mb-2 gap-2">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span className="text-xs font-semibold whitespace-nowrap">
-                            {dia.revisado && "✅ "}
-                            {formatarData(dia.data)}
-                          </span>
-                          {dia.pendentes > 0 && (
-                            <span className="px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-[9px] font-semibold whitespace-nowrap">
-                              {dia.pendentes} pendente{dia.pendentes > 1 ? "s" : ""}
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                          <span className={`text-xs font-bold ${dia.totalDia < 0 ? "text-red-600" : "text-emerald-600"}`}>
-                            {formatarMoeda(dia.totalDia)}
-                          </span>
-                          {podeEscrever && (
-                            <button
-                              type="button"
-                              disabled={dia.pendentes > 0 || confirmandoDia === dia.data}
-                              onClick={() => handleConfirmarDia(dia)}
-                              title={dia.pendentes > 0 ? "Classifique todos os lançamentos pendentes deste dia antes de confirmar" : "Marca este dia como revisado (não lança em Movimentações)"}
-                              className={`px-2 py-1 rounded-lg text-[10px] font-semibold whitespace-nowrap disabled:opacity-40 ${
-                                dia.revisado ? "bg-emerald-100 text-emerald-700" : "border border-[var(--color-border)] hover:bg-[var(--hover-bg)]"
-                              }`}
-                            >
-                              {confirmandoDia === dia.data ? "..." : dia.revisado ? "✓ Revisado" : "Confirmar dia"}
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                      <div className="space-y-1">
-                        {dia.categorias.map((c) => {
-                          const chave = `${dia.data}|${c.categoria}`;
-                          const expandida = categoriaDiaExpandida === chave;
-                          return (
-                            <div key={c.categoria}>
-                              <button
-                                type="button"
-                                onClick={() => setCategoriaDiaExpandida(expandida ? null : chave)}
-                                className="w-full flex justify-between items-center text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-                                title="Ver os lançamentos que compõem este total"
-                              >
-                                <span>
-                                  {expandida ? "▾" : "▸"} {c.categoria} <span className="text-[10px]">×{c.quantidade}</span>
-                                </span>
-                                <span className={c.total < 0 ? "text-red-500" : "text-emerald-600"}>{formatarMoeda(c.total)}</span>
-                              </button>
-                              {expandida && (
-                                <div className="mt-1 mb-1.5 ml-3.5 pl-2 border-l border-[var(--color-border)] space-y-0.5">
-                                  {c.lancamentos.map((l) => (
-                                    <div key={l.id} className="flex justify-between gap-3 text-[10px] text-[var(--color-text-muted)]">
-                                      <span className="truncate" title={l.descricao}>
-                                        {l.descricao}
-                                      </span>
-                                      <span className="shrink-0">{formatarMoeda(l.valor)}</span>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
           {carregandoLancamentos ? (
             <div className="skeleton h-40 rounded-xl" />
           ) : lancamentos.length === 0 ? (
             <EmptyState variant="search" title="Nenhum lançamento" description="Importe um extrato .ofx na aba Importar para começar." compact />
           ) : (
-            <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b border-[var(--color-border)] text-left text-[var(--color-text-muted)]">
-                    <th className="px-3 py-2.5 font-semibold">Data</th>
-                    <th className="px-3 py-2.5 font-semibold">Descrição</th>
-                    <th className="px-3 py-2.5 font-semibold text-right">Valor</th>
-                    <th className="px-3 py-2.5 font-semibold">Categoria</th>
-                    <th className="px-3 py-2.5 font-semibold">Origem</th>
-                    <th className="px-3 py-2.5 font-semibold">Ação</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {lancamentos.map((l) => (
-                    <tr key={l.id} className="border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--hover-bg)]">
-                      <td className="px-3 py-2.5 whitespace-nowrap">{formatarData(l.data_lancamento)}</td>
-                      <td className="px-3 py-2.5 max-w-[240px] truncate" title={l.descricao}>
-                        {l.descricao}
-                      </td>
-                      <td className={`px-3 py-2.5 text-right whitespace-nowrap font-semibold ${l.valor < 0 ? "text-red-600" : "text-emerald-600"}`}>
-                        {formatarMoeda(l.valor)}
-                      </td>
-                      <td className="px-3 py-2.5">
-                        {l.categoria ? (
-                          <div className="flex flex-col gap-1 items-start">
-                            <span
-                              className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${
-                                calcularTipoMovimentacao(l.valor) === "entrada" ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"
-                              }`}
-                            >
-                              {calcularTipoMovimentacao(l.valor) === "entrada" ? "Entrada" : "Saída"}
+            <div>
+              {lancamentos.length >= LIMITE_LANCAMENTOS && (
+                <p className="mb-2 text-[10px] text-[var(--color-text-muted)]">
+                  Mostrando apenas os últimos {LIMITE_LANCAMENTOS} lançamentos — o dia mais antigo pode estar incompleto.
+                </p>
+              )}
+              <div className="space-y-2">
+                {resumoPorDia.map((dia) => {
+                  const expandido = diaExpandido === dia.data;
+                  const itensDoDia = lancamentos
+                    .filter((l) => l.data_lancamento === dia.data)
+                    .sort((a, b) => a.descricao.localeCompare(b.descricao, "pt-BR"));
+                  return (
+                    <div
+                      key={dia.data}
+                      className={`bg-[var(--color-surface)] border rounded-xl overflow-hidden transition-colors ${
+                        dia.revisado ? "border-emerald-300" : "border-[var(--color-border)]"
+                      }`}
+                    >
+                      <div
+                        onClick={() => setDiaExpandido(expandido ? null : dia.data)}
+                        className="p-3 cursor-pointer hover:bg-[var(--hover-bg)] transition-colors"
+                      >
+                        <div className="flex justify-between items-center gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="text-[10px] text-[var(--color-text-muted)] shrink-0">{expandido ? "▾" : "▸"}</span>
+                            <span className="text-xs font-semibold whitespace-nowrap">
+                              {dia.revisado && "✅ "}
+                              {formatarData(dia.data)}
                             </span>
-                            <span className="px-2 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-semibold whitespace-nowrap">
-                              {l.categoria}
-                            </span>
+                            {dia.pendentes > 0 && (
+                              <span className="px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-[9px] font-semibold whitespace-nowrap">
+                                {dia.pendentes} pendente{dia.pendentes > 1 ? "s" : ""}
+                              </span>
+                            )}
                           </div>
-                        ) : l.status === "ignorado" ? (
-                          <span className="text-[10px] text-[var(--color-text-muted)]">—</span>
-                        ) : (
-                          <span className="text-[10px] text-amber-600 font-medium">pendente</span>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className={`text-xs font-bold ${dia.totalDia < 0 ? "text-red-600" : "text-emerald-600"}`}>
+                              {formatarMoeda(dia.totalDia)}
+                            </span>
+                            {podeEscrever && (
+                              <button
+                                type="button"
+                                disabled={dia.pendentes > 0 || confirmandoDia === dia.data}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleConfirmarDia(dia);
+                                }}
+                                title={dia.pendentes > 0 ? "Classifique todos os lançamentos pendentes deste dia antes de confirmar" : "Marca este dia como revisado (não lança em Movimentações)"}
+                                className={`px-2 py-1 rounded-lg text-[10px] font-semibold whitespace-nowrap disabled:opacity-40 ${
+                                  dia.revisado ? "bg-emerald-100 text-emerald-700" : "border border-[var(--color-border)] hover:bg-[var(--surface)]"
+                                }`}
+                              >
+                                {confirmandoDia === dia.data ? "..." : dia.revisado ? "✓ Revisado" : "Confirmar dia"}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        {dia.categorias.length > 0 && (
+                          <div className="mt-2 space-y-0.5">
+                            {dia.categorias.map((c) => (
+                              <div key={c.categoria} className="flex justify-between text-[11px] text-[var(--color-text-muted)]">
+                                <span>
+                                  {c.categoria} <span className="text-[10px]">×{c.quantidade}</span>
+                                </span>
+                                <span className={c.total < 0 ? "text-red-500" : "text-emerald-600"}>{formatarMoeda(c.total)}</span>
+                              </div>
+                            ))}
+                          </div>
                         )}
-                      </td>
-                      <td className="px-3 py-2.5 whitespace-nowrap text-[10px] text-[var(--color-text-muted)]">
-                        {l.status === "ignorado" ? "ignorado" : l.regra_id ? "regra" : l.categoria ? "manual" : "—"}
-                      </td>
-                      <td className="px-3 py-2.5">
-                        {l.status === "nao_classificado" && podeEscrever ? (
-                          <div className="flex gap-1.5 items-center">
-                            <select
-                              value={categoriaEmEdicao[l.id] ?? ""}
-                              onChange={(e) => setCategoriaEmEdicao((prev) => ({ ...prev, [l.id]: e.target.value }))}
-                              className="w-32 px-2 py-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-[11px]"
-                            >
-                              <option value="">categoria...</option>
-                              {(calcularTipoMovimentacao(l.valor) === "entrada" ? categoriasEntrada : categoriasSaida).map((c) => (
-                                <option key={c} value={c}>
-                                  {c}
-                                </option>
+                      </div>
+
+                      {expandido && (
+                        <div className="border-t border-[var(--color-border)] overflow-x-auto">
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr className="border-b border-[var(--color-border)] text-left text-[var(--color-text-muted)]">
+                                <th className="px-3 py-2 font-semibold">Descrição</th>
+                                <th className="px-3 py-2 font-semibold text-right">Valor</th>
+                                <th className="px-3 py-2 font-semibold">Categoria</th>
+                                <th className="px-3 py-2 font-semibold">Origem</th>
+                                <th className="px-3 py-2 font-semibold">Ação</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {itensDoDia.map((l) => (
+                                <tr key={l.id} className="border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--hover-bg)]">
+                                  <td className="px-3 py-2 max-w-[240px] truncate" title={l.descricao}>
+                                    {l.descricao}
+                                  </td>
+                                  <td className={`px-3 py-2 text-right whitespace-nowrap font-semibold ${l.valor < 0 ? "text-red-600" : "text-emerald-600"}`}>
+                                    {formatarMoeda(l.valor)}
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    {l.categoria ? (
+                                      <div className="flex flex-col gap-1 items-start">
+                                        <span
+                                          className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${
+                                            calcularTipoMovimentacao(l.valor) === "entrada" ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"
+                                          }`}
+                                        >
+                                          {calcularTipoMovimentacao(l.valor) === "entrada" ? "Entrada" : "Saída"}
+                                        </span>
+                                        <span className="px-2 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-semibold whitespace-nowrap">
+                                          {l.categoria}
+                                        </span>
+                                      </div>
+                                    ) : l.status === "ignorado" ? (
+                                      <span className="text-[10px] text-[var(--color-text-muted)]">—</span>
+                                    ) : (
+                                      <span className="text-[10px] text-amber-600 font-medium">pendente</span>
+                                    )}
+                                  </td>
+                                  <td className="px-3 py-2 whitespace-nowrap text-[10px] text-[var(--color-text-muted)]">
+                                    {l.status === "ignorado" ? "ignorado" : l.regra_id ? "regra" : l.categoria ? "manual" : "—"}
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    {l.status === "nao_classificado" && podeEscrever ? (
+                                      <div className="flex gap-1.5 items-center">
+                                        <select
+                                          value={categoriaEmEdicao[l.id] ?? ""}
+                                          onChange={(e) => setCategoriaEmEdicao((prev) => ({ ...prev, [l.id]: e.target.value }))}
+                                          className="w-32 px-2 py-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-[11px]"
+                                        >
+                                          <option value="">categoria...</option>
+                                          {(calcularTipoMovimentacao(l.valor) === "entrada" ? categoriasEntrada : categoriasSaida).map((c) => (
+                                            <option key={c} value={c}>
+                                              {c}
+                                            </option>
+                                          ))}
+                                        </select>
+                                        <button
+                                          type="button"
+                                          disabled={!categoriaEmEdicao[l.id]?.trim() || acaoLancamentoId === l.id}
+                                          onClick={() => handleClassificarManual(l, categoriaEmEdicao[l.id])}
+                                          className="px-2 py-1.5 rounded-lg bg-emerald-500 text-white text-[11px] font-semibold disabled:opacity-50 whitespace-nowrap"
+                                        >
+                                          {acaoLancamentoId === l.id ? "..." : "Classificar"}
+                                        </button>
+                                        <button
+                                          type="button"
+                                          disabled={acaoLancamentoId === l.id}
+                                          onClick={() => handleIgnorar(l)}
+                                          className="px-2 py-1.5 rounded-lg border border-[var(--color-border)] text-[11px] font-medium hover:bg-[var(--hover-bg)] disabled:opacity-50"
+                                        >
+                                          Ignorar
+                                        </button>
+                                      </div>
+                                    ) : (
+                                      <span className="text-[10px] text-[var(--color-text-muted)]">
+                                        {l.classificado_em ? new Date(l.classificado_em).toLocaleDateString("pt-BR") : ""}
+                                      </span>
+                                    )}
+                                  </td>
+                                </tr>
                               ))}
-                            </select>
-                            <button
-                              type="button"
-                              disabled={!categoriaEmEdicao[l.id]?.trim() || acaoLancamentoId === l.id}
-                              onClick={() => handleClassificarManual(l, categoriaEmEdicao[l.id])}
-                              className="px-2 py-1.5 rounded-lg bg-emerald-500 text-white text-[11px] font-semibold disabled:opacity-50 whitespace-nowrap"
-                            >
-                              {acaoLancamentoId === l.id ? "..." : "Classificar"}
-                            </button>
-                            <button
-                              type="button"
-                              disabled={acaoLancamentoId === l.id}
-                              onClick={() => handleIgnorar(l)}
-                              className="px-2 py-1.5 rounded-lg border border-[var(--color-border)] text-[11px] font-medium hover:bg-[var(--hover-bg)] disabled:opacity-50"
-                            >
-                              Ignorar
-                            </button>
-                          </div>
-                        ) : (
-                          <span className="text-[10px] text-[var(--color-text-muted)]">
-                            {l.classificado_em ? new Date(l.classificado_em).toLocaleDateString("pt-BR") : ""}
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
 
