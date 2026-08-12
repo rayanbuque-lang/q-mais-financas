@@ -1,6 +1,6 @@
 # Extrato → prévia de Movimentação (categorias reais + resumo diário)
 
-Status: aprovado, aguardando implementação.
+Status: implementado.
 
 ## Contexto
 
