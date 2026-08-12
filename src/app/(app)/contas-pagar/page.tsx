@@ -381,10 +381,14 @@ export default function ContasPagarPage() {
     setMensagem("Desfeito!"); setLoading(false); carregarDados(); setTimeout(() => setMensagem(""), 3000);
   }
 
-  async function handleExcluir(id: string) {
+  async function handleExcluir(conta: ContaPagar) {
     if (!confirm("Excluir?")) return;
-    await registrarLog({ acao: "excluiu", tabela: "contas_pagar", registroId: id });
-    await supabase.from("contas_pagar").delete().eq("id", id);
+    if (conta.status === "pago") {
+      const { data: movs } = await supabase.from("movimentacoes").select("id").eq("tipo", "saida").eq("valor", conta.valor).ilike("observacao", `%${conta.fornecedor}%`);
+      if (movs && movs.length > 0) await supabase.from("movimentacoes").delete().eq("id", movs[0].id);
+    }
+    await registrarLog({ acao: "excluiu", tabela: "contas_pagar", registroId: conta.id });
+    await supabase.from("contas_pagar").delete().eq("id", conta.id);
     setMensagem("Excluída!"); carregarDados(); setTimeout(() => setMensagem(""), 3000);
   }
 
@@ -568,7 +572,7 @@ export default function ContasPagarPage() {
                   <button onClick={() => desfazerPagamento(conta)} title="Desfazer pagamento" className="p-1.5 rounded-lg hover:bg-amber-50 text-amber-500 transition text-sm">↩️</button>
                 )}
                 <button onClick={() => abrirEditar(conta)} title="Editar" className="p-1.5 rounded-lg hover:bg-blue-50 text-[var(--color-text-muted)] hover:text-blue-600 transition text-sm">✏️</button>
-                <button onClick={() => handleExcluir(conta.id)} title="Excluir" className="p-1.5 rounded-lg hover:bg-red-50 text-[var(--color-text-muted)] hover:text-red-500 transition text-sm">🗑️</button>
+                <button onClick={() => handleExcluir(conta)} title="Excluir" className="p-1.5 rounded-lg hover:bg-red-50 text-[var(--color-text-muted)] hover:text-red-500 transition text-sm">🗑️</button>
               </div>
             )}
           </div>
@@ -626,7 +630,7 @@ export default function ContasPagarPage() {
                   <button onClick={() => desfazerPagamento(conta)} title="Desfazer" className="p-1 rounded-lg hover:bg-amber-50 text-amber-500 transition text-xs">↩️</button>
                 )}
                 <button onClick={() => abrirEditar(conta)} title="Editar" className="p-1 rounded-lg hover:bg-blue-50 text-[var(--color-text-muted)] hover:text-blue-600 transition text-xs">✏️</button>
-                <button onClick={() => handleExcluir(conta.id)} title="Excluir" className="p-1 rounded-lg hover:bg-red-50 text-[var(--color-text-muted)] hover:text-red-500 transition text-xs">🗑️</button>
+                <button onClick={() => handleExcluir(conta)} title="Excluir" className="p-1 rounded-lg hover:bg-red-50 text-[var(--color-text-muted)] hover:text-red-500 transition text-xs">🗑️</button>
               </div>
             )}
           </div>
