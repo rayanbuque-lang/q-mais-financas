@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { parseOfx, decodificarOfx, OfxParseError } from "@/lib/ofx";
+import { parseRelatorioPix, RelatorioPixParseError } from "@/lib/relatorio-pix";
 import { aplicarRegras, type RegraExtrato as RegraMotor, type LancamentoClassificavel } from "@/lib/regras-extrato";
 import { calcularTipoMovimentacao, agruparResumoPorDia, type ResumoDia } from "@/lib/preview-movimentacao";
 import EmptyState from "@/components/empty-state";
@@ -99,6 +100,10 @@ export default function ExtratoPage() {
   const [novaContaNumero, setNovaContaNumero] = useState("");
   const [criandoConta, setCriandoConta] = useState(false);
   const inputArquivoRef = useRef<HTMLInputElement>(null);
+  const [arquivoPix, setArquivoPix] = useState<File | null>(null);
+  const [importandoPix, setImportandoPix] = useState(false);
+  const [resumoImportacaoPix, setResumoImportacaoPix] = useState<{ lidas: number; novas: number; duplicadas: number; avisos: string[] } | null>(null);
+  const inputArquivoPixRef = useRef<HTMLInputElement>(null);
 
   // Lançamentos
   const [lancamentos, setLancamentos] = useState<Lancamento[]>([]);
@@ -422,6 +427,92 @@ export default function ExtratoPage() {
     }
   }
 
+  async function handleImportarRelatorioPix() {
+    setMensagem(null);
+    setResumoImportacaoPix(null);
+
+    if (!arquivoPix) {
+      setMensagem({ tipo: "erro", texto: "Selecione o arquivo do relatório Pix (.xlsx)." });
+      return;
+    }
+    if (!contaImportId) {
+      setMensagem({ tipo: "erro", texto: "Selecione a conta bancária." });
+      return;
+    }
+    if (!arquivoPix.name.toLowerCase().endsWith(".xlsx")) {
+      setMensagem({ tipo: "erro", texto: `Arquivo "${arquivoPix.name}" rejeitado: apenas .xlsx é aceito.` });
+      return;
+    }
+    if (arquivoPix.size > 5 * 1024 * 1024) {
+      setMensagem({ tipo: "erro", texto: `Arquivo "${arquivoPix.name}" rejeitado: maior que 5 MB.` });
+      return;
+    }
+
+    setImportandoPix(true);
+    try {
+      const bytes = new Uint8Array(await arquivoPix.arrayBuffer());
+      const parsed = await parseRelatorioPix(bytes, arquivoPix.name);
+
+      const { data: { user } } = await supabase.auth.getUser();
+
+      const linhas = parsed.linhas.map((l) => ({
+        conta_id: contaImportId,
+        fitid: l.idTransacao ?? `PIXREL:${l.data}:${l.valor}:${l.ocorrencia}`,
+        data_lancamento: l.data,
+        valor: l.valor,
+        tipo: "CREDIT",
+        descricao: l.descricao,
+        descricao_normalizada: l.descricaoNormalizada,
+        ocorrencia: l.ocorrencia,
+        status: "nao_classificado" as const,
+      }));
+
+      const { data: inseridos, error: erroUpsert } = await supabase
+        .from("extrato_lancamento")
+        .upsert(linhas, { onConflict: "conta_id,data_lancamento,valor,descricao_normalizada,ocorrencia", ignoreDuplicates: true })
+        .select("id, conta_id, descricao_normalizada, valor, status");
+
+      if (erroUpsert) throw new Error(erroUpsert.message);
+
+      const novas = inseridos?.length ?? 0;
+      const duplicadas = linhas.length - novas;
+
+      const datas = parsed.linhas.map((l) => l.data);
+      const { error: erroImportacao } = await supabase.from("extrato_importacao").insert({
+        conta_id: contaImportId,
+        nome_arquivo: arquivoPix.name,
+        periodo_inicio: datas.length > 0 ? datas.reduce((min, d) => (d < min ? d : min)) : null,
+        periodo_fim: datas.length > 0 ? datas.reduce((max, d) => (d > max ? d : max)) : null,
+        qtd_linhas: linhas.length,
+        qtd_novas: novas,
+        qtd_duplicadas: duplicadas,
+        importado_por: user?.id ?? null,
+      });
+      if (erroImportacao) throw new Error(erroImportacao.message);
+
+      let classificadosAuto = 0;
+      if (inseridos && inseridos.length > 0) {
+        classificadosAuto = await classificarPorRegras(inseridos as LancamentoClassificavel[]);
+      }
+
+      setResumoImportacaoPix({ lidas: linhas.length, novas, duplicadas, avisos: parsed.avisos });
+      setMensagem({
+        tipo: "sucesso",
+        texto:
+          `${linhas.length} lidas · ${novas} novas · ${duplicadas} já existentes` +
+          (classificadosAuto > 0 ? ` · ${classificadosAuto} classificada(s) automaticamente` : ""),
+      });
+      setArquivoPix(null);
+      if (inputArquivoPixRef.current) inputArquivoPixRef.current.value = "";
+      await refrescarTudo();
+    } catch (e) {
+      const texto = e instanceof RelatorioPixParseError || e instanceof Error ? e.message : "Erro inesperado ao importar o relatório Pix.";
+      setMensagem({ tipo: "erro", texto });
+    } finally {
+      setImportandoPix(false);
+    }
+  }
+
   // ---------- Classificação manual ----------
 
   async function handleClassificarManual(lancamento: Lancamento, categoria: string) {
@@ -631,113 +722,161 @@ export default function ExtratoPage() {
       )}
 
       {aba === "importar" && (
-        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-6 max-w-xl">
-          <h2 className="font-semibold text-sm mb-4">Importar extrato .ofx</h2>
+        <div>
+          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-6 max-w-xl">
+            <h2 className="font-semibold text-sm mb-4">Importar extrato .ofx</h2>
 
-          <label className="block text-xs font-semibold mb-1 text-[var(--color-text-muted)]">Conta bancária</label>
-          <div className="flex gap-2 mb-4">
-            <select
-              value={contaImportId}
-              onChange={(e) => setContaImportId(e.target.value)}
-              disabled={!podeEscrever}
-              className="flex-1 px-3 py-2.5 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm"
-            >
-              <option value="">Selecione...</option>
-              {contas.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {nomeConta(c)}
-                </option>
-              ))}
-            </select>
-            {podeEscrever && (
-              <button
-                type="button"
-                onClick={() => setMostrarNovaConta((v) => !v)}
-                className="px-3 py-2.5 rounded-xl border border-[var(--color-border)] text-sm font-medium hover:bg-[var(--hover-bg)]"
+            <label className="block text-xs font-semibold mb-1 text-[var(--color-text-muted)]">Conta bancária</label>
+            <div className="flex gap-2 mb-4">
+              <select
+                value={contaImportId}
+                onChange={(e) => setContaImportId(e.target.value)}
+                disabled={!podeEscrever}
+                className="flex-1 px-3 py-2.5 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] text-sm"
               >
-                + Nova
-              </button>
+                <option value="">Selecione...</option>
+                {contas.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {nomeConta(c)}
+                  </option>
+                ))}
+              </select>
+              {podeEscrever && (
+                <button
+                  type="button"
+                  onClick={() => setMostrarNovaConta((v) => !v)}
+                  className="px-3 py-2.5 rounded-xl border border-[var(--color-border)] text-sm font-medium hover:bg-[var(--hover-bg)]"
+                >
+                  + Nova
+                </button>
+              )}
+            </div>
+
+            {mostrarNovaConta && (
+              <div className="mb-4 p-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] space-y-2">
+                <div className="flex gap-2">
+                  <select
+                    value={novaContaBanco}
+                    onChange={(e) => setNovaContaBanco(e.target.value)}
+                    className="px-2 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-xs"
+                  >
+                    <option value="santander">Santander</option>
+                    <option value="inter">Inter</option>
+                    <option value="outro">Outro</option>
+                  </select>
+                  <input
+                    placeholder="Apelido (ex: Conta PJ)"
+                    value={novaContaApelido}
+                    onChange={(e) => setNovaContaApelido(e.target.value)}
+                    className="flex-1 px-2 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-xs"
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    placeholder="Agência"
+                    value={novaContaAgencia}
+                    onChange={(e) => setNovaContaAgencia(e.target.value)}
+                    className="flex-1 px-2 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-xs"
+                  />
+                  <input
+                    placeholder="Número da conta"
+                    value={novaContaNumero}
+                    onChange={(e) => setNovaContaNumero(e.target.value)}
+                    className="flex-1 px-2 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-xs"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={handleCriarConta}
+                  disabled={criandoConta}
+                  className="w-full px-3 py-2 rounded-lg bg-emerald-500 text-white text-xs font-semibold disabled:opacity-60"
+                >
+                  {criandoConta ? "Criando..." : "Criar conta"}
+                </button>
+              </div>
+            )}
+
+            <label className="block text-xs font-semibold mb-1 text-[var(--color-text-muted)]">Arquivo .ofx (máx 5 MB)</label>
+            <input
+              ref={inputArquivoRef}
+              type="file"
+              accept=".ofx"
+              disabled={!podeEscrever}
+              onChange={(e) => setArquivo(e.target.files?.[0] ?? null)}
+              className="w-full text-sm mb-4 file:mr-3 file:px-3 file:py-2 file:rounded-lg file:border-0 file:bg-emerald-50 file:text-emerald-700 file:text-xs file:font-semibold"
+            />
+
+            <button
+              type="button"
+              onClick={handleImportar}
+              disabled={!podeEscrever || importando || !arquivo || !contaImportId}
+              className="w-full px-4 py-2.5 rounded-xl bg-emerald-500 text-white text-sm font-semibold disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              {importando && <span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />}
+              {importando ? "Importando..." : "Importar extrato"}
+            </button>
+
+            {resumoImportacao && (
+              <div className="mt-4 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800">
+                <p className="font-semibold">
+                  {resumoImportacao.lidas} lidas · {resumoImportacao.novas} novas · {resumoImportacao.duplicadas} já existentes
+                </p>
+                {resumoImportacao.avisos.length > 0 && (
+                  <ul className="mt-2 list-disc list-inside text-amber-700">
+                    {resumoImportacao.avisos.map((a, i) => (
+                      <li key={i}>{a}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             )}
           </div>
 
-          {mostrarNovaConta && (
-            <div className="mb-4 p-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] space-y-2">
-              <div className="flex gap-2">
-                <select
-                  value={novaContaBanco}
-                  onChange={(e) => setNovaContaBanco(e.target.value)}
-                  className="px-2 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-xs"
-                >
-                  <option value="santander">Santander</option>
-                  <option value="inter">Inter</option>
-                  <option value="outro">Outro</option>
-                </select>
-                <input
-                  placeholder="Apelido (ex: Conta PJ)"
-                  value={novaContaApelido}
-                  onChange={(e) => setNovaContaApelido(e.target.value)}
-                  className="flex-1 px-2 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-xs"
-                />
+          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-6 max-w-xl mt-6">
+            <h2 className="font-semibold text-sm mb-1">Importar relatório Pix (fim de semana/feriado)</h2>
+            <p className="text-xs text-[var(--color-text-muted)] mb-4">
+              O extrato .ofx nunca posta em sábado/domingo/feriado — tudo cai no próximo dia útil. Suba aqui o relatório Pix
+              (Excel) do Santander pra registrar esses lançamentos já com a data certa. Depois, ao importar o .ofx normal, o
+              sistema reconhece e não duplica o que já foi coberto por aqui.
+            </p>
+
+            <label className="block text-xs font-semibold mb-1 text-[var(--color-text-muted)]">
+              Arquivo do relatório Pix (.xlsx, máx 5 MB)
+            </label>
+            <input
+              ref={inputArquivoPixRef}
+              type="file"
+              accept=".xlsx"
+              disabled={!podeEscrever}
+              onChange={(e) => setArquivoPix(e.target.files?.[0] ?? null)}
+              className="w-full text-sm mb-4 file:mr-3 file:px-3 file:py-2 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700 file:text-xs file:font-semibold"
+            />
+
+            <button
+              type="button"
+              onClick={handleImportarRelatorioPix}
+              disabled={!podeEscrever || importandoPix || !arquivoPix || !contaImportId}
+              className="w-full px-4 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-semibold disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              {importandoPix && <span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />}
+              {importandoPix ? "Importando..." : "Importar relatório Pix"}
+            </button>
+
+            {resumoImportacaoPix && (
+              <div className="mt-4 p-3 rounded-xl bg-blue-50 border border-blue-200 text-xs text-blue-800">
+                <p className="font-semibold">
+                  {resumoImportacaoPix.lidas} lidas · {resumoImportacaoPix.novas} novas · {resumoImportacaoPix.duplicadas} já existentes
+                </p>
+                {resumoImportacaoPix.avisos.length > 0 && (
+                  <ul className="mt-2 list-disc list-inside text-amber-700">
+                    {resumoImportacaoPix.avisos.map((a, i) => (
+                      <li key={i}>{a}</li>
+                    ))}
+                  </ul>
+                )}
               </div>
-              <div className="flex gap-2">
-                <input
-                  placeholder="Agência"
-                  value={novaContaAgencia}
-                  onChange={(e) => setNovaContaAgencia(e.target.value)}
-                  className="flex-1 px-2 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-xs"
-                />
-                <input
-                  placeholder="Número da conta"
-                  value={novaContaNumero}
-                  onChange={(e) => setNovaContaNumero(e.target.value)}
-                  className="flex-1 px-2 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-xs"
-                />
-              </div>
-              <button
-                type="button"
-                onClick={handleCriarConta}
-                disabled={criandoConta}
-                className="w-full px-3 py-2 rounded-lg bg-emerald-500 text-white text-xs font-semibold disabled:opacity-60"
-              >
-                {criandoConta ? "Criando..." : "Criar conta"}
-              </button>
-            </div>
-          )}
-
-          <label className="block text-xs font-semibold mb-1 text-[var(--color-text-muted)]">Arquivo .ofx (máx 5 MB)</label>
-          <input
-            ref={inputArquivoRef}
-            type="file"
-            accept=".ofx"
-            disabled={!podeEscrever}
-            onChange={(e) => setArquivo(e.target.files?.[0] ?? null)}
-            className="w-full text-sm mb-4 file:mr-3 file:px-3 file:py-2 file:rounded-lg file:border-0 file:bg-emerald-50 file:text-emerald-700 file:text-xs file:font-semibold"
-          />
-
-          <button
-            type="button"
-            onClick={handleImportar}
-            disabled={!podeEscrever || importando || !arquivo || !contaImportId}
-            className="w-full px-4 py-2.5 rounded-xl bg-emerald-500 text-white text-sm font-semibold disabled:opacity-50 flex items-center justify-center gap-2"
-          >
-            {importando && <span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />}
-            {importando ? "Importando..." : "Importar extrato"}
-          </button>
-
-          {resumoImportacao && (
-            <div className="mt-4 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800">
-              <p className="font-semibold">
-                {resumoImportacao.lidas} lidas · {resumoImportacao.novas} novas · {resumoImportacao.duplicadas} já existentes
-              </p>
-              {resumoImportacao.avisos.length > 0 && (
-                <ul className="mt-2 list-disc list-inside text-amber-700">
-                  {resumoImportacao.avisos.map((a, i) => (
-                    <li key={i}>{a}</li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          )}
+            )}
+          </div>
         </div>
       )}
 
