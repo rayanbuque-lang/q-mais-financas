@@ -141,8 +141,11 @@ export default function ContasPagarPage() {
         .lte("data_pagamento", fimMes),
       // 3. Todas as pendentes sem restrição de mês — garante que agosto+ sempre apareça
       // (ordenação final é feita no merge abaixo, não aqui — fonte única de verdade)
+      // O .limit explícito evita depender do teto padrão de linhas do PostgREST,
+      // que truncaria a lista silenciosamente (mesmo LIMITE_LANCAMENTOS do /extrato).
       supabase.from("contas_pagar").select("*")
-        .eq("status", "pendente"),
+        .eq("status", "pendente")
+        .limit(5000),
       supabase.from("categorias_saida").select("*").eq("ativo", true).order("nome"),
     ]);
 
@@ -300,9 +303,13 @@ export default function ContasPagarPage() {
     if (error) {
       setMensagem("Erro ao salvar.");
     } else if (statusInicial === "pago" && contaId && !editandoId) {
-      await supabase.from("movimentacoes").insert({ tipo: "saida", data: dados.data_pagamento as string, valor: valor, categoria_id: categoriaId, observacao: `Pagamento: ${fornecedor}${descricao ? ` - ${descricao}` : ""}`, revisar: false, conta_pagar_id: contaId });
+      const { error: errMov } = await supabase.from("movimentacoes").insert({ tipo: "saida", data: dados.data_pagamento as string, valor: valor, categoria_id: categoriaId, observacao: `Pagamento: ${fornecedor}${descricao ? ` - ${descricao}` : ""}`, revisar: false, conta_pagar_id: contaId });
       await registrarLog({ acao: "criou", tabela: "contas_pagar", registroId: contaId, dadosNovos: dados, detalhes: `${fornecedor} - ${fmt(valor)}` });
-      setMensagem("Cadastrada como paga e lançada nas movimentações!");
+      // Sem checar o erro do insert a tela afirmava "lançada nas movimentações"
+      // mesmo quando o lançamento não existia — a despesa sumia do caixa sem aviso.
+      setMensagem(errMov
+        ? "Conta cadastrada como paga, mas houve erro ao lançar a movimentação. Confira manualmente."
+        : "Cadastrada como paga e lançada nas movimentações!");
     } else if (editandoId && statusOriginal === "pendente" && statusInicial === "pago") {
       const dataPag = dataPagamento || new Date().toISOString().split("T")[0];
       await supabase.from("movimentacoes").insert({ tipo: "saida", data: dataPag, valor: valor, categoria_id: categoriaId, observacao: `Pagamento: ${fornecedor}${descricao ? ` - ${descricao}` : ""}`, revisar: false, conta_pagar_id: editandoId });
@@ -310,8 +317,17 @@ export default function ContasPagarPage() {
       setMensagem("Paga e lançada nas movimentações!");
     } else if (editandoId && statusOriginal === "pago" && statusInicial === "pendente" && contaOriginal) {
       // Pagamento desfeito via formulário de edição (não pelo botão "Desfazer pagamento") — mesma limpeza.
-      const movId = await buscarMovimentacaoVinculada(editandoId, contaOriginal.valor, contaOriginal.fornecedor);
+      const movId = await buscarMovimentacaoVinculada(editandoId, contaOriginal.valor, contaOriginal.fornecedor, contaOriginal.data_pagamento);
       if (movId) await supabase.from("movimentacoes").delete().eq("id", movId);
+      // Mesma reversão feita pelo botão "Desfazer pagamento": a baixa automática
+      // via /extrato amarra o lançamento do extrato nesta conta, e deixá-lo
+      // classificado apontando pra uma conta que voltou a ficar pendente o
+      // tornaria órfão (o "Reprocessar" só olha status='nao_classificado').
+      // Nenhuma linha é afetada quando a baixa foi manual.
+      await supabase
+        .from("extrato_lancamento")
+        .update({ status: "nao_classificado", categoria: null, classificado_em: null, conta_pagar_id: null })
+        .eq("conta_pagar_id", editandoId);
       await registrarLog({ acao: "editou", tabela: "contas_pagar", registroId: editandoId, dadosNovos: dados, detalhes: `${fornecedor} - ${fmt(valor)}` });
       setMensagem("Atualizada!");
     } else {
@@ -319,7 +335,7 @@ export default function ContasPagarPage() {
         const dataPag = dados.data_pagamento as string;
         const mudou = contaOriginal.valor !== valor || contaOriginal.fornecedor !== fornecedor || contaOriginal.data_pagamento !== dataPag;
         if (mudou) {
-          const movId = await buscarMovimentacaoVinculada(editandoId, contaOriginal.valor, contaOriginal.fornecedor);
+          const movId = await buscarMovimentacaoVinculada(editandoId, contaOriginal.valor, contaOriginal.fornecedor, contaOriginal.data_pagamento);
           if (movId) {
             await supabase.from("movimentacoes").update({ data: dataPag, valor, categoria_id: categoriaId, observacao: `Pagamento: ${fornecedor}${descricao ? ` - ${descricao}` : ""}` }).eq("id", movId);
           }
@@ -333,12 +349,28 @@ export default function ContasPagarPage() {
 
   // Localiza o lançamento em movimentações vinculado ao pagamento de uma conta.
   // Prioriza o vínculo exato (conta_pagar_id); cai para o casamento por
-  // valor+fornecedor só em lançamentos antigos, criados antes desse vínculo existir.
-  async function buscarMovimentacaoVinculada(contaId: string, valor: number, fornecedor: string) {
+  // valor+fornecedor só em lançamentos antigos, criados antes desse vínculo
+  // existir. NUNCA escolhe às cegas entre 2+ candidatos empatados (comum em
+  // fornecedores recorrentes de mesmo valor) -- tenta desempatar pela data de
+  // pagamento e, se ainda sobrar mais de um, devolve null em vez de adivinhar.
+  async function buscarMovimentacaoVinculada(contaId: string, valor: number, fornecedor: string, dataPagamento: string | null): Promise<string | null> {
     const porId = await supabase.from("movimentacoes").select("id").eq("conta_pagar_id", contaId).limit(1);
     if (porId.data && porId.data.length > 0) return porId.data[0].id as string;
-    const porTexto = await supabase.from("movimentacoes").select("id").eq("tipo", "saida").eq("valor", valor).ilike("observacao", `%${fornecedor}%`).limit(1);
-    return porTexto.data && porTexto.data.length > 0 ? (porTexto.data[0].id as string) : null;
+
+    const { data: candidatos } = await supabase
+      .from("movimentacoes")
+      .select("id, data")
+      .eq("tipo", "saida")
+      .eq("valor", valor)
+      .ilike("observacao", `%${fornecedor}%`);
+    const lista = candidatos ?? [];
+    if (lista.length === 0) return null;
+    if (lista.length === 1) return lista[0].id as string;
+    if (dataPagamento) {
+      const porData = lista.filter((m) => m.data === dataPagamento);
+      if (porData.length === 1) return porData[0].id as string;
+    }
+    return null;
   }
 
   function iniciarPagamento(conta: ContaPagar) {
@@ -349,9 +381,27 @@ export default function ContasPagarPage() {
   async function confirmarPagamento(conta: ContaPagar) {
     setLoading(true);
     const dataPag = dataPagamentoInline;
-    const { error: err1 } = await supabase.from("contas_pagar").update({ status: "pago", data_pagamento: dataPag }).eq("id", conta.id);
+    // O filtro por status='pendente' torna a baixa idempotente: se outra aba
+    // (ou a baixa automática do /extrato) já pagou esta conta, o update não
+    // afeta nenhuma linha e a movimentação duplicada não chega a ser criada.
+    const { data: linhas, error: err1 } = await supabase
+      .from("contas_pagar")
+      .update({ status: "pago", data_pagamento: dataPag })
+      .eq("id", conta.id)
+      .eq("status", "pendente")
+      .select("id");
     if (err1) { setMensagem("Erro ao confirmar."); setLoading(false); return; }
-    await supabase.from("movimentacoes").insert({ tipo: "saida", data: dataPag, valor: conta.valor, categoria_id: conta.categoria_id, observacao: `Pagamento: ${conta.fornecedor}${conta.descricao ? ` - ${conta.descricao}` : ""}`, revisar: false, conta_pagar_id: conta.id });
+    if (!linhas || linhas.length === 0) {
+      setMensagem("Esta conta já foi paga (por outra aba ou automaticamente) — atualizando a lista.");
+      setPagandoId(null); setLoading(false); carregarDados(); setTimeout(() => setMensagem(""), 4000);
+      return;
+    }
+    const { error: errMov } = await supabase.from("movimentacoes").insert({ tipo: "saida", data: dataPag, valor: conta.valor, categoria_id: conta.categoria_id, observacao: `Pagamento: ${conta.fornecedor}${conta.descricao ? ` - ${conta.descricao}` : ""}`, revisar: false, conta_pagar_id: conta.id });
+    if (errMov) {
+      setMensagem("Conta marcada como paga, mas houve erro ao lançar a movimentação. Confira manualmente.");
+      setPagandoId(null); setLoading(false); carregarDados(); setTimeout(() => setMensagem(""), 5000);
+      return;
+    }
     await registrarLog({ acao: "pagou", tabela: "contas_pagar", registroId: conta.id, detalhes: `${conta.fornecedor} - ${fmt(conta.valor)}` });
     setPagandoId(null); setMensagem("Pago!"); setLoading(false); carregarDados(); setTimeout(() => setMensagem(""), 4000);
   }
@@ -386,23 +436,39 @@ export default function ContasPagarPage() {
     if (!confirm(`Pagar ${contasSelecionadas.length} contas no valor total de ${fmt(total)}?`)) return;
     setLoading(true);
     let pagas = 0;
+    let ignoradas = 0;
+    let comFalha = 0;
     for (const conta of contasSelecionadas) {
-      const { error } = await supabase.from("contas_pagar").update({ status: "pago", data_pagamento: loteDataPagamento }).eq("id", conta.id);
-      if (!error) {
-        await supabase.from("movimentacoes").insert({ tipo: "saida", data: loteDataPagamento, valor: conta.valor, categoria_id: conta.categoria_id, observacao: `Pagamento: ${conta.fornecedor}${conta.descricao ? ` - ${conta.descricao}` : ""}`, revisar: false, conta_pagar_id: conta.id });
-        await registrarLog({ acao: "pagou", tabela: "contas_pagar", registroId: conta.id, detalhes: `${conta.fornecedor} - ${fmt(conta.valor)}` });
-        pagas++;
-      }
+      // Mesma dupla proteção da baixa individual: o filtro status='pendente'
+      // impede pagar de novo uma conta que já saiu como paga por outro caminho,
+      // e o erro do insert é checado para não contar como paga uma conta cuja
+      // movimentação não chegou a ser lançada.
+      const { data: linhas, error } = await supabase
+        .from("contas_pagar")
+        .update({ status: "pago", data_pagamento: loteDataPagamento })
+        .eq("id", conta.id)
+        .eq("status", "pendente")
+        .select("id");
+      if (error) { comFalha++; continue; }
+      if (!linhas || linhas.length === 0) { ignoradas++; continue; }
+      const { error: errMov } = await supabase.from("movimentacoes").insert({ tipo: "saida", data: loteDataPagamento, valor: conta.valor, categoria_id: conta.categoria_id, observacao: `Pagamento: ${conta.fornecedor}${conta.descricao ? ` - ${conta.descricao}` : ""}`, revisar: false, conta_pagar_id: conta.id });
+      if (errMov) { comFalha++; continue; }
+      await registrarLog({ acao: "pagou", tabela: "contas_pagar", registroId: conta.id, detalhes: `${conta.fornecedor} - ${fmt(conta.valor)}` });
+      pagas++;
     }
     setSelecionadas(new Set()); setModoLote(false);
-    setMensagem(`${pagas} contas pagas! Total: ${fmt(total)}`);
+    const avisos = [
+      ignoradas > 0 ? `${ignoradas} já estavam pagas` : null,
+      comFalha > 0 ? `${comFalha} com erro — confira manualmente` : null,
+    ].filter(Boolean).join("; ");
+    setMensagem(`${pagas} contas pagas! Total: ${fmt(total)}${avisos ? ` (${avisos})` : ""}`);
     setLoading(false); carregarDados(); setTimeout(() => setMensagem(""), 5000);
   }
 
   async function desfazerPagamento(conta: ContaPagar) {
     if (!confirm("Desfazer?")) return;
     setLoading(true);
-    const movId = await buscarMovimentacaoVinculada(conta.id, conta.valor, conta.fornecedor);
+    const movId = await buscarMovimentacaoVinculada(conta.id, conta.valor, conta.fornecedor, conta.data_pagamento);
     if (movId) await supabase.from("movimentacoes").delete().eq("id", movId);
     await supabase.from("contas_pagar").update({ status: "pendente", data_pagamento: null }).eq("id", conta.id);
     // A baixa automática via /extrato marca o lançamento do extrato como
@@ -420,12 +486,30 @@ export default function ContasPagarPage() {
 
   async function handleExcluir(conta: ContaPagar) {
     if (!confirm("Excluir?")) return;
-    if (conta.status === "pago") {
-      const movId = await buscarMovimentacaoVinculada(conta.id, conta.valor, conta.fornecedor);
-      if (movId) await supabase.from("movimentacoes").delete().eq("id", movId);
+    // Se o extrato bancário ligou algum lançamento a esta conta (baixa
+    // automática), o vínculo tem que ser desfeito ANTES de excluir a conta --
+    // a FK bloqueia a exclusão enquanto o vínculo existir. O lançamento volta
+    // a ficar não classificado, disponível pra ser reprocessado depois.
+    // Nenhuma linha é afetada se a baixa foi manual (sem vínculo do extrato).
+    await supabase
+      .from("extrato_lancamento")
+      .update({ status: "nao_classificado", categoria: null, classificado_em: null, conta_pagar_id: null })
+      .eq("conta_pagar_id", conta.id);
+
+    // A busca precisa rodar ANTES do delete: o vínculo por conta_pagar_id só
+    // existe enquanto a conta existe (a FK é ON DELETE SET NULL).
+    const movId = conta.status === "pago" ? await buscarMovimentacaoVinculada(conta.id, conta.valor, conta.fornecedor, conta.data_pagamento) : null;
+
+    const { error: erroContaPagar } = await supabase.from("contas_pagar").delete().eq("id", conta.id);
+    if (erroContaPagar) {
+      setMensagem("Não foi possível excluir: " + erroContaPagar.message);
+      setTimeout(() => setMensagem(""), 6000);
+      return;
     }
+
+    // Só apaga a movimentação depois que a conta realmente saiu.
+    if (movId) await supabase.from("movimentacoes").delete().eq("id", movId);
     await registrarLog({ acao: "excluiu", tabela: "contas_pagar", registroId: conta.id });
-    await supabase.from("contas_pagar").delete().eq("id", conta.id);
     setMensagem("Excluída!"); carregarDados(); setTimeout(() => setMensagem(""), 3000);
   }
 
