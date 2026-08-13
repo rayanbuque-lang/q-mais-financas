@@ -20,6 +20,11 @@ export interface CandidatoBaixa {
 export interface ResultadoBaixa {
   baixados: { indice: number; contaPagarId: string }[];
   ambiguos: { indice: number; candidatosIds: string[] }[];
+  // Nenhuma conta pendente bateu, mas 1+ conta(s) já paga(s) batem -- provável
+  // duplicata (a conta foi paga por outro caminho antes deste extrato ser
+  // importado). Nunca decide sozinho: mesmo um único match vai pra cá, nunca
+  // é auto-descartado -- descartar uma transação real exige confirmação humana.
+  duplicatas: { indice: number; candidatosIds: string[] }[];
 }
 
 // Tamanho mínimo do nome do fornecedor normalizado para que o casamento por
@@ -44,19 +49,31 @@ function contaCasaComCandidato(conta: ContaPagarPendente, candidato: CandidatoBa
 
 export function calcularBaixasAutomaticas(
   candidatos: CandidatoBaixa[],
-  contasPendentes: ContaPagarPendente[]
+  contasPendentes: ContaPagarPendente[],
+  contasPagas: ContaPagarPendente[]
 ): ResultadoBaixa {
   const baixados: ResultadoBaixa["baixados"] = [];
   const ambiguos: ResultadoBaixa["ambiguos"] = [];
+  const duplicatas: ResultadoBaixa["duplicatas"] = [];
 
   for (const candidato of candidatos) {
-    const casadas = contasPendentes.filter((conta) => contaCasaComCandidato(conta, candidato));
-    if (casadas.length === 1) {
-      baixados.push({ indice: candidato.indice, contaPagarId: casadas[0].id });
-    } else if (casadas.length >= 2) {
-      ambiguos.push({ indice: candidato.indice, candidatosIds: casadas.map((c) => c.id) });
+    const casadasPendentes = contasPendentes.filter((conta) => contaCasaComCandidato(conta, candidato));
+    if (casadasPendentes.length === 1) {
+      baixados.push({ indice: candidato.indice, contaPagarId: casadasPendentes[0].id });
+      continue;
+    }
+    if (casadasPendentes.length >= 2) {
+      ambiguos.push({ indice: candidato.indice, candidatosIds: casadasPendentes.map((c) => c.id) });
+      continue;
+    }
+
+    // Nenhuma pendente bateu -- só então procura entre as já pagas. Dar baixa
+    // continua tendo prioridade sobre sinalizar duplicata.
+    const casadasPagas = contasPagas.filter((conta) => contaCasaComCandidato(conta, candidato));
+    if (casadasPagas.length > 0) {
+      duplicatas.push({ indice: candidato.indice, candidatosIds: casadasPagas.map((c) => c.id) });
     }
   }
 
-  return { baixados, ambiguos };
+  return { baixados, ambiguos, duplicatas };
 }
