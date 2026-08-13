@@ -342,7 +342,18 @@ export default function MovimentacoesPage() {
     // movimentacao_id, só conta_pagar_id, então o reset abaixo (por
     // movimentacao_id) não alcançaria essas linhas. Nenhuma linha é afetada
     // se conta_pagar_id for nulo (movimentação manual ou da Capacidade A).
-    const { data: movAtual } = await supabase.from("movimentacoes").select("conta_pagar_id").eq("id", id).single();
+    // maybeSingle: uma movimentação sem conta_pagar_id é caso legítimo e não
+    // pode virar erro (o .single() estouraria PGRST116 quando não há linha).
+    // O erro precisa ser checado de verdade: se essa leitura falhar (rede,
+    // RLS), não dá pra saber se havia baixa a desfazer -- seguir em frente
+    // deixaria a conta "paga" pra sempre sem movimentação, exatamente o bug
+    // que esse bloco existe pra fechar. Então aborta sem excluir nada.
+    const { data: movAtual, error: erroLeitura } = await supabase.from("movimentacoes").select("conta_pagar_id").eq("id", id).maybeSingle();
+    if (erroLeitura) {
+      setMensagem("Não foi possível verificar o vínculo com contas a pagar — exclusão cancelada. Tente de novo.");
+      setTimeout(() => setMensagem(""), 6000);
+      return;
+    }
     if (movAtual?.conta_pagar_id) {
       await supabase.from("contas_pagar").update({ status: "pendente", data_pagamento: null }).eq("id", movAtual.conta_pagar_id);
       await supabase

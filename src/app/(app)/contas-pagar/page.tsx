@@ -296,12 +296,29 @@ export default function ContasPagarPage() {
     const dados: Record<string, unknown> = { fornecedor, descricao, valor: valor, data_vencimento: dataVencimento, categoria_id: categoriaId, observacao, status: statusInicial, comprovante_url: comprovanteUrl };
     if (statusInicial === "pago") { dados.data_pagamento = dataPagamento || new Date().toISOString().split("T")[0]; } else { dados.data_pagamento = null; }
 
-    let error; let contaId = editandoId;
-    if (editandoId) { const r = await supabase.from("contas_pagar").update(dados).eq("id", editandoId); error = r.error; }
+    // Só o fluxo pendente -> pago precisa do guard de concorrência: é o único
+    // em que salvar o formulário BAIXA a conta e lança uma saída nova. Se a
+    // automação do extrato já tiver pago essa conta enquanto o formulário
+    // estava aberto, regravar 'pago' por cima e inserir a movimentação criaria
+    // uma SEGUNDA saída para o mesmo pagamento. Os demais branches (edição
+    // comum, pago -> pendente, pago -> pago) não podem levar o filtro, senão
+    // o próprio update deixaria de funcionar.
+    const baixandoAgora = !!editandoId && statusOriginal === "pendente" && statusInicial === "pago";
+    let error; let contaId = editandoId; let baixaJaFeita = false;
+    if (editandoId && baixandoAgora) {
+      const r = await supabase.from("contas_pagar").update(dados).eq("id", editandoId).eq("status", "pendente").select("id");
+      error = r.error;
+      baixaJaFeita = !r.error && (!r.data || r.data.length === 0);
+    }
+    else if (editandoId) { const r = await supabase.from("contas_pagar").update(dados).eq("id", editandoId); error = r.error; }
     else { const r = await supabase.from("contas_pagar").insert(dados).select("id").single(); error = r.error; if (r.data) contaId = r.data.id; }
 
     if (error) {
       setMensagem("Erro ao salvar.");
+    } else if (baixaJaFeita) {
+      // Zero linhas sem erro: a conta não estava mais pendente, então nada foi
+      // gravado por nós — não pode lançar movimentação nenhuma.
+      setMensagem("Esta conta já foi paga por outro caminho — atualizando.");
     } else if (statusInicial === "pago" && contaId && !editandoId) {
       const { error: errMov } = await supabase.from("movimentacoes").insert({ tipo: "saida", data: dados.data_pagamento as string, valor: valor, categoria_id: categoriaId, observacao: `Pagamento: ${fornecedor}${descricao ? ` - ${descricao}` : ""}`, revisar: false, conta_pagar_id: contaId });
       await registrarLog({ acao: "criou", tabela: "contas_pagar", registroId: contaId, dadosNovos: dados, detalhes: `${fornecedor} - ${fmt(valor)}` });
@@ -310,11 +327,15 @@ export default function ContasPagarPage() {
       setMensagem(errMov
         ? "Conta cadastrada como paga, mas houve erro ao lançar a movimentação. Confira manualmente."
         : "Cadastrada como paga e lançada nas movimentações!");
-    } else if (editandoId && statusOriginal === "pendente" && statusInicial === "pago") {
-      const dataPag = dataPagamento || new Date().toISOString().split("T")[0];
-      await supabase.from("movimentacoes").insert({ tipo: "saida", data: dataPag, valor: valor, categoria_id: categoriaId, observacao: `Pagamento: ${fornecedor}${descricao ? ` - ${descricao}` : ""}`, revisar: false, conta_pagar_id: editandoId });
+    } else if (baixandoAgora) {
+      // Mesma data já gravada na conta (dados.data_pagamento), em vez de
+      // recalcular new Date() — assim conta e movimentação não podem divergir.
+      const dataPag = dados.data_pagamento as string;
+      const { error: errMov } = await supabase.from("movimentacoes").insert({ tipo: "saida", data: dataPag, valor: valor, categoria_id: categoriaId, observacao: `Pagamento: ${fornecedor}${descricao ? ` - ${descricao}` : ""}`, revisar: false, conta_pagar_id: editandoId });
       await registrarLog({ acao: "pagou", tabela: "contas_pagar", registroId: editandoId, dadosNovos: dados, detalhes: `${fornecedor} - ${fmt(valor)}` });
-      setMensagem("Paga e lançada nas movimentações!");
+      setMensagem(errMov
+        ? "Conta marcada como paga, mas houve erro ao lançar a movimentação. Confira manualmente."
+        : "Paga e lançada nas movimentações!");
     } else if (editandoId && statusOriginal === "pago" && statusInicial === "pendente" && contaOriginal) {
       // Pagamento desfeito via formulário de edição (não pelo botão "Desfazer pagamento") — mesma limpeza.
       const movId = await buscarMovimentacaoVinculada(editandoId, contaOriginal.valor, contaOriginal.fornecedor, contaOriginal.data_pagamento);
