@@ -547,6 +547,11 @@ export default function ExtratoPage() {
     candidatos: { id: string; fornecedor: string; valor: number; data_pagamento: string | null }[];
   } | null>(null);
   const [carregandoDuplicata, setCarregandoDuplicata] = useState(false);
+  const [cadastrandoContaPagar, setCadastrandoContaPagar] = useState<{ lancamento: Lancamento } | null>(null);
+  const [categoriasSaidaComId, setCategoriasSaidaComId] = useState<{ id: string; nome: string }[]>([]);
+  const [novaContaFornecedor, setNovaContaFornecedor] = useState("");
+  const [novaContaCategoriaId, setNovaContaCategoriaId] = useState("");
+  const [salvandoContaPagar, setSalvandoContaPagar] = useState(false);
 
   // Regras
   const [regras, setRegras] = useState<Regra[]>([]);
@@ -1210,6 +1215,85 @@ export default function ExtratoPage() {
     setResolvendoDuplicata(null);
   }
 
+  async function handleAbrirCadastroContaPagar(lancamento: Lancamento) {
+    const { data } = await supabase.from("categorias_saida").select("id, nome").eq("ativo", true).order("nome");
+    setCategoriasSaidaComId((data ?? []) as { id: string; nome: string }[]);
+    // Sugestão de fornecedor a partir do texto do banco -- tira os prefixos
+    // fixos mais comuns do padrão de boleto, deixando a cauda que costuma
+    // ser o nome truncado. Sempre editável antes de confirmar.
+    const sugestao = lancamento.descricao
+      .replace(/pagamento de boleto/i, "")
+      .replace(/outros bancos/i, "")
+      .trim();
+    setNovaContaFornecedor(sugestao);
+    setNovaContaCategoriaId("");
+    setCadastrandoContaPagar({ lancamento });
+  }
+
+  function fecharCadastroContaPagar() {
+    setCadastrandoContaPagar(null);
+  }
+
+  async function handleConfirmarCadastroContaPagar() {
+    if (!cadastrandoContaPagar) return;
+    if (!novaContaFornecedor.trim() || !novaContaCategoriaId) {
+      setMensagem({ tipo: "erro", texto: "Preencha fornecedor e categoria." });
+      return;
+    }
+    setSalvandoContaPagar(true);
+    const lancamento = cadastrandoContaPagar.lancamento;
+    const valorAbsoluto = Math.abs(Number(lancamento.valor));
+
+    // Nasce pendente de propósito -- baixarContaPagar reivindica e dá baixa
+    // do mesmo jeito que já faz pra qualquer outra conta, sem escrita nova.
+    const { data: contaCriada, error: erroInsert } = await supabase
+      .from("contas_pagar")
+      .insert({
+        fornecedor: novaContaFornecedor.trim(),
+        valor: valorAbsoluto,
+        data_vencimento: lancamento.data_lancamento,
+        categoria_id: novaContaCategoriaId,
+        status: "pendente",
+      })
+      .select("id")
+      .single();
+    if (erroInsert || !contaCriada) {
+      setSalvandoContaPagar(false);
+      setMensagem({ tipo: "erro", texto: "Erro ao cadastrar conta a pagar: " + (erroInsert?.message ?? "") });
+      return;
+    }
+
+    const categoriaSelecionada = categoriasSaidaComId.find((c) => c.id === novaContaCategoriaId);
+    const categoriaNome = categoriaSelecionada?.nome ?? "Contas a pagar";
+
+    const resultadoEscrita = await baixarContaPagar(
+      { id: lancamento.id, data_lancamento: lancamento.data_lancamento },
+      { id: contaCriada.id as string, fornecedor: novaContaFornecedor.trim(), valor: valorAbsoluto, categoria_id: novaContaCategoriaId },
+      categoriaNome,
+      "manual"
+    );
+
+    setSalvandoContaPagar(false);
+    if (resultadoEscrita === "mes_fechado") {
+      setMensagem({
+        tipo: "erro",
+        texto: `Conta cadastrada, mas não foi possível dar baixa: ${formatarData(lancamento.data_lancamento)} está num mês contábil já fechado. Dê baixa manualmente pela tela de Contas a Pagar.`,
+      });
+      setCadastrandoContaPagar(null);
+      await Promise.all([carregarLancamentos(), carregarResumo()]);
+      return;
+    }
+    if (resultadoEscrita !== "ok") {
+      setMensagem({ tipo: "erro", texto: "Conta cadastrada, mas houve um erro ao dar baixa. Dê baixa manualmente pela tela de Contas a Pagar." });
+      setCadastrandoContaPagar(null);
+      await Promise.all([carregarLancamentos(), carregarResumo()]);
+      return;
+    }
+    setCadastrandoContaPagar(null);
+    setMensagem({ tipo: "sucesso", texto: `Conta cadastrada e baixada: ${novaContaFornecedor.trim()}.` });
+    await Promise.all([carregarLancamentos(), carregarResumo()]);
+  }
+
   async function handleIgnorar(lancamento: Lancamento) {
     setAcaoLancamentoId(lancamento.id);
     setMensagem(null);
@@ -1803,6 +1887,14 @@ export default function ExtratoPage() {
                                       </button>
                                     ) : l.status === "ignorado" ? (
                                       <span className="text-[10px] text-[var(--color-text-muted)]">—</span>
+                                    ) : podeEscrever && ehPagamentoDeBoleto(l.descricao_normalizada) ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleAbrirCadastroContaPagar(l)}
+                                        className="px-2 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-300 text-[10px] font-semibold whitespace-nowrap hover:bg-slate-200"
+                                      >
+                                        Cadastrar conta a pagar
+                                      </button>
                                     ) : (
                                       <span className="text-[10px] text-amber-600 font-medium">pendente</span>
                                     )}
@@ -1977,6 +2069,55 @@ export default function ExtratoPage() {
                     className="flex-1 px-3 py-2 rounded-lg bg-red-500 text-white text-xs font-semibold hover:bg-red-600"
                   >
                     Descartar
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {cadastrandoContaPagar && (
+            <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={fecharCadastroContaPagar}>
+              <div className="bg-[var(--color-surface)] rounded-2xl p-5 max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
+                <h3 className="font-semibold text-sm mb-1">Cadastrar conta a pagar</h3>
+                <p className="text-xs text-[var(--color-text-muted)] mb-3">
+                  Nenhuma conta a pagar correspondente foi encontrada para este lançamento de{" "}
+                  {formatarData(cadastrandoContaPagar.lancamento.data_lancamento)} ({formatarMoeda(Math.abs(cadastrandoContaPagar.lancamento.valor))}).
+                  Cadastre o fornecedor e a categoria — a baixa é feita automaticamente.
+                </p>
+                <label className="block text-xs font-semibold mb-1 text-[var(--color-text-muted)]">Fornecedor</label>
+                <input
+                  value={novaContaFornecedor}
+                  onChange={(e) => setNovaContaFornecedor(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-sm mb-3"
+                />
+                <label className="block text-xs font-semibold mb-1 text-[var(--color-text-muted)]">Categoria</label>
+                <select
+                  value={novaContaCategoriaId}
+                  onChange={(e) => setNovaContaCategoriaId(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-sm mb-4"
+                >
+                  <option value="">Selecione...</option>
+                  {categoriasSaidaComId.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.nome}
+                    </option>
+                  ))}
+                </select>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={fecharCadastroContaPagar}
+                    className="flex-1 px-3 py-2 rounded-lg border border-[var(--color-border)] text-xs font-semibold hover:bg-[var(--hover-bg)]"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    disabled={salvandoContaPagar || !novaContaFornecedor.trim() || !novaContaCategoriaId}
+                    onClick={handleConfirmarCadastroContaPagar}
+                    className="flex-1 px-3 py-2 rounded-lg bg-emerald-500 text-white text-xs font-semibold disabled:opacity-50"
+                  >
+                    {salvandoContaPagar ? "Salvando..." : "Cadastrar e dar baixa"}
                   </button>
                 </div>
               </div>
