@@ -518,6 +518,11 @@ export default function ExtratoPage() {
   } | null>(null);
   const [carregandoCandidatos, setCarregandoCandidatos] = useState(false);
   const [resolvendoBaixaId, setResolvendoBaixaId] = useState<string | null>(null);
+  const [resolvendoDuplicata, setResolvendoDuplicata] = useState<{
+    lancamento: Lancamento;
+    candidatos: { id: string; fornecedor: string; valor: number; data_pagamento: string | null }[];
+  } | null>(null);
+  const [carregandoDuplicata, setCarregandoDuplicata] = useState(false);
 
   // Regras
   const [regras, setRegras] = useState<Regra[]>([]);
@@ -1147,6 +1152,39 @@ export default function ExtratoPage() {
     setResolvendoAmbiguo(null);
   }
 
+  async function handleAbrirDuplicata(lancamento: Lancamento) {
+    if (!lancamento.contas_pagar_duplicatas || lancamento.contas_pagar_duplicatas.length === 0) return;
+    setCarregandoDuplicata(true);
+    const { data, error } = await supabase
+      .from("contas_pagar")
+      .select("id, fornecedor, valor, data_pagamento")
+      .in("id", lancamento.contas_pagar_duplicatas)
+      .eq("status", "pago");
+    setCarregandoDuplicata(false);
+    if (error || !data) {
+      setMensagem({ tipo: "erro", texto: "Erro ao carregar as contas já pagas: " + (error?.message ?? "") });
+      return;
+    }
+    if (data.length === 0) {
+      setMensagem({ tipo: "erro", texto: "Nenhuma das contas sinalizadas continua com status pago — use 'Reprocessar regras' para reavaliar este lançamento." });
+      return;
+    }
+    setResolvendoDuplicata({
+      lancamento,
+      candidatos: data as { id: string; fornecedor: string; valor: number; data_pagamento: string | null }[],
+    });
+  }
+
+  async function handleDescartarDuplicata() {
+    if (!resolvendoDuplicata) return;
+    setResolvendoDuplicata(null);
+    await handleIgnorar(resolvendoDuplicata.lancamento);
+  }
+
+  function fecharDuplicata() {
+    setResolvendoDuplicata(null);
+  }
+
   async function handleIgnorar(lancamento: Lancamento) {
     setAcaoLancamentoId(lancamento.id);
     setMensagem(null);
@@ -1726,6 +1764,15 @@ export default function ExtratoPage() {
                                       >
                                         {carregandoCandidatos ? "..." : `Baixa ambígua (${l.contas_pagar_candidatas.length})`}
                                       </button>
+                                    ) : podeEscrever && l.contas_pagar_duplicatas && l.contas_pagar_duplicatas.length > 0 ? (
+                                      <button
+                                        type="button"
+                                        disabled={carregandoDuplicata}
+                                        onClick={() => handleAbrirDuplicata(l)}
+                                        className="px-2 py-1 rounded-full bg-orange-50 text-orange-700 border border-orange-200 text-[10px] font-semibold whitespace-nowrap hover:bg-orange-100 disabled:opacity-50"
+                                      >
+                                        {carregandoDuplicata ? "..." : `Provável duplicata (${l.contas_pagar_duplicatas.length})`}
+                                      </button>
                                     ) : l.status === "ignorado" ? (
                                       <span className="text-[10px] text-[var(--color-text-muted)]">—</span>
                                     ) : (
@@ -1859,6 +1906,51 @@ export default function ExtratoPage() {
                 >
                   Decidir depois
                 </button>
+              </div>
+            </div>
+          )}
+
+          {resolvendoDuplicata && (
+            <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={fecharDuplicata}>
+              <div className="bg-[var(--color-surface)] rounded-2xl p-5 max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
+                <h3 className="font-semibold text-sm mb-1">Provável duplicata</h3>
+                <p className="text-xs text-[var(--color-text-muted)] mb-3">
+                  Este lançamento de {formatarData(resolvendoDuplicata.lancamento.data_lancamento)} ({formatarMoeda(Math.abs(resolvendoDuplicata.lancamento.valor))})
+                  bate com {resolvendoDuplicata.candidatos.length === 1 ? "uma conta a pagar que já consta como paga" : "contas a pagar que já constam como pagas"}:
+                </p>
+                <div className="space-y-2 mb-4">
+                  {resolvendoDuplicata.candidatos.map((c) => (
+                    <div key={c.id} className="flex justify-between items-center px-3 py-2 rounded-lg border border-[var(--color-border)] text-xs">
+                      <span>
+                        <span className="font-semibold">{c.fornecedor}</span>
+                        <br />
+                        <span className="text-[var(--color-text-muted)]">
+                          {c.data_pagamento ? `Pago em ${formatarData(c.data_pagamento)}` : "Pago"}
+                        </span>
+                      </span>
+                      <span className="font-semibold">{formatarMoeda(c.valor)}</span>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-[10px] text-[var(--color-text-muted)] mb-3">
+                  Se este pagamento já foi registrado quando a conta acima foi dada como paga, descarte este lançamento do extrato. Se não for o mesmo pagamento, feche e classifique normalmente.
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={fecharDuplicata}
+                    className="flex-1 px-3 py-2 rounded-lg border border-[var(--color-border)] text-xs font-semibold hover:bg-[var(--hover-bg)]"
+                  >
+                    Não é duplicata
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDescartarDuplicata}
+                    className="flex-1 px-3 py-2 rounded-lg bg-red-500 text-white text-xs font-semibold hover:bg-red-600"
+                  >
+                    Descartar
+                  </button>
+                </div>
               </div>
             </div>
           )}
