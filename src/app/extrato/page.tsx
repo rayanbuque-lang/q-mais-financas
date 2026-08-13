@@ -441,7 +441,8 @@ async function lancarMovimentacaoDireta(
   lancamento: LancamentoParaMovimentacao,
   categoriaNome: string,
   mapaCategoriaEntrada: Map<string, string>,
-  mapaCategoriaSaida: Map<string, string>
+  mapaCategoriaSaida: Map<string, string>,
+  cacheMesFechado?: Map<string, boolean>
 ): Promise<ResultadoLancamentoDireto> {
   // Incondicional -- boleto é domínio exclusivo da Capacidade B mesmo quando o
   // valor não é negativo (ex.: estorno de um pagamento de boleto).
@@ -454,7 +455,19 @@ async function lancarMovimentacaoDireta(
 
   const supabase = createClient();
 
-  const { fechado } = await verificarMesFechado(lancamento.data_lancamento);
+  // O resultado de verificarMesFechado só varia por yyyy-mm, não por
+  // lançamento -- num lote de centenas de lançamentos do mesmo mês
+  // (processarLancamentosDiretos), memoiza pra não repetir a mesma consulta
+  // centenas de vezes. Chamada avulsa (handleClassificarManual) não passa
+  // cache e continua consultando direto, sem custo de manter um Map por 1 uso.
+  const chaveMes = lancamento.data_lancamento.slice(0, 7);
+  let fechado: boolean;
+  if (cacheMesFechado?.has(chaveMes)) {
+    fechado = cacheMesFechado.get(chaveMes)!;
+  } else {
+    fechado = (await verificarMesFechado(lancamento.data_lancamento)).fechado;
+    cacheMesFechado?.set(chaveMes, fechado);
+  }
   if (fechado) return "mes_fechado";
 
   const { data: movimentacaoInserida, error: erroInsert } = await supabase
@@ -483,7 +496,31 @@ async function lancarMovimentacaoDireta(
     .eq("id", lancamento.id)
     .is("movimentacao_id", null)
     .select("id");
-  if (erroLancamento || !linhasAtualizadas || linhasAtualizadas.length === 0) return "falhou";
+  if (erroLancamento) return "falhou";
+  if (!linhasAtualizadas || linhasAtualizadas.length === 0) {
+    // Perdeu a corrida (0 linhas, sem erro) -- outra chamada concorrente já
+    // reivindicou este lançamento antes de nós. A movimentação que acabamos
+    // de inserir não tem (e nunca vai ter) vínculo nenhum: sem isso ela fica
+    // órfã em produção, silenciosa. Diferente do caso de erro real acima, em
+    // que o estado já é ambíguo e apagar poderia destruir uma movimentação
+    // que na verdade só falhou em vincular -- aqui sabemos com certeza que
+    // perdemos.
+    const { error: erroExclusao } = await supabase
+      .from("movimentacoes")
+      .delete()
+      .eq("id", movimentacaoInserida.id);
+    if (erroExclusao) {
+      // Não conseguimos nem apagar -- registra pra não desaparecer
+      // silenciosamente do audit trail; o estado seguinte fica visível.
+      await registrarLog({
+        acao: "excluiu",
+        tabela: "movimentacoes",
+        registroId: movimentacaoInserida.id,
+        detalhes: `Falha ao desfazer movimentação órfã (perdeu corrida de vínculo com extrato_lancamento ${lancamento.id}): ${erroExclusao.message}`,
+      });
+    }
+    return "falhou";
+  }
 
   await registrarLog({
     acao: "criou",
@@ -506,6 +543,10 @@ async function processarLancamentosDiretos(
   const { entrada, saida } = await carregarMapasCategoria();
   const porId = new Map(candidatos.map((c) => [c.id, c]));
 
+  // Um lote inteiro tende a cair no mesmo mês (ou em poucos meses) -- evita
+  // repetir a mesma consulta verificarMesFechado centenas de vezes.
+  const cacheMesFechado = new Map<string, boolean>();
+
   let lancados = 0;
   let mesFechado = 0;
   let falharam = 0;
@@ -516,7 +557,8 @@ async function processarLancamentosDiretos(
       { id: lancamento.id, data_lancamento: lancamento.data_lancamento, valor: lancamento.valor, descricao_normalizada: lancamento.descricao_normalizada },
       r.categoria,
       entrada,
-      saida
+      saida,
+      cacheMesFechado
     );
     if (resultado === "ok") lancados++;
     else if (resultado === "mes_fechado") mesFechado++;
