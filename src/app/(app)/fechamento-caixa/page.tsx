@@ -271,7 +271,14 @@ export default function FechamentoCaixaPage() {
     if (!detailRecord || !isAdmin) { setMensagem("Apenas administradores podem reabrir."); setTimeout(() => setMensagem(""), 3000); return; }
     setLoading(true);
     const catId = await garantirCategoria();
-    if (catId) await supabase.from("movimentacoes").delete().eq("data", detailRecord.data).eq("categoria_id", catId);
+    if (catId) {
+      const { error: erroExclusaoMov } = await supabase.from("movimentacoes").delete().eq("data", detailRecord.data).eq("categoria_id", catId);
+      if (erroExclusaoMov) {
+        setMensagem("Erro ao excluir movimentação do dia — não foi possível reabrir: " + erroExclusaoMov.message);
+        setLoading(false);
+        return;
+      }
+    }
     await supabase.from("fechamento_caixa").update({ fechado: false, rascunho: true, fechado_por: null, fechado_em: null }).eq("id", detailRecord.id);
     await registrarLog({ acao: "reabriu", tabela: "fechamento_caixa", registroId: detailRecord.id });
     setMensagem("↩️ Dia reaberto — edite e salve rascunho ou feche novamente.");
@@ -285,7 +292,14 @@ export default function FechamentoCaixaPage() {
     if (!detailRecord || !confirm("Excluir este dia e sua movimentação?")) return;
     setLoading(true);
     const catId = await garantirCategoria();
-    if (catId && detailRecord.fechado) await supabase.from("movimentacoes").delete().eq("data", detailRecord.data).eq("categoria_id", catId);
+    if (catId && detailRecord.fechado) {
+      const { error: erroExclusaoMov } = await supabase.from("movimentacoes").delete().eq("data", detailRecord.data).eq("categoria_id", catId);
+      if (erroExclusaoMov) {
+        setMensagem("Erro ao excluir movimentação do dia — não foi possível excluir: " + erroExclusaoMov.message);
+        setLoading(false);
+        return;
+      }
+    }
     await supabase.from("fechamento_caixa").delete().eq("id", detailRecord.id);
     await registrarLog({ acao: "excluiu", tabela: "fechamento_caixa", registroId: detailRecord.id });
     closeDetail(); setMensagem("Dia excluído!"); carregarDados(); setLoading(false); setTimeout(() => setMensagem(""), 3000);
