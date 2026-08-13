@@ -1665,6 +1665,11 @@ export default function ExtratoPage() {
                                             Baixa automática
                                           </span>
                                         )}
+                                        {l.movimentacao_id && (
+                                          <span className="px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-200 text-[9px] font-semibold whitespace-nowrap">
+                                            Lançado em Movimentações
+                                          </span>
+                                        )}
                                       </div>
                                     ) : podeEscrever && l.contas_pagar_candidatas && l.contas_pagar_candidatas.length > 0 ? (
                                       <button
