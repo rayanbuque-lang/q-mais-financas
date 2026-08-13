@@ -36,6 +36,7 @@ interface Lancamento {
   conta_pagar_id: string | null;
   contas_pagar_candidatas: string[] | null;
   movimentacao_id: string | null;
+  contas_pagar_duplicatas: string[] | null;
 }
 
 interface Regra {
@@ -91,6 +92,7 @@ interface LancamentoParaBaixa {
   descricao_normalizada: string;
   status: string;
   contas_pagar_candidatas?: string[] | null;
+  contas_pagar_duplicatas?: string[] | null;
 }
 
 // "ok" baixou; "mes_fechado" recusou de propósito (competência já fechada);
@@ -211,25 +213,28 @@ async function baixarContaPagar(
 // reprocessamento). Nunca decide um empate sozinho -- ver calcularBaixasAutomaticas.
 async function processarBaixasAutomaticas(
   lancamentosNovos: LancamentoParaBaixa[]
-): Promise<{ baixados: number; ambiguos: number; mesFechado: number; idsBaixados: Set<string>; idsAmbiguos: Set<string> }> {
+): Promise<{ baixados: number; ambiguos: number; duplicatas: number; mesFechado: number; idsBaixados: Set<string>; idsAmbiguos: Set<string>; idsDuplicatas: Set<string> }> {
   const supabase = createClient();
   const idsBaixados = new Set<string>();
   const idsAmbiguos = new Set<string>();
+  const idsDuplicatas = new Set<string>();
   const saidas = lancamentosNovos.filter((l) => l.valor < 0 && l.status === "nao_classificado");
-  if (saidas.length === 0) return { baixados: 0, ambiguos: 0, mesFechado: 0, idsBaixados, idsAmbiguos };
+  if (saidas.length === 0) return { baixados: 0, ambiguos: 0, duplicatas: 0, mesFechado: 0, idsBaixados, idsAmbiguos, idsDuplicatas };
 
   // .limit(2000) por precaução -- mesma classe de problema já corrigida antes
   // neste projeto (commit 693a921): PostgREST tem teto padrão de linhas.
-  // contas_pagar pendentes reais nunca chegaram perto disso, mas não custa nada.
-  const { data: pendentes } = await supabase
+  const { data: contasRelevantes } = await supabase
     .from("contas_pagar")
-    .select("id, fornecedor, valor, categoria_id")
-    .eq("status", "pendente")
+    .select("id, fornecedor, valor, categoria_id, status")
+    .in("status", ["pendente", "pago"])
     .limit(2000);
-  if (!pendentes || pendentes.length === 0) {
-    await limparCandidatasObsoletas(saidas, new Set<number>());
-    return { baixados: 0, ambiguos: 0, mesFechado: 0, idsBaixados, idsAmbiguos };
+  if (!contasRelevantes || contasRelevantes.length === 0) {
+    await Promise.all([limparCandidatasObsoletas(saidas, new Set<number>()), limparDuplicatasObsoletas(saidas, new Set<number>())]);
+    return { baixados: 0, ambiguos: 0, duplicatas: 0, mesFechado: 0, idsBaixados, idsAmbiguos, idsDuplicatas };
   }
+
+  const pendentes = contasRelevantes.filter((c) => c.status === "pendente");
+  const pagas = contasRelevantes.filter((c) => c.status === "pago");
 
   const { data: categoriasSaidaTodas } = await supabase.from("categorias_saida").select("id, nome");
   const nomeCategoriaPorId = new Map((categoriasSaidaTodas ?? []).map((c) => [c.id as string, c.nome as string]));
@@ -244,8 +249,13 @@ async function processarBaixasAutomaticas(
     fornecedor: c.fornecedor as string,
     valor: Number(c.valor),
   }));
+  const contasPagas: ContaPagarPendente[] = pagas.map((c) => ({
+    id: c.id as string,
+    fornecedor: c.fornecedor as string,
+    valor: Number(c.valor),
+  }));
 
-  const resultado = calcularBaixasAutomaticas(candidatos, contasPendentes);
+  const resultado = calcularBaixasAutomaticas(candidatos, contasPendentes, contasPagas);
   const pendentesPorId = new Map(pendentes.map((c) => [c.id as string, c]));
 
   let baixados = 0;
@@ -278,13 +288,25 @@ async function processarBaixasAutomaticas(
     ambiguos++;
   }
 
+  let duplicatas = 0;
+  for (const d of resultado.duplicatas) {
+    const lancamento = saidas[d.indice];
+    await supabase.from("extrato_lancamento").update({ contas_pagar_duplicatas: d.candidatosIds }).eq("id", lancamento.id);
+    idsDuplicatas.add(lancamento.id);
+    duplicatas++;
+  }
+
   const indicesComResultado = new Set<number>([
     ...resultado.baixados.map((b) => b.indice),
     ...resultado.ambiguos.map((a) => a.indice),
   ]);
-  await limparCandidatasObsoletas(saidas, indicesComResultado);
+  const indicesComDuplicata = new Set<number>(resultado.duplicatas.map((d) => d.indice));
+  await Promise.all([
+    limparCandidatasObsoletas(saidas, indicesComResultado),
+    limparDuplicatasObsoletas(saidas, indicesComDuplicata),
+  ]);
 
-  return { baixados, ambiguos, mesFechado, idsBaixados, idsAmbiguos };
+  return { baixados, ambiguos, duplicatas, mesFechado, idsBaixados, idsAmbiguos, idsDuplicatas };
 }
 
 // Um lançamento que já ficou ambíguo carrega contas_pagar_candidatas até
@@ -300,6 +322,19 @@ async function limparCandidatasObsoletas(saidas: LancamentoParaBaixa[], indicesC
   if (idsObsoletos.length === 0) return;
   const supabase = createClient();
   await supabase.from("extrato_lancamento").update({ contas_pagar_candidatas: null }).in("id", idsObsoletos);
+}
+
+// Mesma lógica de limparCandidatasObsoletas, mas pro campo de duplicatas: se
+// um reprocessamento posterior não encontra mais nenhuma conta paga batendo
+// (a duplicata era falsa, ou a conta paga foi excluída), o marcador vira
+// lixo e o botão "Provável duplicata" ficaria preso pra sempre.
+async function limparDuplicatasObsoletas(saidas: LancamentoParaBaixa[], indicesComResultado: Set<number>) {
+  const idsObsoletos = saidas
+    .filter((l, indice) => !indicesComResultado.has(indice) && (l.contas_pagar_duplicatas?.length ?? 0) > 0)
+    .map((l) => l.id);
+  if (idsObsoletos.length === 0) return;
+  const supabase = createClient();
+  await supabase.from("extrato_lancamento").update({ contas_pagar_duplicatas: null }).in("id", idsObsoletos);
 }
 
 // ---------- Lançamento direto em Movimentações (Capacidade A) ----------
@@ -447,7 +482,7 @@ export default function ExtratoPage() {
   const [contaImportId, setContaImportId] = useState("");
   const [arquivo, setArquivo] = useState<File | null>(null);
   const [importando, setImportando] = useState(false);
-  const [resumoImportacao, setResumoImportacao] = useState<{ lidas: number; novas: number; duplicadas: number; cobertos: number; baixados: number; ambiguos: number; mesFechado: number; movimentacoesLancadas: number; movimentacoesMesFechado: number; movimentacoesFalharam: number; avisos: string[] } | null>(null);
+  const [resumoImportacao, setResumoImportacao] = useState<{ lidas: number; novas: number; duplicadas: number; cobertos: number; baixados: number; ambiguos: number; duplicatas: number; mesFechado: number; movimentacoesLancadas: number; movimentacoesMesFechado: number; movimentacoesFalharam: number; avisos: string[] } | null>(null);
   const [mostrarNovaConta, setMostrarNovaConta] = useState(false);
   const [novaContaBanco, setNovaContaBanco] = useState("santander");
   const [novaContaApelido, setNovaContaApelido] = useState("");
@@ -649,7 +684,7 @@ export default function ExtratoPage() {
     try {
       let query = supabase
         .from("extrato_lancamento")
-        .select("id, conta_id, descricao_normalizada, valor, status, data_lancamento, contas_pagar_candidatas")
+        .select("id, conta_id, descricao_normalizada, valor, status, data_lancamento, contas_pagar_candidatas, contas_pagar_duplicatas")
         .eq("status", "nao_classificado")
         // Mesmo teto de carregarLancamentos — sem .limit() o PostgREST corta na
         // sua página padrão e o reprocessamento silenciosamente ignora o resto.
@@ -660,7 +695,9 @@ export default function ExtratoPage() {
 
       const candidatosTipados = (candidatos ?? []) as LancamentoParaBaixa[];
       const baixasAuto = await processarBaixasAutomaticas(candidatosTipados);
-      const paraClassificar = candidatosTipados.filter((l) => !baixasAuto.idsBaixados.has(l.id) && !baixasAuto.idsAmbiguos.has(l.id));
+      const paraClassificar = candidatosTipados.filter(
+        (l) => !baixasAuto.idsBaixados.has(l.id) && !baixasAuto.idsAmbiguos.has(l.id) && !baixasAuto.idsDuplicatas.has(l.id)
+      );
       const resultadosRegra = await classificarPorRegras(paraClassificar as LancamentoClassificavel[]);
       const qtd = resultadosRegra.length;
       const lancamentosDiretos = await processarLancamentosDiretos(paraClassificar, resultadosRegra);
@@ -668,6 +705,7 @@ export default function ExtratoPage() {
       const partes: string[] = [];
       if (baixasAuto.baixados > 0) partes.push(`${baixasAuto.baixados} baixado(s) automaticamente`);
       if (baixasAuto.ambiguos > 0) partes.push(`${baixasAuto.ambiguos} ambíguo(s) (revisar)`);
+      if (baixasAuto.duplicatas > 0) partes.push(`${baixasAuto.duplicatas} sinalizado(s) como provável duplicata (revisar)`);
       if (baixasAuto.mesFechado > 0) partes.push(`${baixasAuto.mesFechado} não baixado(s): mês contábil fechado`);
       if (qtd > 0) partes.push(`${qtd} classificado(s) por regra`);
       if (lancamentosDiretos.lancados > 0) partes.push(`${lancamentosDiretos.lancados} lançado(s) em movimentações`);
@@ -840,7 +878,7 @@ export default function ExtratoPage() {
       });
       if (erroImportacao) throw new Error(erroImportacao.message);
 
-      let baixasAuto = { baixados: 0, ambiguos: 0, mesFechado: 0, idsBaixados: new Set<string>(), idsAmbiguos: new Set<string>() };
+      let baixasAuto = { baixados: 0, ambiguos: 0, duplicatas: 0, mesFechado: 0, idsBaixados: new Set<string>(), idsAmbiguos: new Set<string>(), idsDuplicatas: new Set<string>() };
       if (inseridos && inseridos.length > 0) {
         baixasAuto = await processarBaixasAutomaticas(inseridos as LancamentoParaBaixa[]);
       }
@@ -848,7 +886,9 @@ export default function ExtratoPage() {
       let classificadosAuto = 0;
       let lancamentosDiretos = { lancados: 0, mesFechado: 0, falharam: 0 };
       if (inseridos && inseridos.length > 0) {
-        const paraClassificar = (inseridos as LancamentoParaBaixa[]).filter((l) => !baixasAuto.idsBaixados.has(l.id) && !baixasAuto.idsAmbiguos.has(l.id));
+        const paraClassificar = (inseridos as LancamentoParaBaixa[]).filter(
+          (l) => !baixasAuto.idsBaixados.has(l.id) && !baixasAuto.idsAmbiguos.has(l.id) && !baixasAuto.idsDuplicatas.has(l.id)
+        );
         if (paraClassificar.length > 0) {
           const resultadosRegra = await classificarPorRegras(paraClassificar as LancamentoClassificavel[]);
           classificadosAuto = resultadosRegra.length;
@@ -856,7 +896,7 @@ export default function ExtratoPage() {
         }
       }
 
-      setResumoImportacao({ lidas: parsed.transacoes.length, novas, duplicadas, cobertos, baixados: baixasAuto.baixados, ambiguos: baixasAuto.ambiguos, mesFechado: baixasAuto.mesFechado, movimentacoesLancadas: lancamentosDiretos.lancados, movimentacoesMesFechado: lancamentosDiretos.mesFechado, movimentacoesFalharam: lancamentosDiretos.falharam, avisos: parsed.avisos });
+      setResumoImportacao({ lidas: parsed.transacoes.length, novas, duplicadas, cobertos, baixados: baixasAuto.baixados, ambiguos: baixasAuto.ambiguos, duplicatas: baixasAuto.duplicatas, mesFechado: baixasAuto.mesFechado, movimentacoesLancadas: lancamentosDiretos.lancados, movimentacoesMesFechado: lancamentosDiretos.mesFechado, movimentacoesFalharam: lancamentosDiretos.falharam, avisos: parsed.avisos });
       setMensagem({
         tipo: "sucesso",
         texto:
@@ -864,6 +904,7 @@ export default function ExtratoPage() {
           (cobertos > 0 ? ` · ${cobertos} já cobertas pelo relatório Pix` : "") +
           (baixasAuto.baixados > 0 ? ` · ${baixasAuto.baixados} baixado(s) automaticamente` : "") +
           (baixasAuto.ambiguos > 0 ? ` · ${baixasAuto.ambiguos} ambígua(s) (revisar)` : "") +
+          (baixasAuto.duplicatas > 0 ? ` · ${baixasAuto.duplicatas} provável(is) duplicata(s) (revisar)` : "") +
           (baixasAuto.mesFechado > 0 ? ` · ${baixasAuto.mesFechado} não baixada(s): mês contábil fechado` : "") +
           (classificadosAuto > 0 ? ` · ${classificadosAuto} classificada(s) automaticamente` : "") +
           (lancamentosDiretos.lancados > 0 ? ` · ${lancamentosDiretos.lancados} lançada(s) em movimentações` : "") +
@@ -1387,6 +1428,11 @@ export default function ExtratoPage() {
                   <p className="mt-1 font-semibold">
                     {resumoImportacao.baixados} lançamento(s) de saída baixados automaticamente em Contas a Pagar
                     {resumoImportacao.ambiguos > 0 && ` · ${resumoImportacao.ambiguos} ambíguo(s) — revisar na aba Lançamentos`}
+                  </p>
+                )}
+                {resumoImportacao.duplicatas > 0 && (
+                  <p className="mt-1 font-semibold text-orange-700">
+                    {resumoImportacao.duplicatas} lançamento(s) sinalizado(s) como provável duplicata — revisar na aba Lançamentos.
                   </p>
                 )}
                 {resumoImportacao.mesFechado > 0 && (
