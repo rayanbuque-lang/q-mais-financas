@@ -333,6 +333,21 @@ export default function MovimentacoesPage() {
 
   async function excluirMov(id: string) {
     if (!confirm("Excluir?")) return;
+    // Reseta o lançamento do extrato ANTES de excluir a movimentação.
+    // extrato_lancamento_movimentacao_id_fkey não tem ON DELETE SET NULL/CASCADE
+    // (confdeltype = 'a', NO ACTION) -- excluir a movimentação enquanto o
+    // extrato ainda aponta pra ela sempre falha com violação de FK (23503),
+    // e como o client não checa o erro do delete, isso reproduziria em
+    // 100% dos casos o próprio cenário que se queria evitar: extrato
+    // resetado para nao_classificado com a movimentação nunca de fato
+    // excluída, liberando reprocessamento futuro para duplicar o
+    // lançamento. Resetar primeiro também é seguro: se o reset falhar
+    // silenciosamente, o delete de movimentacoes abaixo será bloqueado
+    // pela mesma FK, então nada fica inconsistente.
+    await supabase
+      .from("extrato_lancamento")
+      .update({ status: "nao_classificado", categoria: null, classificado_em: null, movimentacao_id: null })
+      .eq("movimentacao_id", id);
     await supabase.from("movimentacao_itens").delete().eq("movimentacao_id", id);
     await supabase.from("movimentacoes").delete().eq("id", id);
     await registrarLog({ acao: "excluiu", tabela: "movimentacoes", registroId: id });
