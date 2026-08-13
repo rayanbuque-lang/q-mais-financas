@@ -221,20 +221,42 @@ async function processarBaixasAutomaticas(
   const saidas = lancamentosNovos.filter((l) => l.valor < 0 && l.status === "nao_classificado");
   if (saidas.length === 0) return { baixados: 0, ambiguos: 0, duplicatas: 0, mesFechado: 0, idsBaixados, idsAmbiguos, idsDuplicatas };
 
-  // .limit(2000) por precaução -- mesma classe de problema já corrigida antes
-  // neste projeto (commit 693a921): PostgREST tem teto padrão de linhas.
-  const { data: contasRelevantes } = await supabase
-    .from("contas_pagar")
-    .select("id, fornecedor, valor, categoria_id, status")
-    .in("status", ["pendente", "pago"])
-    .limit(2000);
-  if (!contasRelevantes || contasRelevantes.length === 0) {
-    await Promise.all([limparCandidatasObsoletas(saidas, new Set<number>()), limparDuplicatasObsoletas(saidas, new Set<number>())]);
+  // Consultas separadas (não uma só com .in) -- contas pendentes e pagas têm
+  // volumes muito diferentes (pagas crescem ~300/mês, pendentes ficam baixas
+  // sempre), uma única consulta com limite compartilhado arriscava pendentes
+  // recentes ficarem de fora quando pagas passassem do teto sozinhas.
+  // .limit(2000) em cada uma por precaução -- mesma classe de problema já
+  // corrigida antes neste projeto (commit 693a921). A busca de pagas é
+  // recortada aos últimos ~12 meses -- conta paga muito antiga não é
+  // candidata realista de duplicata, e isso mantém a consulta pequena.
+  const dataMinimaPagas = new Date();
+  dataMinimaPagas.setFullYear(dataMinimaPagas.getFullYear() - 1);
+  const dataMinimaPagasIso = dataMinimaPagas.toISOString().slice(0, 10);
+
+  const [{ data: pendentesRaw, error: erroPendentes }, { data: pagasRaw, error: erroPagas }] = await Promise.all([
+    supabase.from("contas_pagar").select("id, fornecedor, valor, categoria_id").eq("status", "pendente").limit(2000),
+    supabase
+      .from("contas_pagar")
+      .select("id, fornecedor, valor, categoria_id, data_pagamento")
+      .eq("status", "pago")
+      .gte("data_pagamento", dataMinimaPagasIso)
+      .limit(2000),
+  ]);
+  // Erro de consulta não pode virar "zero contas": isso limparia sinalizações
+  // existentes e liberaria lançamentos que na verdade não foram checados
+  // contra nada -- uma falha passageira de rede não pode se transformar na
+  // duplicação que esta função existe pra evitar. Retorna sem tocar nas
+  // funções de limpeza, deixando tudo como estava.
+  if (erroPendentes || erroPagas) {
     return { baixados: 0, ambiguos: 0, duplicatas: 0, mesFechado: 0, idsBaixados, idsAmbiguos, idsDuplicatas };
   }
 
-  const pendentes = contasRelevantes.filter((c) => c.status === "pendente");
-  const pagas = contasRelevantes.filter((c) => c.status === "pago");
+  const pendentes = pendentesRaw ?? [];
+  const pagas = pagasRaw ?? [];
+  if (pendentes.length === 0 && pagas.length === 0) {
+    await Promise.all([limparCandidatasObsoletas(saidas, new Set<number>()), limparDuplicatasObsoletas(saidas, new Set<number>())]);
+    return { baixados: 0, ambiguos: 0, duplicatas: 0, mesFechado: 0, idsBaixados, idsAmbiguos, idsDuplicatas };
+  }
 
   const { data: categoriasSaidaTodas } = await supabase.from("categorias_saida").select("id, nome");
   const nomeCategoriaPorId = new Map((categoriasSaidaTodas ?? []).map((c) => [c.id as string, c.nome as string]));
@@ -243,6 +265,7 @@ async function processarBaixasAutomaticas(
     indice,
     valor: Math.abs(Number(l.valor)),
     descricaoNormalizada: l.descricao_normalizada,
+    data: l.data_lancamento,
   }));
   const contasPendentes: ContaPagarPendente[] = pendentes.map((c) => ({
     id: c.id as string,
@@ -253,6 +276,7 @@ async function processarBaixasAutomaticas(
     id: c.id as string,
     fornecedor: c.fornecedor as string,
     valor: Number(c.valor),
+    dataPagamento: c.data_pagamento as string | null,
   }));
 
   const resultado = calcularBaixasAutomaticas(candidatos, contasPendentes, contasPagas);
