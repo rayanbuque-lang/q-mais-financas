@@ -1063,6 +1063,7 @@ export default function ExtratoPage() {
         classificado_em: new Date().toISOString(),
         classificado_por: user?.id ?? null,
         regra_id: null,
+        contas_pagar_duplicatas: null,
       })
       .eq("id", lancamento.id)
       .eq("status", "nao_classificado")
@@ -1212,7 +1213,10 @@ export default function ExtratoPage() {
   async function handleIgnorar(lancamento: Lancamento) {
     setAcaoLancamentoId(lancamento.id);
     setMensagem(null);
-    const { error } = await supabase.from("extrato_lancamento").update({ status: "ignorado" }).eq("id", lancamento.id);
+    const { error } = await supabase
+      .from("extrato_lancamento")
+      .update({ status: "ignorado", contas_pagar_duplicatas: null })
+      .eq("id", lancamento.id);
     setAcaoLancamentoId(null);
     if (error) {
       setMensagem({ tipo: "erro", texto: "Erro ao ignorar lançamento: " + error.message });
