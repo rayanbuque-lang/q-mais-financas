@@ -333,6 +333,24 @@ export default function MovimentacoesPage() {
 
   async function excluirMov(id: string) {
     if (!confirm("Excluir?")) return;
+
+    // Se essa movimentação veio de uma baixa automática de contas a pagar
+    // (Capacidade B), ela tem conta_pagar_id preenchido -- desfaz a baixa
+    // (volta a conta pra pendente e reabre o lançamento do extrato) ANTES de
+    // excluir, senão a conta fica "paga" pra sempre sem nenhuma movimentação
+    // por trás dela. Nesse fluxo o extrato_lancamento nunca ganha
+    // movimentacao_id, só conta_pagar_id, então o reset abaixo (por
+    // movimentacao_id) não alcançaria essas linhas. Nenhuma linha é afetada
+    // se conta_pagar_id for nulo (movimentação manual ou da Capacidade A).
+    const { data: movAtual } = await supabase.from("movimentacoes").select("conta_pagar_id").eq("id", id).single();
+    if (movAtual?.conta_pagar_id) {
+      await supabase.from("contas_pagar").update({ status: "pendente", data_pagamento: null }).eq("id", movAtual.conta_pagar_id);
+      await supabase
+        .from("extrato_lancamento")
+        .update({ status: "nao_classificado", categoria: null, classificado_em: null, conta_pagar_id: null })
+        .eq("conta_pagar_id", movAtual.conta_pagar_id);
+    }
+
     // Reseta o lançamento do extrato ANTES de excluir a movimentação.
     // extrato_lancamento_movimentacao_id_fkey não tem ON DELETE SET NULL/CASCADE
     // (confdeltype = 'a', NO ACTION) -- excluir a movimentação enquanto o
