@@ -9,12 +9,18 @@ export interface ContaPagarPendente {
   id: string;
   fornecedor: string;
   valor: number;
+  // Só relevante no pool de contas já pagas -- usado como critério de
+  // desempate quando o nome do fornecedor não aparece no texto do banco
+  // (ex.: fornecedor cadastrado "Receita Federal", banco só escreve
+  // "PAGAMENTO DARF"). No pool de pendentes, sempre undefined/null, ignorado.
+  dataPagamento?: string | null;
 }
 
 export interface CandidatoBaixa {
   indice: number;
   valor: number; // valor absoluto (positivo) do lançamento de saída
   descricaoNormalizada: string;
+  data: string; // yyyy-mm-dd, data_lancamento -- usado no fallback por data+valor
 }
 
 export interface ResultadoBaixa {
@@ -47,6 +53,16 @@ function contaCasaComCandidato(conta: ContaPagarPendente, candidato: CandidatoBa
   return candidato.descricaoNormalizada.includes(fornecedorNormalizado);
 }
 
+// Fallback só usado pro balde de duplicatas quando nenhuma conta paga bate
+// por nome -- cobre contas cujo fornecedor cadastrado não aparece no texto
+// do banco (DARF, FGTS, IPTU confirmados com dado real). Nunca usado pro
+// balde de baixa automática (pendentes): dar baixa sozinho sempre exige nome.
+function contaCasaPorDataValor(conta: ContaPagarPendente, candidato: CandidatoBaixa): boolean {
+  if (conta.valor !== candidato.valor) return false;
+  if (!conta.dataPagamento) return false;
+  return conta.dataPagamento === candidato.data;
+}
+
 export function calcularBaixasAutomaticas(
   candidatos: CandidatoBaixa[],
   contasPendentes: ContaPagarPendente[],
@@ -67,9 +83,15 @@ export function calcularBaixasAutomaticas(
       continue;
     }
 
-    // Nenhuma pendente bateu -- só então procura entre as já pagas. Dar baixa
-    // continua tendo prioridade sobre sinalizar duplicata.
-    const casadasPagas = contasPagas.filter((conta) => contaCasaComCandidato(conta, candidato));
+    // Nenhuma pendente bateu -- só então procura entre as já pagas. Primeiro
+    // por nome (mesmo critério de sempre); se nada bater por nome, tenta
+    // valor + mesma data de pagamento -- cobre contas cujo fornecedor
+    // cadastrado não aparece no texto do banco. Só serve pra sinalizar,
+    // nunca decide baixa sozinho, então o critério mais solto é seguro aqui.
+    let casadasPagas = contasPagas.filter((conta) => contaCasaComCandidato(conta, candidato));
+    if (casadasPagas.length === 0) {
+      casadasPagas = contasPagas.filter((conta) => contaCasaPorDataValor(conta, candidato));
+    }
     if (casadasPagas.length > 0) {
       duplicatas.push({ indice: candidato.indice, candidatosIds: casadasPagas.map((c) => c.id) });
     }
