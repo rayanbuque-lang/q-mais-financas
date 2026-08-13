@@ -323,8 +323,11 @@ interface LancamentoParaMovimentacao {
 // "ok" lançou; "mes_fechado" recusou de propósito (mesma proteção da
 // Capacidade B); "nao_lancado" cobre os dois casos silenciosos -- padrão de
 // boleto, ou categoria sem correspondência real -- nenhum dos dois é erro,
-// o lançamento simplesmente continua só classificado no staging.
-type ResultadoLancamentoDireto = "ok" | "mes_fechado" | "nao_lancado";
+// o lançamento simplesmente continua só classificado no staging; "falhou"
+// cobre erro real de escrita (insert/update deram erro, ou a proteção contra
+// corrida em 2b abaixo detectou que o lançamento já tinha sido processado) --
+// isso NÃO é silencioso, tem que ser contado separado dos outros três.
+type ResultadoLancamentoDireto = "ok" | "mes_fechado" | "falhou" | "nao_lancado";
 
 async function carregarMapasCategoria(): Promise<{ entrada: Map<string, string>; saida: Map<string, string> }> {
   const supabase = createClient();
@@ -347,7 +350,9 @@ async function lancarMovimentacaoDireta(
   mapaCategoriaEntrada: Map<string, string>,
   mapaCategoriaSaida: Map<string, string>
 ): Promise<ResultadoLancamentoDireto> {
-  if (lancamento.valor < 0 && ehPagamentoDeBoleto(lancamento.descricao_normalizada)) return "nao_lancado";
+  // Incondicional -- boleto é domínio exclusivo da Capacidade B mesmo quando o
+  // valor não é negativo (ex.: estorno de um pagamento de boleto).
+  if (ehPagamentoDeBoleto(lancamento.descricao_normalizada)) return "nao_lancado";
 
   const tipo = calcularTipoMovimentacao(lancamento.valor);
   const mapa = tipo === "entrada" ? mapaCategoriaEntrada : mapaCategoriaSaida;
@@ -371,13 +376,28 @@ async function lancarMovimentacaoDireta(
     })
     .select("id")
     .single();
-  if (erroInsert || !movimentacaoInserida) return "nao_lancado";
+  if (erroInsert || !movimentacaoInserida) return "falhou";
 
-  const { error: erroLancamento } = await supabase
+  // Defesa em profundidade: mesmo que handleClassificarManual já feche a
+  // corrida na origem (update condicional a status="nao_classificado" antes
+  // de chegar aqui), o update final também é condicional a movimentacao_id
+  // ainda estar nulo -- se 0 linhas mudaram, este lançamento já foi
+  // processado por outra chamada, e a movimentação que acabamos de inserir
+  // ficaria órfã (sem vínculo) se tratássemos isso como sucesso silencioso.
+  const { data: linhasAtualizadas, error: erroLancamento } = await supabase
     .from("extrato_lancamento")
     .update({ movimentacao_id: movimentacaoInserida.id })
-    .eq("id", lancamento.id);
-  if (erroLancamento) return "nao_lancado";
+    .eq("id", lancamento.id)
+    .is("movimentacao_id", null)
+    .select("id");
+  if (erroLancamento || !linhasAtualizadas || linhasAtualizadas.length === 0) return "falhou";
+
+  await registrarLog({
+    acao: "criou",
+    tabela: "movimentacoes",
+    registroId: movimentacaoInserida.id,
+    detalhes: `${categoriaNome} - ${formatarMoeda(Math.abs(Number(lancamento.valor)))} lançado direto a partir do extrato (${lancamento.descricao_normalizada})`,
+  });
 
   return "ok";
 }
@@ -387,14 +407,15 @@ async function lancarMovimentacaoDireta(
 async function processarLancamentosDiretos(
   candidatos: LancamentoParaBaixa[],
   resultadosRegra: ResultadoClassificacao[]
-): Promise<{ lancados: number; mesFechado: number }> {
-  if (resultadosRegra.length === 0) return { lancados: 0, mesFechado: 0 };
+): Promise<{ lancados: number; mesFechado: number; falharam: number }> {
+  if (resultadosRegra.length === 0) return { lancados: 0, mesFechado: 0, falharam: 0 };
 
   const { entrada, saida } = await carregarMapasCategoria();
   const porId = new Map(candidatos.map((c) => [c.id, c]));
 
   let lancados = 0;
   let mesFechado = 0;
+  let falharam = 0;
   for (const r of resultadosRegra) {
     const lancamento = porId.get(r.lancamentoId);
     if (!lancamento) continue;
@@ -406,8 +427,9 @@ async function processarLancamentosDiretos(
     );
     if (resultado === "ok") lancados++;
     else if (resultado === "mes_fechado") mesFechado++;
+    else if (resultado === "falhou") falharam++;
   }
-  return { lancados, mesFechado };
+  return { lancados, mesFechado, falharam };
 }
 
 export default function ExtratoPage() {
@@ -425,7 +447,7 @@ export default function ExtratoPage() {
   const [contaImportId, setContaImportId] = useState("");
   const [arquivo, setArquivo] = useState<File | null>(null);
   const [importando, setImportando] = useState(false);
-  const [resumoImportacao, setResumoImportacao] = useState<{ lidas: number; novas: number; duplicadas: number; cobertos: number; baixados: number; ambiguos: number; mesFechado: number; movimentacoesLancadas: number; movimentacoesMesFechado: number; avisos: string[] } | null>(null);
+  const [resumoImportacao, setResumoImportacao] = useState<{ lidas: number; novas: number; duplicadas: number; cobertos: number; baixados: number; ambiguos: number; mesFechado: number; movimentacoesLancadas: number; movimentacoesMesFechado: number; movimentacoesFalharam: number; avisos: string[] } | null>(null);
   const [mostrarNovaConta, setMostrarNovaConta] = useState(false);
   const [novaContaBanco, setNovaContaBanco] = useState("santander");
   const [novaContaApelido, setNovaContaApelido] = useState("");
@@ -435,7 +457,7 @@ export default function ExtratoPage() {
   const inputArquivoRef = useRef<HTMLInputElement>(null);
   const [arquivoPix, setArquivoPix] = useState<File | null>(null);
   const [importandoPix, setImportandoPix] = useState(false);
-  const [resumoImportacaoPix, setResumoImportacaoPix] = useState<{ lidas: number; novas: number; duplicadas: number; movimentacoesLancadas: number; movimentacoesMesFechado: number; avisos: string[] } | null>(null);
+  const [resumoImportacaoPix, setResumoImportacaoPix] = useState<{ lidas: number; novas: number; duplicadas: number; movimentacoesLancadas: number; movimentacoesMesFechado: number; movimentacoesFalharam: number; avisos: string[] } | null>(null);
   const inputArquivoPixRef = useRef<HTMLInputElement>(null);
 
   // Lançamentos
@@ -650,6 +672,7 @@ export default function ExtratoPage() {
       if (qtd > 0) partes.push(`${qtd} classificado(s) por regra`);
       if (lancamentosDiretos.lancados > 0) partes.push(`${lancamentosDiretos.lancados} lançado(s) em movimentações`);
       if (lancamentosDiretos.mesFechado > 0) partes.push(`${lancamentosDiretos.mesFechado} não lançado(s) em movimentações: mês contábil fechado`);
+      if (lancamentosDiretos.falharam > 0) partes.push(`${lancamentosDiretos.falharam} erro(s) ao lançar em movimentações`);
 
       setMensagem({
         tipo: "sucesso",
@@ -823,7 +846,7 @@ export default function ExtratoPage() {
       }
 
       let classificadosAuto = 0;
-      let lancamentosDiretos = { lancados: 0, mesFechado: 0 };
+      let lancamentosDiretos = { lancados: 0, mesFechado: 0, falharam: 0 };
       if (inseridos && inseridos.length > 0) {
         const paraClassificar = (inseridos as LancamentoParaBaixa[]).filter((l) => !baixasAuto.idsBaixados.has(l.id) && !baixasAuto.idsAmbiguos.has(l.id));
         if (paraClassificar.length > 0) {
@@ -833,7 +856,7 @@ export default function ExtratoPage() {
         }
       }
 
-      setResumoImportacao({ lidas: parsed.transacoes.length, novas, duplicadas, cobertos, baixados: baixasAuto.baixados, ambiguos: baixasAuto.ambiguos, mesFechado: baixasAuto.mesFechado, movimentacoesLancadas: lancamentosDiretos.lancados, movimentacoesMesFechado: lancamentosDiretos.mesFechado, avisos: parsed.avisos });
+      setResumoImportacao({ lidas: parsed.transacoes.length, novas, duplicadas, cobertos, baixados: baixasAuto.baixados, ambiguos: baixasAuto.ambiguos, mesFechado: baixasAuto.mesFechado, movimentacoesLancadas: lancamentosDiretos.lancados, movimentacoesMesFechado: lancamentosDiretos.mesFechado, movimentacoesFalharam: lancamentosDiretos.falharam, avisos: parsed.avisos });
       setMensagem({
         tipo: "sucesso",
         texto:
@@ -844,7 +867,8 @@ export default function ExtratoPage() {
           (baixasAuto.mesFechado > 0 ? ` · ${baixasAuto.mesFechado} não baixada(s): mês contábil fechado` : "") +
           (classificadosAuto > 0 ? ` · ${classificadosAuto} classificada(s) automaticamente` : "") +
           (lancamentosDiretos.lancados > 0 ? ` · ${lancamentosDiretos.lancados} lançada(s) em movimentações` : "") +
-          (lancamentosDiretos.mesFechado > 0 ? ` · ${lancamentosDiretos.mesFechado} não lançada(s): mês contábil fechado` : ""),
+          (lancamentosDiretos.mesFechado > 0 ? ` · ${lancamentosDiretos.mesFechado} não lançada(s): mês contábil fechado` : "") +
+          (lancamentosDiretos.falharam > 0 ? ` · ${lancamentosDiretos.falharam} erro(s) ao lançar em movimentações` : ""),
       });
       setArquivo(null);
       if (inputArquivoRef.current) inputArquivoRef.current.value = "";
@@ -921,21 +945,22 @@ export default function ExtratoPage() {
       if (erroImportacao) throw new Error(erroImportacao.message);
 
       let classificadosAuto = 0;
-      let lancamentosDiretosPix = { lancados: 0, mesFechado: 0 };
+      let lancamentosDiretosPix = { lancados: 0, mesFechado: 0, falharam: 0 };
       if (inseridos && inseridos.length > 0) {
         const resultadosRegra = await classificarPorRegras(inseridos as LancamentoClassificavel[]);
         classificadosAuto = resultadosRegra.length;
         lancamentosDiretosPix = await processarLancamentosDiretos(inseridos as LancamentoParaBaixa[], resultadosRegra);
       }
 
-      setResumoImportacaoPix({ lidas: linhas.length, novas, duplicadas, movimentacoesLancadas: lancamentosDiretosPix.lancados, movimentacoesMesFechado: lancamentosDiretosPix.mesFechado, avisos: parsed.avisos });
+      setResumoImportacaoPix({ lidas: linhas.length, novas, duplicadas, movimentacoesLancadas: lancamentosDiretosPix.lancados, movimentacoesMesFechado: lancamentosDiretosPix.mesFechado, movimentacoesFalharam: lancamentosDiretosPix.falharam, avisos: parsed.avisos });
       setMensagem({
         tipo: "sucesso",
         texto:
           `${linhas.length} lidas · ${novas} novas · ${duplicadas} já existentes` +
           (classificadosAuto > 0 ? ` · ${classificadosAuto} classificada(s) automaticamente` : "") +
           (lancamentosDiretosPix.lancados > 0 ? ` · ${lancamentosDiretosPix.lancados} lançada(s) em movimentações` : "") +
-          (lancamentosDiretosPix.mesFechado > 0 ? ` · ${lancamentosDiretosPix.mesFechado} não lançada(s): mês contábil fechado` : ""),
+          (lancamentosDiretosPix.mesFechado > 0 ? ` · ${lancamentosDiretosPix.mesFechado} não lançada(s): mês contábil fechado` : "") +
+          (lancamentosDiretosPix.falharam > 0 ? ` · ${lancamentosDiretosPix.falharam} erro(s) ao lançar em movimentações` : ""),
       });
       setArquivoPix(null);
       if (inputArquivoPixRef.current) inputArquivoPixRef.current.value = "";
@@ -955,7 +980,12 @@ export default function ExtratoPage() {
     setAcaoLancamentoId(lancamento.id);
     setMensagem(null);
     const { data: { user } } = await supabase.auth.getUser();
-    const { error } = await supabase
+    // Condicional a status ainda ser "nao_classificado" -- fecha a corrida na
+    // origem: se duas abas tentarem classificar o MESMO lançamento quase ao
+    // mesmo tempo, só a primeira realmente muda uma linha; a segunda vê
+    // linhasAtualizadas vazio e nem chega a chamar lancarMovimentacaoDireta,
+    // evitando duas movimentações reais para o mesmo débito/crédito bancário.
+    const { data: linhasAtualizadas, error } = await supabase
       .from("extrato_lancamento")
       .update({
         categoria: categoria.trim(),
@@ -964,10 +994,17 @@ export default function ExtratoPage() {
         classificado_por: user?.id ?? null,
         regra_id: null,
       })
-      .eq("id", lancamento.id);
+      .eq("id", lancamento.id)
+      .eq("status", "nao_classificado")
+      .select("id");
     setAcaoLancamentoId(null);
     if (error) {
       setMensagem({ tipo: "erro", texto: "Erro ao classificar: " + error.message });
+      return;
+    }
+    if (!linhasAtualizadas || linhasAtualizadas.length === 0) {
+      setMensagem({ tipo: "erro", texto: "Este lançamento já foi classificado (por outra aba ou automaticamente) — atualizando a lista." });
+      await Promise.all([carregarLancamentos(), carregarResumo()]);
       return;
     }
 
@@ -982,6 +1019,11 @@ export default function ExtratoPage() {
       setMensagem({
         tipo: "erro",
         texto: `Classificado, mas não lançado em Movimentações: ${formatarData(lancamento.data_lancamento)} está num mês contábil já fechado.`,
+      });
+    } else if (resultadoLancamento === "falhou") {
+      setMensagem({
+        tipo: "erro",
+        texto: "Classificado, mas houve um erro ao lançar a movimentação. Tente novamente ou lance manualmente.",
       });
     }
 
@@ -1363,6 +1405,11 @@ export default function ExtratoPage() {
                     {resumoImportacao.movimentacoesMesFechado} lançamento(s) classificados mas NÃO lançados em Movimentações: mês contábil já fechado.
                   </p>
                 )}
+                {resumoImportacao.movimentacoesFalharam > 0 && (
+                  <p className="mt-1 font-semibold text-red-700">
+                    {resumoImportacao.movimentacoesFalharam} lançamento(s) classificados mas com ERRO ao lançar em Movimentações — reprocesse ou lance manualmente.
+                  </p>
+                )}
                 {resumoImportacao.avisos.length > 0 && (
                   <ul className="mt-2 list-disc list-inside text-amber-700">
                     {resumoImportacao.avisos.map((a, i) => (
@@ -1417,6 +1464,11 @@ export default function ExtratoPage() {
                 {resumoImportacaoPix.movimentacoesMesFechado > 0 && (
                   <p className="mt-1 font-semibold text-amber-700">
                     {resumoImportacaoPix.movimentacoesMesFechado} lançamento(s) classificados mas NÃO lançados em Movimentações: mês contábil já fechado.
+                  </p>
+                )}
+                {resumoImportacaoPix.movimentacoesFalharam > 0 && (
+                  <p className="mt-1 font-semibold text-red-700">
+                    {resumoImportacaoPix.movimentacoesFalharam} lançamento(s) classificados mas com ERRO ao lançar em Movimentações — reprocesse ou lance manualmente.
                   </p>
                 )}
                 {resumoImportacaoPix.avisos.length > 0 && (
