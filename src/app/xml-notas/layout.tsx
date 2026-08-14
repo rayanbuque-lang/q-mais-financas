@@ -45,8 +45,8 @@ export default function XmlNotasLayout({ children }: { children: React.ReactNode
       <header className="border-b border-[var(--color-border)] bg-[var(--color-surface)] px-4 sm:px-8 py-3 flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-3">
           <Logo />
-          <span className="text-[10px] font-semibold px-2 py-1 rounded-full bg-amber-100 text-amber-700 border border-amber-200 whitespace-nowrap">
-            🧪 Área experimental — dados de staging
+          <span className="text-[10px] font-semibold px-2 py-1 rounded-full bg-red-50 text-red-700 border border-red-200 whitespace-nowrap">
+            ⚠️ Lançar em Contas a Pagar grava em produção
           </span>
         </div>
         <a

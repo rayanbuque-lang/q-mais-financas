@@ -53,6 +53,22 @@ function formatarChave(chave: string) {
   return chave.replace(/(\d{4})(?=\d)/g, "$1 ");
 }
 
+// Identifica a parcela que falhou de um jeito que o usuário reconheça na tela.
+function descreverParcela(nota: Nota, duplicata: Duplicata) {
+  return `${nota.fornecedor_nome ?? "(sem fornecedor)"} · NF-e ${nota.numero_nota ?? "?"} · parcela ${duplicata.numero ?? "(sem número)"}`;
+}
+
+// dVenc é opcional na NF-e, mas contas_pagar.data_vencimento é NOT NULL: o
+// INSERT dessa parcela vai falhar sempre, e a mensagem crua do Postgres
+// ("null value in column ... violates not-null constraint") não diz nada pra
+// quem trabalha no financeiro. Traduz esse caso; o resto passa direto.
+function explicarFalhaLancamento(duplicata: Duplicata, erro: string | undefined) {
+  if (duplicata.vencimento === null) {
+    return "esta parcela não tem data de vencimento no XML — lance manualmente em Contas a Pagar.";
+  }
+  return erro ?? "erro desconhecido.";
+}
+
 const MAX_ARQUIVOS_TAMANHO = 10 * 1024 * 1024; // 10 MB por arquivo
 
 export default function XmlNotasPage() {
@@ -79,6 +95,7 @@ export default function XmlNotasPage() {
   const [notaExpandidaId, setNotaExpandidaId] = useState<string | null>(null);
 
   const [lancando, setLancando] = useState(false);
+  const [errosLancamento, setErrosLancamento] = useState<string[]>([]);
   const [resolvendoSuspeita, setResolvendoSuspeita] = useState<{
     duplicata: Duplicata;
     nota: Nota;
@@ -343,7 +360,7 @@ export default function XmlNotasPage() {
     duplicata: Duplicata,
     regrasParaMatch: RegraFornecedor[],
     statusEsperado: string
-  ): Promise<"criada" | "corrida_perdida" | "falhou"> {
+  ): Promise<{ resultado: "criada" | "corrida_perdida" | "falhou"; erro?: string }> {
     const categoriaId = encontrarCategoriaPorFornecedor(nota.fornecedor_nome ?? "", regrasParaMatch);
 
     const { data: contaCriada, error: erroConta } = await supabase
@@ -359,7 +376,9 @@ export default function XmlNotasPage() {
       })
       .select("id")
       .single();
-    if (erroConta || !contaCriada) return "falhou";
+    if (erroConta || !contaCriada) {
+      return { resultado: "falhou", erro: erroConta?.message ?? "não foi possível criar a conta a pagar." };
+    }
 
     const { data: linhasAtualizadas, error: erroVinculo } = await supabase
       .from("xml_duplicata")
@@ -381,7 +400,7 @@ export default function XmlNotasPage() {
           detalhes: `Falha ao desfazer conta a pagar órfã (${erroVinculo ? "erro ao vincular: " + erroVinculo.message : "perdeu corrida de vínculo"} com xml_duplicata ${duplicata.id}): ${erroExclusao.message}`,
         });
       }
-      return erroVinculo ? "falhou" : "corrida_perdida";
+      return erroVinculo ? { resultado: "falhou", erro: erroVinculo.message } : { resultado: "corrida_perdida" };
     }
 
     await registrarLog({
@@ -390,13 +409,14 @@ export default function XmlNotasPage() {
       registroId: contaCriada.id,
       detalhes: `${nota.fornecedor_nome ?? "?"} - ${formatarMoeda(duplicata.valor)} gerado a partir do XML da NF-e ${nota.numero_nota ?? "?"}`,
     });
-    return "criada";
+    return { resultado: "criada" };
   }
 
   async function handleLancarContasPagar() {
     if (!podeEscrever) return;
     setLancando(true);
     setMensagem(null);
+    setErrosLancamento([]);
 
     try {
       const candidatas: { duplicata: Duplicata; nota: Nota }[] = [];
@@ -436,6 +456,7 @@ export default function XmlNotasPage() {
       let criadas = 0;
       let suspeitas = 0;
       let falharam = 0;
+      const detalhesFalhas: string[] = [];
 
       for (const { duplicata, nota } of candidatas) {
         try {
@@ -452,11 +473,18 @@ export default function XmlNotasPage() {
             continue;
           }
 
-          const resultado = await criarContaPagarDeDuplicata(nota, duplicata, regrasAtivas, "candidata");
-          if (resultado === "criada") criadas++;
-          else falharam++;
-        } catch {
+          const { resultado, erro } = await criarContaPagarDeDuplicata(nota, duplicata, regrasAtivas, "candidata");
+          if (resultado === "criada") {
+            criadas++;
+          } else {
+            falharam++;
+            if (resultado === "falhou") {
+              detalhesFalhas.push(`${descreverParcela(nota, duplicata)}: ${explicarFalhaLancamento(duplicata, erro)}`);
+            }
+          }
+        } catch (e) {
           falharam++;
+          detalhesFalhas.push(`${descreverParcela(nota, duplicata)}: ${e instanceof Error ? e.message : "erro inesperado."}`);
         }
       }
 
@@ -466,6 +494,7 @@ export default function XmlNotasPage() {
       if (semBoleto > 0) partes.push(`${semBoleto} nota(s) sem boleto no XML (lançar manualmente)`);
       if (falharam > 0) partes.push(`${falharam} erro(s) ao lançar`);
 
+      setErrosLancamento(detalhesFalhas);
       setMensagem({
         tipo: falharam > 0 ? "erro" : "sucesso",
         texto: partes.length > 0 ? partes.join(" · ") : "Nada pendente pra lançar.",
@@ -504,7 +533,7 @@ export default function XmlNotasPage() {
     // marcaria como suspeita antes de qualquer insert (livelock).
     // regrasFornecedor traz ativas e inativas; encontrarCategoriaPorFornecedor
     // já ignora as inativas internamente.
-    const resultado = await criarContaPagarDeDuplicata(nota, duplicata, regrasFornecedor, "duplicata_suspeita");
+    const { resultado, erro } = await criarContaPagarDeDuplicata(nota, duplicata, regrasFornecedor, "duplicata_suspeita");
     setResolvendoAcao(false);
     if (resultado !== "criada") {
       setMensagem({
@@ -512,7 +541,7 @@ export default function XmlNotasPage() {
         texto:
           resultado === "corrida_perdida"
             ? "Esta parcela já foi resolvida em outra aba. Recarregando a lista."
-            : "Erro ao lançar a conta a pagar desta parcela.",
+            : `Erro ao lançar ${descreverParcela(nota, duplicata)}: ${explicarFalhaLancamento(duplicata, erro)}`,
       });
       setResolvendoSuspeita(null);
       await carregarNotas();
@@ -644,6 +673,17 @@ export default function XmlNotasPage() {
                 {lancando && <span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />}
                 {lancando ? "Lançando..." : "Lançar em Contas a Pagar"}
               </button>
+
+              {errosLancamento.length > 0 && (
+                <div className="mt-3 p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-800 max-w-2xl">
+                  <p className="font-semibold mb-1">Parcelas que não foram lançadas:</p>
+                  <ul className="list-disc list-inside space-y-0.5">
+                    {errosLancamento.map((e, i) => (
+                      <li key={i}>{e}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           )}
           {carregandoNotas ? (
@@ -727,7 +767,14 @@ export default function XmlNotasPage() {
                                       <td className="py-0.5">{formatarData(d.vencimento)}</td>
                                       <td className="py-0.5 text-right">{formatarMoeda(d.valor)}</td>
                                       <td className="py-0.5 pl-3">
-                                        {d.status === "lancada" ? (
+                                        {d.status === "lancada" && d.conta_pagar_id === null ? (
+                                          <span
+                                            className="px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 border border-gray-200 text-[10px]"
+                                            title="A conta a pagar vinculada foi excluída depois"
+                                          >
+                                            lançada — conta excluída
+                                          </span>
+                                        ) : d.status === "lancada" ? (
                                           <span className="px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px]">lançada</span>
                                         ) : d.status === "duplicata_suspeita" ? (
                                           <button
