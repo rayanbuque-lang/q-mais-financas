@@ -23,6 +23,7 @@ const menuItems = [
   { label: "Dashboard", href: "/dashboard", icon: "📊", modulo: "dashboard" },
   { label: "Metas e Orçamento", href: "/metas", icon: "🎯", modulo: "metas" },
   { label: "Painel do CEO", href: "/painel-ceo", icon: "👔", modulo: "painel-ceo", masterOnly: true },
+  { label: "Extrato Bancário", href: "/extrato", icon: "🏧", modulo: "extrato" },
   { label: "Movimentações", href: "/movimentacoes", icon: "💰", modulo: "movimentacoes" },
   { label: "Captura por Foto", href: "/captura", icon: "📸", modulo: "captura" },
   { label: "Recorrentes", href: "/recorrentes", icon: "🔁", modulo: "recorrentes" },
