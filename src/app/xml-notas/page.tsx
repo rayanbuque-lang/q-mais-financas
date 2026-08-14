@@ -5,6 +5,8 @@ import { createClient } from "@/lib/supabase/client";
 import { parseNFe, decodificarXml, NFeParseError, type NFeParseResult } from "@/lib/xml-nfe";
 import { extrairArquivosZip, ZipParseError } from "@/lib/zip";
 import EmptyState from "@/components/empty-state";
+import { registrarLog } from "@/lib/audit";
+import type { RegraFornecedor } from "@/lib/xml-regra-fornecedor";
 
 interface Duplicata {
   id: string;
@@ -57,7 +59,7 @@ export default function XmlNotasPage() {
   const [role, setRole] = useState<string | null>(null);
   const podeEscrever = role === "master" || role === "funcionario";
 
-  const [aba, setAba] = useState<"importar" | "notas">("importar");
+  const [aba, setAba] = useState<"importar" | "notas" | "regras">("importar");
   const [mensagem, setMensagem] = useState<Mensagem>(null);
 
   const [importando, setImportando] = useState(false);
@@ -74,6 +76,13 @@ export default function XmlNotasPage() {
   const [carregandoNotas, setCarregandoNotas] = useState(false);
   const [notaExpandidaId, setNotaExpandidaId] = useState<string | null>(null);
 
+  const [categoriasSaida, setCategoriasSaida] = useState<{ id: string; nome: string }[]>([]);
+  const [regrasFornecedor, setRegrasFornecedor] = useState<RegraFornecedor[]>([]);
+  const [carregandoRegras, setCarregandoRegras] = useState(false);
+  const [editandoRegraId, setEditandoRegraId] = useState<string | null>(null);
+  const [formRegraFornecedor, setFormRegraFornecedor] = useState({ fornecedor_padrao: "", categoria_id: "" });
+  const [salvandoRegra, setSalvandoRegra] = useState(false);
+
   async function carregarNotas() {
     setCarregandoNotas(true);
     const { data, error } = await supabase
@@ -86,6 +95,88 @@ export default function XmlNotasPage() {
     setCarregandoNotas(false);
   }
 
+  async function carregarCategoriasSaida() {
+    const { data, error } = await supabase.from("categorias_saida").select("id, nome").eq("ativo", true).order("nome");
+    if (!error && data) setCategoriasSaida(data as { id: string; nome: string }[]);
+    else if (error) setMensagem({ tipo: "erro", texto: "Erro ao carregar categorias: " + error.message });
+  }
+
+  async function carregarRegrasFornecedor() {
+    setCarregandoRegras(true);
+    const { data, error } = await supabase
+      .from("xml_regra_fornecedor")
+      .select("id, fornecedor_padrao, categoria_id, ativa")
+      .order("fornecedor_padrao");
+    if (!error && data) setRegrasFornecedor(data as RegraFornecedor[]);
+    else if (error) setMensagem({ tipo: "erro", texto: "Erro ao carregar regras: " + error.message });
+    setCarregandoRegras(false);
+  }
+
+  function iniciarNovaRegra() {
+    setEditandoRegraId(null);
+    setFormRegraFornecedor({ fornecedor_padrao: "", categoria_id: "" });
+  }
+
+  function iniciarEdicaoRegra(r: RegraFornecedor) {
+    setEditandoRegraId(r.id);
+    setFormRegraFornecedor({ fornecedor_padrao: r.fornecedor_padrao, categoria_id: r.categoria_id });
+  }
+
+  async function handleSalvarRegraFornecedor() {
+    if (!formRegraFornecedor.fornecedor_padrao.trim() || !formRegraFornecedor.categoria_id) {
+      setMensagem({ tipo: "erro", texto: "Informe o fornecedor padrão e a categoria." });
+      return;
+    }
+    setSalvandoRegra(true);
+    const payload = {
+      fornecedor_padrao: formRegraFornecedor.fornecedor_padrao.trim(),
+      categoria_id: formRegraFornecedor.categoria_id,
+    };
+    const { error } = editandoRegraId
+      ? await supabase.from("xml_regra_fornecedor").update(payload).eq("id", editandoRegraId)
+      : await supabase.from("xml_regra_fornecedor").insert({ ...payload, ativa: true });
+    setSalvandoRegra(false);
+    if (error) {
+      setMensagem({ tipo: "erro", texto: "Erro ao salvar regra: " + error.message });
+      return;
+    }
+    await registrarLog({
+      acao: editandoRegraId ? "editou" : "criou",
+      tabela: "xml_regra_fornecedor",
+      registroId: editandoRegraId ?? undefined,
+      detalhes: payload.fornecedor_padrao,
+    });
+    setMensagem({ tipo: "sucesso", texto: editandoRegraId ? "Regra atualizada." : "Regra criada." });
+    iniciarNovaRegra();
+    await carregarRegrasFornecedor();
+  }
+
+  async function handleAlternarAtivaRegra(r: RegraFornecedor) {
+    const { error } = await supabase.from("xml_regra_fornecedor").update({ ativa: !r.ativa }).eq("id", r.id);
+    if (error) {
+      setMensagem({ tipo: "erro", texto: "Erro ao atualizar regra: " + error.message });
+      return;
+    }
+    await registrarLog({
+      acao: "editou",
+      tabela: "xml_regra_fornecedor",
+      registroId: r.id,
+      detalhes: `${r.fornecedor_padrao} -> ${!r.ativa ? "ativada" : "desativada"}`,
+    });
+    await carregarRegrasFornecedor();
+  }
+
+  async function handleExcluirRegraFornecedor(r: RegraFornecedor) {
+    if (!confirm(`Excluir a regra de fornecedor "${r.fornecedor_padrao}"?`)) return;
+    const { error } = await supabase.from("xml_regra_fornecedor").delete().eq("id", r.id);
+    if (error) {
+      setMensagem({ tipo: "erro", texto: "Erro ao excluir regra: " + error.message });
+      return;
+    }
+    await registrarLog({ acao: "excluiu", tabela: "xml_regra_fornecedor", registroId: r.id, detalhes: r.fornecedor_padrao });
+    await carregarRegrasFornecedor();
+  }
+
   useEffect(() => {
     (async () => {
       const { data: { user } } = await supabase.auth.getUser();
@@ -95,6 +186,8 @@ export default function XmlNotasPage() {
       }
     })();
     carregarNotas();
+    carregarCategoriasSaida();
+    carregarRegrasFornecedor();
   }, []);
 
   // Por arquivo, não pro lote inteiro: um .zip corrompido não pode derrubar os
@@ -255,6 +348,7 @@ export default function XmlNotasPage() {
         {[
           { id: "importar", label: "📥 Importar" },
           { id: "notas", label: "📄 Notas" },
+          { id: "regras", label: "🔧 Regras" },
         ].map((t) => (
           <button
             key={t.id}
@@ -413,6 +507,106 @@ export default function XmlNotasPage() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {aba === "regras" && (
+        <div className="grid md:grid-cols-2 gap-6">
+          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-x-auto">
+            {carregandoRegras ? (
+              <div className="skeleton h-40 rounded-xl m-4" />
+            ) : regrasFornecedor.length === 0 ? (
+              <EmptyState variant="search" title="Nenhuma regra cadastrada" description="Crie uma regra pra categorizar automaticamente." compact />
+            ) : (
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-[var(--color-border)] text-left text-[var(--color-text-muted)]">
+                    <th className="px-3 py-2.5 font-semibold">Fornecedor padrão</th>
+                    <th className="px-3 py-2.5 font-semibold">Categoria</th>
+                    <th className="px-3 py-2.5 font-semibold text-center">Ativa</th>
+                    <th className="px-3 py-2.5 font-semibold"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {regrasFornecedor.map((r) => (
+                    <tr key={r.id} className="border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--hover-bg)]">
+                      <td className="px-3 py-2.5">{r.fornecedor_padrao}</td>
+                      <td className="px-3 py-2.5">{categoriasSaida.find((c) => c.id === r.categoria_id)?.nome ?? "—"}</td>
+                      <td className="px-3 py-2.5 text-center">
+                        <button
+                          type="button"
+                          disabled={!podeEscrever}
+                          onClick={() => handleAlternarAtivaRegra(r)}
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border disabled:opacity-50 ${
+                            r.ativa ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-gray-100 text-gray-500 border-gray-200"
+                          }`}
+                        >
+                          {r.ativa ? "Ativa" : "Inativa"}
+                        </button>
+                      </td>
+                      <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                        {podeEscrever && (
+                          <>
+                            <button type="button" onClick={() => iniciarEdicaoRegra(r)} className="text-blue-600 hover:underline text-[11px] font-medium mr-2">
+                              Editar
+                            </button>
+                            <button type="button" onClick={() => handleExcluirRegraFornecedor(r)} className="text-red-500 hover:underline text-[11px] font-medium">
+                              Excluir
+                            </button>
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          {podeEscrever && (
+            <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-6 h-fit">
+              <h3 className="font-semibold text-sm mb-3">{editandoRegraId ? "Editar regra" : "Nova regra"}</h3>
+
+              <label className="block text-xs font-semibold mb-1 text-[var(--color-text-muted)]">Fornecedor padrão</label>
+              <input
+                type="text"
+                value={formRegraFornecedor.fornecedor_padrao}
+                onChange={(e) => setFormRegraFornecedor((f) => ({ ...f, fornecedor_padrao: e.target.value }))}
+                placeholder="Ex.: Severini"
+                className="w-full px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-sm mb-3"
+              />
+
+              <label className="block text-xs font-semibold mb-1 text-[var(--color-text-muted)]">Categoria</label>
+              <select
+                value={formRegraFornecedor.categoria_id}
+                onChange={(e) => setFormRegraFornecedor((f) => ({ ...f, categoria_id: e.target.value }))}
+                className="w-full px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-sm mb-4"
+              >
+                <option value="">selecione...</option>
+                {categoriasSaida.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.nome}
+                  </option>
+                ))}
+              </select>
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={handleSalvarRegraFornecedor}
+                  disabled={salvandoRegra}
+                  className="flex-1 px-4 py-2.5 rounded-xl bg-emerald-500 text-white text-sm font-semibold disabled:opacity-50"
+                >
+                  {salvandoRegra ? "Salvando..." : editandoRegraId ? "Salvar edição" : "Criar regra"}
+                </button>
+                {editandoRegraId && (
+                  <button type="button" onClick={iniciarNovaRegra} className="px-4 py-2.5 rounded-xl border border-[var(--color-border)] text-sm font-semibold">
+                    Cancelar
+                  </button>
+                )}
+              </div>
             </div>
           )}
         </div>
