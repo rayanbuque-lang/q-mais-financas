@@ -117,14 +117,28 @@ async function baixarContaPagar(
   lancamento: { id: string; data_lancamento: string },
   conta: { id: string; fornecedor: string; valor: number; categoria_id: string | null },
   categoriaNome: string,
-  origem: "automatica" | "manual"
+  origem: "automatica" | "manual",
+  cacheMesFechado?: Map<string, boolean>
 ): Promise<ResultadoEscritaBaixa> {
   const supabase = createClient();
 
   // A movimentação é gravada com a data real do banco (data_lancamento), que
   // pode cair num mês já fechado contabilmente — o resto do sistema bloqueia
   // esse tipo de escrita, a baixa automática também tem que bloquear.
-  const { fechado } = await verificarMesFechado(lancamento.data_lancamento);
+  //
+  // O resultado de verificarMesFechado só varia por yyyy-mm, não por
+  // lançamento: num lote (processarBaixasAutomaticas) memoiza pra não repetir
+  // a mesma consulta a cada baixa. Chamada avulsa (resolução manual de
+  // ambíguo, cadastro de conta a pagar) não passa cache e consulta direto.
+  // Mesmo padrão de lancarMovimentacaoDireta.
+  const chaveMes = lancamento.data_lancamento.slice(0, 7);
+  let fechado: boolean;
+  if (cacheMesFechado?.has(chaveMes)) {
+    fechado = cacheMesFechado.get(chaveMes)!;
+  } else {
+    fechado = (await verificarMesFechado(lancamento.data_lancamento)).fechado;
+    cacheMesFechado?.set(chaveMes, fechado);
+  }
   if (fechado) return "mes_fechado";
 
   // 1) Claim do lançamento: só vence quem encontrar conta_pagar_id ainda nulo.
@@ -169,16 +183,20 @@ async function baixarContaPagar(
 
   // 3) Movimentação. Erro aqui não pode virar sucesso silencioso: em lote o
   // resumo diria "N baixados" contando uma saída que nunca foi lançada.
-  const { error: erroMovimentacao } = await supabase.from("movimentacoes").insert({
-    tipo: "saida",
-    data: lancamento.data_lancamento,
-    valor: conta.valor,
-    categoria_id: conta.categoria_id,
-    observacao: `Pagamento: ${conta.fornecedor}`,
-    revisar: false,
-    conta_pagar_id: conta.id,
-  });
-  if (erroMovimentacao) return "falhou";
+  const { data: movimentacaoInserida, error: erroMovimentacao } = await supabase
+    .from("movimentacoes")
+    .insert({
+      tipo: "saida",
+      data: lancamento.data_lancamento,
+      valor: conta.valor,
+      categoria_id: conta.categoria_id,
+      observacao: `Pagamento: ${conta.fornecedor}`,
+      revisar: false,
+      conta_pagar_id: conta.id,
+    })
+    .select("id")
+    .single();
+  if (erroMovimentacao || !movimentacaoInserida) return "falhou";
 
   // 4) Finaliza a classificação do lançamento (o vínculo já foi gravado no
   // passo 1). Resolução manual é decisão humana: carimba classificado_por,
@@ -206,6 +224,15 @@ async function baixarContaPagar(
     registroId: conta.id,
     detalhes: `${conta.fornecedor} - ${origem === "manual" ? "baixa manual (ambiguidade resolvida) via extrato" : "baixa automática via extrato"}`,
   });
+  // A movimentação em si também precisa de trilha própria: sem isso, a saída
+  // criada aqui é a única escrita em `movimentacoes` do sistema sem log
+  // correspondente (lancarMovimentacaoDireta já registra a dela).
+  await registrarLog({
+    acao: "criou",
+    tabela: "movimentacoes",
+    registroId: movimentacaoInserida.id as string,
+    detalhes: `${categoriaNome} - ${formatarMoeda(conta.valor)} - pagamento de ${conta.fornecedor} (${origem === "manual" ? "baixa manual" : "baixa automática"} via extrato)`,
+  });
   return "ok";
 }
 
@@ -213,13 +240,13 @@ async function baixarContaPagar(
 // reprocessamento). Nunca decide um empate sozinho -- ver calcularBaixasAutomaticas.
 async function processarBaixasAutomaticas(
   lancamentosNovos: LancamentoParaBaixa[]
-): Promise<{ baixados: number; ambiguos: number; duplicatas: number; mesFechado: number; idsBaixados: Set<string>; idsAmbiguos: Set<string>; idsDuplicatas: Set<string> }> {
+): Promise<{ baixados: number; ambiguos: number; duplicatas: number; mesFechado: number; falharam: number; idsBaixados: Set<string>; idsAmbiguos: Set<string>; idsDuplicatas: Set<string> }> {
   const supabase = createClient();
   const idsBaixados = new Set<string>();
   const idsAmbiguos = new Set<string>();
   const idsDuplicatas = new Set<string>();
   const saidas = lancamentosNovos.filter((l) => l.valor < 0 && l.status === "nao_classificado");
-  if (saidas.length === 0) return { baixados: 0, ambiguos: 0, duplicatas: 0, mesFechado: 0, idsBaixados, idsAmbiguos, idsDuplicatas };
+  if (saidas.length === 0) return { baixados: 0, ambiguos: 0, duplicatas: 0, mesFechado: 0, falharam: 0, idsBaixados, idsAmbiguos, idsDuplicatas };
 
   // Consultas separadas (não uma só com .in) -- contas pendentes e pagas têm
   // volumes muito diferentes (pagas crescem ~400/mês medidos em produção,
@@ -253,14 +280,14 @@ async function processarBaixasAutomaticas(
   // duplicação que esta função existe pra evitar. Retorna sem tocar nas
   // funções de limpeza, deixando tudo como estava.
   if (erroPendentes || erroPagas) {
-    return { baixados: 0, ambiguos: 0, duplicatas: 0, mesFechado: 0, idsBaixados, idsAmbiguos, idsDuplicatas };
+    return { baixados: 0, ambiguos: 0, duplicatas: 0, mesFechado: 0, falharam: 0, idsBaixados, idsAmbiguos, idsDuplicatas };
   }
 
   const pendentes = pendentesRaw ?? [];
   const pagas = pagasRaw ?? [];
   if (pendentes.length === 0 && pagas.length === 0) {
     await Promise.all([limparCandidatasObsoletas(saidas, new Set<number>()), limparDuplicatasObsoletas(saidas, new Set<number>())]);
-    return { baixados: 0, ambiguos: 0, duplicatas: 0, mesFechado: 0, idsBaixados, idsAmbiguos, idsDuplicatas };
+    return { baixados: 0, ambiguos: 0, duplicatas: 0, mesFechado: 0, falharam: 0, idsBaixados, idsAmbiguos, idsDuplicatas };
   }
 
   const { data: categoriasSaidaTodas } = await supabase.from("categorias_saida").select("id, nome");
@@ -289,6 +316,10 @@ async function processarBaixasAutomaticas(
 
   let baixados = 0;
   let mesFechado = 0;
+  let falharam = 0;
+  // Um lote inteiro tende a cair no mesmo mês (ou em poucos meses) -- evita
+  // repetir a mesma consulta verificarMesFechado a cada baixa.
+  const cacheMesFechado = new Map<string, boolean>();
   for (const b of resultado.baixados) {
     const lancamento = saidas[b.indice];
     const conta = pendentesPorId.get(b.contaPagarId);
@@ -299,29 +330,56 @@ async function processarBaixasAutomaticas(
       { id: lancamento.id, data_lancamento: lancamento.data_lancamento },
       { id: conta.id as string, fornecedor: conta.fornecedor as string, valor: Number(conta.valor), categoria_id: categoriaId },
       categoriaNome,
-      "automatica"
+      "automatica",
+      cacheMesFechado
     );
     if (resultadoEscrita === "ok") {
       idsBaixados.add(lancamento.id);
       baixados++;
     } else if (resultadoEscrita === "mes_fechado") {
       mesFechado++;
+    } else if (resultadoEscrita === "falhou") {
+      // Erro real de escrita (ou corrida perdida): não pode sumir do resumo --
+      // sem contador o usuário vê "N baixados" e nunca fica sabendo dos que
+      // ficaram para trás.
+      falharam++;
     }
   }
 
+  // Só conta como sinalizado o que realmente foi gravado: se o update falhar,
+  // o campo continua vazio no banco e "N ambíguo(s) (revisar)" mandaria o
+  // usuário procurar um botão que não existe. O erro entra em `falharam`, que
+  // já aparece no resumo.
+  //
+  // O id CONTINUA em idsAmbiguos/idsDuplicatas de propósito, mesmo sem
+  // gravação: isso só o mantém fora da classificação por regras desta rodada,
+  // preservando status="nao_classificado" — é o que permite a próxima
+  // execução (import ou "Reprocessar regras") tentar sinalizar de novo. Sem
+  // isso, uma regra poderia classificar o lançamento e até lançar uma
+  // movimentação agora, deixando as contas a pagar candidatas pendentes: a
+  // conta em dobro que esta função existe pra evitar, e sem volta, porque
+  // classificado nunca mais volta pro pool da baixa automática.
   let ambiguos = 0;
   for (const a of resultado.ambiguos) {
     const lancamento = saidas[a.indice];
-    await supabase.from("extrato_lancamento").update({ contas_pagar_candidatas: a.candidatosIds }).eq("id", lancamento.id);
+    const { error } = await supabase.from("extrato_lancamento").update({ contas_pagar_candidatas: a.candidatosIds }).eq("id", lancamento.id);
     idsAmbiguos.add(lancamento.id);
+    if (error) {
+      falharam++;
+      continue;
+    }
     ambiguos++;
   }
 
   let duplicatas = 0;
   for (const d of resultado.duplicatas) {
     const lancamento = saidas[d.indice];
-    await supabase.from("extrato_lancamento").update({ contas_pagar_duplicatas: d.candidatosIds }).eq("id", lancamento.id);
+    const { error } = await supabase.from("extrato_lancamento").update({ contas_pagar_duplicatas: d.candidatosIds }).eq("id", lancamento.id);
     idsDuplicatas.add(lancamento.id);
+    if (error) {
+      falharam++;
+      continue;
+    }
     duplicatas++;
   }
 
@@ -335,7 +393,7 @@ async function processarBaixasAutomaticas(
     limparDuplicatasObsoletas(saidas, indicesComDuplicata),
   ]);
 
-  return { baixados, ambiguos, duplicatas, mesFechado, idsBaixados, idsAmbiguos, idsDuplicatas };
+  return { baixados, ambiguos, duplicatas, mesFechado, falharam, idsBaixados, idsAmbiguos, idsDuplicatas };
 }
 
 // Um lançamento que já ficou ambíguo carrega contas_pagar_candidatas até
@@ -420,13 +478,24 @@ interface LancamentoParaMovimentacao {
 // cobre erro real de escrita (insert/update deram erro, ou a proteção contra
 // corrida em 2b abaixo detectou que o lançamento já tinha sido processado) --
 // isso NÃO é silencioso, tem que ser contado separado dos outros três.
-type ResultadoLancamentoDireto = "ok" | "mes_fechado" | "falhou" | "nao_lancado";
+// "categoria_sinal_incompativel": a categoria existe, mas só do lado oposto do
+// sinal (ex.: uma regra de entrada apontando para uma categoria que só existe
+// em categorias_saida). Diferente de "nao_lancado", isso é erro de cadastro/
+// regra e precisa aparecer para o usuário.
+type ResultadoLancamentoDireto = "ok" | "mes_fechado" | "falhou" | "nao_lancado" | "categoria_sinal_incompativel";
 
+// Só categorias ATIVAS entram nos mapas: existem nomes duplicados em produção
+// (uma ativa e uma inativa com o mesmo nome, ex. "Encargos RH" em
+// categorias_saida e "Rendimentos" em categorias_entrada) e, sem filtro, o
+// Map poderia ficar com o id da INATIVA -- a movimentação nasceria com uma
+// categoria que some dos filtros da tela de Movimentações. Se só existir a
+// versão inativa daquele nome, o lançamento cai em "nao_lancado", exatamente
+// como já acontece quando nenhuma categoria corresponde.
 async function carregarMapasCategoria(): Promise<{ entrada: Map<string, string>; saida: Map<string, string> }> {
   const supabase = createClient();
   const [{ data: catsEntrada }, { data: catsSaida }] = await Promise.all([
-    supabase.from("categorias_entrada").select("id, nome"),
-    supabase.from("categorias_saida").select("id, nome"),
+    supabase.from("categorias_entrada").select("id, nome").eq("ativo", true),
+    supabase.from("categorias_saida").select("id, nome").eq("ativo", true),
   ]);
   return {
     entrada: new Map((catsEntrada ?? []).map((c) => [c.nome as string, c.id as string])),
@@ -451,7 +520,15 @@ async function lancarMovimentacaoDireta(
   const tipo = calcularTipoMovimentacao(lancamento.valor);
   const mapa = tipo === "entrada" ? mapaCategoriaEntrada : mapaCategoriaSaida;
   const categoriaId = mapa.get(categoriaNome);
-  if (!categoriaId) return "nao_lancado";
+  if (!categoriaId) {
+    // Categoria existe, só que do lado oposto (ex.: categoria de entrada
+    // usada por engano numa saída) -- isso não é silencioso como "não achei
+    // categoria nenhuma", é um problema de cadastro/regra que precisa de
+    // atenção humana.
+    const mapaOposto = tipo === "entrada" ? mapaCategoriaSaida : mapaCategoriaEntrada;
+    if (mapaOposto.has(categoriaNome)) return "categoria_sinal_incompativel";
+    return "nao_lancado";
+  }
 
   const supabase = createClient();
 
@@ -537,8 +614,8 @@ async function lancarMovimentacaoDireta(
 async function processarLancamentosDiretos(
   candidatos: LancamentoParaBaixa[],
   resultadosRegra: ResultadoClassificacao[]
-): Promise<{ lancados: number; mesFechado: number; falharam: number }> {
-  if (resultadosRegra.length === 0) return { lancados: 0, mesFechado: 0, falharam: 0 };
+): Promise<{ lancados: number; mesFechado: number; falharam: number; sinalIncompativel: number }> {
+  if (resultadosRegra.length === 0) return { lancados: 0, mesFechado: 0, falharam: 0, sinalIncompativel: 0 };
 
   const { entrada, saida } = await carregarMapasCategoria();
   const porId = new Map(candidatos.map((c) => [c.id, c]));
@@ -550,6 +627,7 @@ async function processarLancamentosDiretos(
   let lancados = 0;
   let mesFechado = 0;
   let falharam = 0;
+  let sinalIncompativel = 0;
   for (const r of resultadosRegra) {
     const lancamento = porId.get(r.lancamentoId);
     if (!lancamento) continue;
@@ -563,8 +641,9 @@ async function processarLancamentosDiretos(
     if (resultado === "ok") lancados++;
     else if (resultado === "mes_fechado") mesFechado++;
     else if (resultado === "falhou") falharam++;
+    else if (resultado === "categoria_sinal_incompativel") sinalIncompativel++;
   }
-  return { lancados, mesFechado, falharam };
+  return { lancados, mesFechado, falharam, sinalIncompativel };
 }
 
 export default function ExtratoPage() {
@@ -582,7 +661,7 @@ export default function ExtratoPage() {
   const [contaImportId, setContaImportId] = useState("");
   const [arquivo, setArquivo] = useState<File | null>(null);
   const [importando, setImportando] = useState(false);
-  const [resumoImportacao, setResumoImportacao] = useState<{ lidas: number; novas: number; duplicadas: number; cobertos: number; baixados: number; ambiguos: number; duplicatas: number; mesFechado: number; movimentacoesLancadas: number; movimentacoesMesFechado: number; movimentacoesFalharam: number; avisos: string[] } | null>(null);
+  const [resumoImportacao, setResumoImportacao] = useState<{ lidas: number; novas: number; duplicadas: number; cobertos: number; baixados: number; ambiguos: number; duplicatas: number; mesFechado: number; baixasFalharam: number; movimentacoesLancadas: number; movimentacoesMesFechado: number; movimentacoesFalharam: number; movimentacoesSinalIncompativel: number; avisos: string[] } | null>(null);
   const [mostrarNovaConta, setMostrarNovaConta] = useState(false);
   const [novaContaBanco, setNovaContaBanco] = useState("santander");
   const [novaContaApelido, setNovaContaApelido] = useState("");
@@ -592,7 +671,7 @@ export default function ExtratoPage() {
   const inputArquivoRef = useRef<HTMLInputElement>(null);
   const [arquivoPix, setArquivoPix] = useState<File | null>(null);
   const [importandoPix, setImportandoPix] = useState(false);
-  const [resumoImportacaoPix, setResumoImportacaoPix] = useState<{ lidas: number; novas: number; duplicadas: number; movimentacoesLancadas: number; movimentacoesMesFechado: number; movimentacoesFalharam: number; avisos: string[] } | null>(null);
+  const [resumoImportacaoPix, setResumoImportacaoPix] = useState<{ lidas: number; novas: number; duplicadas: number; movimentacoesLancadas: number; movimentacoesMesFechado: number; movimentacoesFalharam: number; movimentacoesSinalIncompativel: number; avisos: string[] } | null>(null);
   const inputArquivoPixRef = useRef<HTMLInputElement>(null);
 
   // Lançamentos
@@ -656,6 +735,7 @@ export default function ExtratoPage() {
   async function carregarContas() {
     const { data, error } = await supabase.from("extrato_conta").select("*").order("banco").order("apelido");
     if (!error && data) setContas(data as Conta[]);
+    else if (error) setMensagem({ tipo: "erro", texto: "Erro ao carregar as contas bancárias: " + error.message });
   }
 
   async function carregarCategoriasReais() {
@@ -695,6 +775,7 @@ export default function ExtratoPage() {
     if (ocultarRevisados) query = query.eq("revisado", false);
     const { data, error } = await query;
     if (!error && data) setLancamentos(data as Lancamento[]);
+    else if (error) setMensagem({ tipo: "erro", texto: "Erro ao carregar os lançamentos: " + error.message });
     setCarregandoLancamentos(false);
   }
 
@@ -737,6 +818,7 @@ export default function ExtratoPage() {
     setCarregandoRegras(true);
     const { data, error } = await supabase.from("extrato_regra").select("*").order("prioridade", { ascending: true }).order("criada_em", { ascending: true });
     if (!error && data) setRegras(data as Regra[]);
+    else if (error) setMensagem({ tipo: "erro", texto: "Erro ao carregar as regras: " + error.message });
     setCarregandoRegras(false);
   }
 
@@ -826,10 +908,12 @@ export default function ExtratoPage() {
       if (baixasAuto.ambiguos > 0) partes.push(`${baixasAuto.ambiguos} ambíguo(s) (revisar)`);
       if (baixasAuto.duplicatas > 0) partes.push(`${baixasAuto.duplicatas} sinalizado(s) como provável duplicata (revisar)`);
       if (baixasAuto.mesFechado > 0) partes.push(`${baixasAuto.mesFechado} não baixado(s): mês contábil fechado`);
+      if (baixasAuto.falharam > 0) partes.push(`${baixasAuto.falharam} erro(s) na baixa automática (baixa ou sinalização não gravada) — revisar manualmente`);
       if (qtd > 0) partes.push(`${qtd} classificado(s) por regra`);
       if (lancamentosDiretos.lancados > 0) partes.push(`${lancamentosDiretos.lancados} lançado(s) em movimentações`);
       if (lancamentosDiretos.mesFechado > 0) partes.push(`${lancamentosDiretos.mesFechado} não lançado(s) em movimentações: mês contábil fechado`);
       if (lancamentosDiretos.falharam > 0) partes.push(`${lancamentosDiretos.falharam} erro(s) ao lançar em movimentações`);
+      if (lancamentosDiretos.sinalIncompativel > 0) partes.push(`${lancamentosDiretos.sinalIncompativel} lançamento(s) com categoria de sinal incompatível (entrada/saída) — revisar a regra`);
 
       setMensagem({
         tipo: "sucesso",
@@ -902,6 +986,22 @@ export default function ExtratoPage() {
       const bytes = new Uint8Array(await arquivo.arrayBuffer());
       const texto = decodificarOfx(bytes, arquivo.name);
       const parsed = parseOfx(texto, arquivo.name);
+
+      // Confere se o arquivo é mesmo da conta escolhida no dropdown. É só um
+      // AVISO, nunca bloqueio: o número no OFX (<ACCTID>) costuma vir com
+      // dígito verificador/zeros à esquerda diferentes do que foi digitado no
+      // cadastro, e travar o import por diferença de formatação seria pior do
+      // que o problema. A comparação ignora tudo que não for dígito
+      // justamente pra não alarmar por causa de "-"/"." no meio.
+      const avisos = [...parsed.avisos];
+      const contaSelecionada = contas.find((c) => c.id === contaImportId);
+      const numeroCadastrado = (contaSelecionada?.conta ?? "").replace(/\D/g, "");
+      const numeroArquivo = (parsed.conta.acctId ?? "").replace(/\D/g, "");
+      if (numeroCadastrado && numeroArquivo && numeroCadastrado !== numeroArquivo) {
+        avisos.push(
+          `Atenção: o arquivo é da conta ${parsed.conta.acctId}, mas a conta selecionada é ${contaSelecionada?.conta}. Confira se escolheu a conta certa — os lançamentos foram importados assim mesmo.`
+        );
+      }
 
       const { data: { user } } = await supabase.auth.getUser();
 
@@ -985,25 +1085,36 @@ export default function ExtratoPage() {
       const novas = inseridos?.length ?? 0;
       const duplicadas = linhas.length - novas;
 
-      const { error: erroImportacao } = await supabase.from("extrato_importacao").insert({
-        conta_id: contaImportId,
-        nome_arquivo: arquivo.name,
-        periodo_inicio: parsed.conta.periodoInicio,
-        periodo_fim: parsed.conta.periodoFim,
-        qtd_linhas: parsed.transacoes.length,
-        qtd_novas: novas,
-        qtd_duplicadas: duplicadas,
-        importado_por: user?.id ?? null,
-      });
+      const { data: importacaoCriada, error: erroImportacao } = await supabase
+        .from("extrato_importacao")
+        .insert({
+          conta_id: contaImportId,
+          nome_arquivo: arquivo.name,
+          periodo_inicio: parsed.conta.periodoInicio,
+          periodo_fim: parsed.conta.periodoFim,
+          qtd_linhas: parsed.transacoes.length,
+          qtd_novas: novas,
+          qtd_duplicadas: duplicadas,
+          importado_por: user?.id ?? null,
+        })
+        .select("id")
+        .single();
       if (erroImportacao) throw new Error(erroImportacao.message);
 
-      let baixasAuto = { baixados: 0, ambiguos: 0, duplicatas: 0, mesFechado: 0, idsBaixados: new Set<string>(), idsAmbiguos: new Set<string>(), idsDuplicatas: new Set<string>() };
+      await registrarLog({
+        acao: "importou",
+        tabela: "extrato_importacao",
+        registroId: (importacaoCriada?.id as string) ?? undefined,
+        detalhes: `${arquivo.name} - ${novas} novo(s), ${duplicadas} já existente(s)`,
+      });
+
+      let baixasAuto = { baixados: 0, ambiguos: 0, duplicatas: 0, mesFechado: 0, falharam: 0, idsBaixados: new Set<string>(), idsAmbiguos: new Set<string>(), idsDuplicatas: new Set<string>() };
       if (inseridos && inseridos.length > 0) {
         baixasAuto = await processarBaixasAutomaticas(inseridos as LancamentoParaBaixa[]);
       }
 
       let classificadosAuto = 0;
-      let lancamentosDiretos = { lancados: 0, mesFechado: 0, falharam: 0 };
+      let lancamentosDiretos = { lancados: 0, mesFechado: 0, falharam: 0, sinalIncompativel: 0 };
       if (inseridos && inseridos.length > 0) {
         const paraClassificar = (inseridos as LancamentoParaBaixa[]).filter(
           (l) => !baixasAuto.idsBaixados.has(l.id) && !baixasAuto.idsAmbiguos.has(l.id) && !baixasAuto.idsDuplicatas.has(l.id)
@@ -1015,7 +1126,7 @@ export default function ExtratoPage() {
         }
       }
 
-      setResumoImportacao({ lidas: parsed.transacoes.length, novas, duplicadas, cobertos, baixados: baixasAuto.baixados, ambiguos: baixasAuto.ambiguos, duplicatas: baixasAuto.duplicatas, mesFechado: baixasAuto.mesFechado, movimentacoesLancadas: lancamentosDiretos.lancados, movimentacoesMesFechado: lancamentosDiretos.mesFechado, movimentacoesFalharam: lancamentosDiretos.falharam, avisos: parsed.avisos });
+      setResumoImportacao({ lidas: parsed.transacoes.length, novas, duplicadas, cobertos, baixados: baixasAuto.baixados, ambiguos: baixasAuto.ambiguos, duplicatas: baixasAuto.duplicatas, mesFechado: baixasAuto.mesFechado, baixasFalharam: baixasAuto.falharam, movimentacoesLancadas: lancamentosDiretos.lancados, movimentacoesMesFechado: lancamentosDiretos.mesFechado, movimentacoesFalharam: lancamentosDiretos.falharam, movimentacoesSinalIncompativel: lancamentosDiretos.sinalIncompativel, avisos });
       setMensagem({
         tipo: "sucesso",
         texto:
@@ -1025,10 +1136,12 @@ export default function ExtratoPage() {
           (baixasAuto.ambiguos > 0 ? ` · ${baixasAuto.ambiguos} ambígua(s) (revisar)` : "") +
           (baixasAuto.duplicatas > 0 ? ` · ${baixasAuto.duplicatas} provável(is) duplicata(s) (revisar)` : "") +
           (baixasAuto.mesFechado > 0 ? ` · ${baixasAuto.mesFechado} não baixada(s): mês contábil fechado` : "") +
+          (baixasAuto.falharam > 0 ? ` · ${baixasAuto.falharam} erro(s) na baixa automática (baixa ou sinalização não gravada) — revisar manualmente` : "") +
           (classificadosAuto > 0 ? ` · ${classificadosAuto} classificada(s) automaticamente` : "") +
           (lancamentosDiretos.lancados > 0 ? ` · ${lancamentosDiretos.lancados} lançada(s) em movimentações` : "") +
           (lancamentosDiretos.mesFechado > 0 ? ` · ${lancamentosDiretos.mesFechado} não lançada(s): mês contábil fechado` : "") +
-          (lancamentosDiretos.falharam > 0 ? ` · ${lancamentosDiretos.falharam} erro(s) ao lançar em movimentações` : ""),
+          (lancamentosDiretos.falharam > 0 ? ` · ${lancamentosDiretos.falharam} erro(s) ao lançar em movimentações` : "") +
+          (lancamentosDiretos.sinalIncompativel > 0 ? ` · ${lancamentosDiretos.sinalIncompativel} com categoria de sinal incompatível (entrada/saída) — revisar a regra` : ""),
       });
       setArquivo(null);
       if (inputArquivoRef.current) inputArquivoRef.current.value = "";
@@ -1092,27 +1205,38 @@ export default function ExtratoPage() {
       const duplicadas = linhas.length - novas;
 
       const datas = parsed.linhas.map((l) => l.data);
-      const { error: erroImportacao } = await supabase.from("extrato_importacao").insert({
-        conta_id: contaImportId,
-        nome_arquivo: arquivoPix.name,
-        periodo_inicio: datas.length > 0 ? datas.reduce((min, d) => (d < min ? d : min)) : null,
-        periodo_fim: datas.length > 0 ? datas.reduce((max, d) => (d > max ? d : max)) : null,
-        qtd_linhas: linhas.length,
-        qtd_novas: novas,
-        qtd_duplicadas: duplicadas,
-        importado_por: user?.id ?? null,
-      });
+      const { data: importacaoCriada, error: erroImportacao } = await supabase
+        .from("extrato_importacao")
+        .insert({
+          conta_id: contaImportId,
+          nome_arquivo: arquivoPix.name,
+          periodo_inicio: datas.length > 0 ? datas.reduce((min, d) => (d < min ? d : min)) : null,
+          periodo_fim: datas.length > 0 ? datas.reduce((max, d) => (d > max ? d : max)) : null,
+          qtd_linhas: linhas.length,
+          qtd_novas: novas,
+          qtd_duplicadas: duplicadas,
+          importado_por: user?.id ?? null,
+        })
+        .select("id")
+        .single();
       if (erroImportacao) throw new Error(erroImportacao.message);
 
+      await registrarLog({
+        acao: "importou",
+        tabela: "extrato_importacao",
+        registroId: (importacaoCriada?.id as string) ?? undefined,
+        detalhes: `${arquivoPix.name} - ${novas} novo(s), ${duplicadas} já existente(s)`,
+      });
+
       let classificadosAuto = 0;
-      let lancamentosDiretosPix = { lancados: 0, mesFechado: 0, falharam: 0 };
+      let lancamentosDiretosPix = { lancados: 0, mesFechado: 0, falharam: 0, sinalIncompativel: 0 };
       if (inseridos && inseridos.length > 0) {
         const resultadosRegra = await classificarPorRegras(inseridos as LancamentoClassificavel[]);
         classificadosAuto = resultadosRegra.length;
         lancamentosDiretosPix = await processarLancamentosDiretos(inseridos as LancamentoParaBaixa[], resultadosRegra);
       }
 
-      setResumoImportacaoPix({ lidas: linhas.length, novas, duplicadas, movimentacoesLancadas: lancamentosDiretosPix.lancados, movimentacoesMesFechado: lancamentosDiretosPix.mesFechado, movimentacoesFalharam: lancamentosDiretosPix.falharam, avisos: parsed.avisos });
+      setResumoImportacaoPix({ lidas: linhas.length, novas, duplicadas, movimentacoesLancadas: lancamentosDiretosPix.lancados, movimentacoesMesFechado: lancamentosDiretosPix.mesFechado, movimentacoesFalharam: lancamentosDiretosPix.falharam, movimentacoesSinalIncompativel: lancamentosDiretosPix.sinalIncompativel, avisos: parsed.avisos });
       setMensagem({
         tipo: "sucesso",
         texto:
@@ -1120,7 +1244,8 @@ export default function ExtratoPage() {
           (classificadosAuto > 0 ? ` · ${classificadosAuto} classificada(s) automaticamente` : "") +
           (lancamentosDiretosPix.lancados > 0 ? ` · ${lancamentosDiretosPix.lancados} lançada(s) em movimentações` : "") +
           (lancamentosDiretosPix.mesFechado > 0 ? ` · ${lancamentosDiretosPix.mesFechado} não lançada(s): mês contábil fechado` : "") +
-          (lancamentosDiretosPix.falharam > 0 ? ` · ${lancamentosDiretosPix.falharam} erro(s) ao lançar em movimentações` : ""),
+          (lancamentosDiretosPix.falharam > 0 ? ` · ${lancamentosDiretosPix.falharam} erro(s) ao lançar em movimentações` : "") +
+          (lancamentosDiretosPix.sinalIncompativel > 0 ? ` · ${lancamentosDiretosPix.sinalIncompativel} com categoria de sinal incompatível (entrada/saída) — revisar a regra` : ""),
       });
       setArquivoPix(null);
       if (inputArquivoPixRef.current) inputArquivoPixRef.current.value = "";
@@ -1137,6 +1262,14 @@ export default function ExtratoPage() {
 
   async function handleClassificarManual(lancamento: Lancamento, categoria: string) {
     if (!categoria.trim()) return;
+    // Lançamento ambíguo tem 2+ contas a pagar candidatas ainda pendentes.
+    // Classificar por aqui criaria uma movimentação nova e deixaria as contas
+    // candidatas pendentes -- quando uma delas for paga depois, o mesmo débito
+    // aparece duas vezes. A única saída correta é o modal de ambiguidade.
+    if (lancamento.contas_pagar_candidatas?.length) {
+      setMensagem({ tipo: "erro", texto: "Este lançamento está marcado como ambíguo — resolva pelo botão 'Baixa ambígua' antes de classificar manualmente." });
+      return;
+    }
     setAcaoLancamentoId(lancamento.id);
     setMensagem(null);
     const { data: { user } } = await supabase.auth.getUser();
@@ -1185,6 +1318,11 @@ export default function ExtratoPage() {
       setMensagem({
         tipo: "erro",
         texto: "Classificado, mas houve um erro ao lançar a movimentação. Tente novamente ou lance manualmente.",
+      });
+    } else if (resultadoLancamento === "categoria_sinal_incompativel") {
+      setMensagem({
+        tipo: "erro",
+        texto: `Classificado, mas não lançado em Movimentações: a categoria "${categoria.trim()}" só existe do lado oposto (este lançamento é de ${calcularTipoMovimentacao(lancamento.valor) === "entrada" ? "entrada" : "saída"}). Escolha uma categoria de ${calcularTipoMovimentacao(lancamento.valor) === "entrada" ? "entrada" : "saída"} ou cadastre-a.`,
       });
     }
 
@@ -1488,7 +1626,10 @@ export default function ExtratoPage() {
     setMensagem(null);
     const { error } = await supabase
       .from("extrato_lancamento")
-      .update({ status: "ignorado", contas_pagar_duplicatas: null })
+      // Limpa as DUAS sinalizações: um lançamento descartado não tem mais o
+      // que resolver, e deixar contas_pagar_candidatas preenchido mantinha o
+      // botão "Baixa ambígua" vivo em cima de algo já ignorado.
+      .update({ status: "ignorado", contas_pagar_duplicatas: null, contas_pagar_candidatas: null })
       .eq("id", lancamento.id);
     setAcaoLancamentoId(null);
     if (error) {
@@ -1568,8 +1709,29 @@ export default function ExtratoPage() {
       setMensagem({ tipo: "erro", texto: "Preencha nome, padrão e categoria da regra." });
       return;
     }
+    // Faixa invertida nunca casa com nada: a regra seria salva e ficaria
+    // "ativa" para sempre sem jamais classificar um lançamento.
+    if (formRegra.valor_min !== "" && formRegra.valor_max !== "" && Number(formRegra.valor_min) > Number(formRegra.valor_max)) {
+      setMensagem({ tipo: "erro", texto: "Valor mínimo não pode ser maior que o valor máximo." });
+      return;
+    }
+    // Regex inválida só explodiria na hora de aplicar, dentro do motor, sem
+    // nenhum aviso — a regra ficaria salva e falharia em silêncio para sempre.
+    // Valida o padrão JÁ TRIMADO, que é exatamente o que vai pro banco (o trim
+    // pode mudar a validade: "\\ " é válido, "\\" não é).
+    if (formRegra.tipo_match === "regex") {
+      try {
+        new RegExp(formRegra.padrao.trim());
+      } catch {
+        setMensagem({ tipo: "erro", texto: "Padrão de regex inválido — corrija antes de salvar." });
+        return;
+      }
+    }
     setSalvandoRegra(true);
     setMensagem(null);
+    // `|| 100` transformava prioridade 0 (válida, e a mais alta possível) em
+    // 100 — só o NaN de um campo não numérico deve cair no padrão.
+    const prioridadeNum = Number(formRegra.prioridade);
     const payload = {
       nome: formRegra.nome.trim(),
       tipo_match: formRegra.tipo_match,
@@ -1578,7 +1740,7 @@ export default function ExtratoPage() {
       valor_min: formRegra.valor_min !== "" ? Number(formRegra.valor_min) : null,
       valor_max: formRegra.valor_max !== "" ? Number(formRegra.valor_max) : null,
       categoria: formRegra.categoria.trim(),
-      prioridade: Number(formRegra.prioridade) || 100,
+      prioridade: Number.isNaN(prioridadeNum) ? 100 : prioridadeNum,
       ativa: formRegra.ativa,
     };
     const { error } = editandoRegraId
@@ -1589,6 +1751,12 @@ export default function ExtratoPage() {
       setMensagem({ tipo: "erro", texto: "Erro ao salvar regra: " + error.message });
       return;
     }
+    await registrarLog({
+      acao: editandoRegraId ? "editou" : "criou",
+      tabela: "extrato_regra",
+      registroId: editandoRegraId ?? undefined,
+      detalhes: payload.nome,
+    });
     setMensagem({ tipo: "sucesso", texto: editandoRegraId ? "Regra atualizada." : "Regra criada." });
     setFormRegra(REGRA_FORM_INICIAL);
     setEditandoRegraId(null);
@@ -1602,16 +1770,39 @@ export default function ExtratoPage() {
       setMensagem({ tipo: "erro", texto: "Erro ao atualizar regra: " + error.message });
       return;
     }
+    await registrarLog({
+      acao: "editou",
+      tabela: "extrato_regra",
+      registroId: r.id,
+      detalhes: `${r.nome} -> ${!r.ativa ? "ativada" : "desativada"}`,
+    });
     await carregarRegras();
   }
 
   async function handleExcluirRegra(r: Regra) {
-    if (!confirm(`Excluir a regra "${r.nome}"? Lançamentos já classificados por ela não serão alterados.`)) return;
+    // A FK extrato_lancamento.regra_id -> extrato_regra é ON DELETE SET NULL:
+    // excluir a regra ZERA o regra_id de todo lançamento que ela classificou.
+    // O texto antigo ("não serão alterados") era falso; agora o usuário vê
+    // quantos lançamentos perdem a referência antes de confirmar.
+    const { count } = await supabase
+      .from("extrato_lancamento")
+      .select("*", { count: "exact", head: true })
+      .eq("regra_id", r.id);
+    const aviso = count && count > 0
+      ? `Excluir a regra "${r.nome}"? ${count} lançamento(s) já classificado(s) por ela vão perder essa referência (o vínculo com a regra é apagado, a classificação em si permanece).`
+      : `Excluir a regra "${r.nome}"?`;
+    if (!confirm(aviso)) return;
     const { error } = await supabase.from("extrato_regra").delete().eq("id", r.id);
     if (error) {
       setMensagem({ tipo: "erro", texto: "Erro ao excluir regra: " + error.message });
       return;
     }
+    await registrarLog({
+      acao: "excluiu",
+      tabela: "extrato_regra",
+      registroId: r.id,
+      detalhes: `${r.nome} (${count ?? 0} lançamento(s) desvinculado(s))`,
+    });
     await carregarRegras();
   }
 
@@ -1780,6 +1971,12 @@ export default function ExtratoPage() {
                     pagamento cai num mês contábil já fechado. Reabra o mês (ou baixe a conta manualmente) se for o caso.
                   </p>
                 )}
+                {resumoImportacao.baixasFalharam > 0 && (
+                  <p className="mt-1 font-semibold text-red-700">
+                    {resumoImportacao.baixasFalharam} lançamento(s) casaram com uma conta a pagar mas houve ERRO ao gravar (baixa ou sinalização de
+                    ambiguidade/duplicata) — revisar manualmente em Contas a Pagar e reprocessar.
+                  </p>
+                )}
                 {resumoImportacao.movimentacoesLancadas > 0 && (
                   <p className="mt-1 font-semibold">
                     {resumoImportacao.movimentacoesLancadas} lançamento(s) lançados em Movimentações
@@ -1793,6 +1990,12 @@ export default function ExtratoPage() {
                 {resumoImportacao.movimentacoesFalharam > 0 && (
                   <p className="mt-1 font-semibold text-red-700">
                     {resumoImportacao.movimentacoesFalharam} lançamento(s) classificados mas com ERRO ao lançar em Movimentações — reprocesse ou lance manualmente.
+                  </p>
+                )}
+                {resumoImportacao.movimentacoesSinalIncompativel > 0 && (
+                  <p className="mt-1 font-semibold text-red-700">
+                    {resumoImportacao.movimentacoesSinalIncompativel} lançamento(s) com categoria de sinal incompatível (a categoria da regra só existe do lado oposto,
+                    entrada/saída) — revise a regra e reprocesse.
                   </p>
                 )}
                 {resumoImportacao.avisos.length > 0 && (
@@ -1854,6 +2057,12 @@ export default function ExtratoPage() {
                 {resumoImportacaoPix.movimentacoesFalharam > 0 && (
                   <p className="mt-1 font-semibold text-red-700">
                     {resumoImportacaoPix.movimentacoesFalharam} lançamento(s) classificados mas com ERRO ao lançar em Movimentações — reprocesse ou lance manualmente.
+                  </p>
+                )}
+                {resumoImportacaoPix.movimentacoesSinalIncompativel > 0 && (
+                  <p className="mt-1 font-semibold text-red-700">
+                    {resumoImportacaoPix.movimentacoesSinalIncompativel} lançamento(s) com categoria de sinal incompatível (a categoria da regra só existe do lado oposto,
+                    entrada/saída) — revise a regra e reprocesse.
                   </p>
                 )}
                 {resumoImportacaoPix.avisos.length > 0 && (
@@ -2077,6 +2286,12 @@ export default function ExtratoPage() {
                                           </span>
                                         )}
                                       </div>
+                                    ) : l.status === "ignorado" ? (
+                                      // ANTES dos ramos de candidatas/duplicatas: um lançamento
+                                      // ignorado que ainda carregue esses campos (dado antigo,
+                                      // gravado antes de handleIgnorar passar a limpá-los) não pode
+                                      // oferecer botão de resolução -- não há mais nada a resolver.
+                                      <span className="text-[10px] text-[var(--color-text-muted)]">—</span>
                                     ) : podeEscrever && l.contas_pagar_candidatas && l.contas_pagar_candidatas.length > 0 ? (
                                       <button
                                         type="button"
@@ -2095,8 +2310,6 @@ export default function ExtratoPage() {
                                       >
                                         {carregandoDuplicata ? "..." : `Provável duplicata (${l.contas_pagar_duplicatas.length})`}
                                       </button>
-                                    ) : l.status === "ignorado" ? (
-                                      <span className="text-[10px] text-[var(--color-text-muted)]">—</span>
                                     ) : (
                                       <span className="text-[10px] text-amber-600 font-medium">pendente</span>
                                     )}
@@ -2193,7 +2406,15 @@ export default function ExtratoPage() {
           )}
 
           {resolvendoAmbiguo && (
-            <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={fecharResolucaoAmbigua}>
+            <div
+              className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50"
+              onClick={() => {
+                // Não fecha por clique no fundo enquanto uma baixa está em voo:
+                // o modal sumiria antes do resultado e o usuário não veria se
+                // deu certo (nem qual conta foi baixada).
+                if (resolvendoBaixaId === null) fecharResolucaoAmbigua();
+              }}
+            >
               <div className="bg-[var(--color-surface)] rounded-2xl p-5 max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
                 <h3 className="font-semibold text-sm mb-1">Qual conta foi paga?</h3>
                 <p className="text-xs text-[var(--color-text-muted)] mb-3">
@@ -2278,7 +2499,15 @@ export default function ExtratoPage() {
           )}
 
           {cadastrandoContaPagar && (
-            <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={fecharCadastroContaPagar}>
+            <div
+              className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50"
+              onClick={() => {
+                // Mesma trava do modal de ambíguo: enquanto a conta está sendo
+                // cadastrada/baixada, fechar pelo fundo esconderia o resultado
+                // de uma escrita que já está em andamento.
+                if (!salvandoContaPagar && resolvendoBaixaId === null) fecharCadastroContaPagar();
+              }}
+            >
               <div className="bg-[var(--color-surface)] rounded-2xl p-5 max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
                 <h3 className="font-semibold text-sm mb-1">Cadastrar conta a pagar</h3>
                 <p className="text-xs text-[var(--color-text-muted)] mb-3">
