@@ -333,6 +333,66 @@ export default function XmlNotasPage() {
     }
   }
 
+  // Cria a conta a pagar de UMA duplicata e faz o claim-then-write do vínculo.
+  // `statusEsperado` é o status que a duplicata precisa ainda ter na hora de
+  // vincular: "candidata" no fluxo em lote, "duplicata_suspeita" quando o
+  // humano já revisou e mandou lançar mesmo assim -- é o que impede a duplicata
+  // de voltar pro pool de matching automático e ser re-suspeitada pra sempre.
+  async function criarContaPagarDeDuplicata(
+    nota: Nota,
+    duplicata: Duplicata,
+    regrasParaMatch: RegraFornecedor[],
+    statusEsperado: string
+  ): Promise<"criada" | "corrida_perdida" | "falhou"> {
+    const categoriaId = encontrarCategoriaPorFornecedor(nota.fornecedor_nome ?? "", regrasParaMatch);
+
+    const { data: contaCriada, error: erroConta } = await supabase
+      .from("contas_pagar")
+      .insert({
+        fornecedor: nota.fornecedor_nome ?? "(sem nome no XML)",
+        descricao: `NF-e ${nota.numero_nota ?? "?"} - parcela ${duplicata.numero ?? "(sem número)"}`,
+        valor: duplicata.valor,
+        data_vencimento: duplicata.vencimento,
+        status: "pendente",
+        categoria_id: categoriaId,
+        observacao: `Gerado a partir do XML da NF-e (chave ${nota.chave_acesso})`,
+      })
+      .select("id")
+      .single();
+    if (erroConta || !contaCriada) return "falhou";
+
+    const { data: linhasAtualizadas, error: erroVinculo } = await supabase
+      .from("xml_duplicata")
+      .update({ status: "lancada", conta_pagar_id: contaCriada.id })
+      .eq("id", duplicata.id)
+      .eq("status", statusEsperado)
+      .select("id");
+
+    // Erro real de vínculo (rede/timeout/5xx) e corrida perdida caem no MESMO
+    // rollback: nos dois casos a conta acabou de ser criada e ninguém aponta
+    // pra ela -- deixar passar geraria órfã e um segundo lançamento no próximo clique.
+    if (erroVinculo || !linhasAtualizadas || linhasAtualizadas.length === 0) {
+      const { error: erroExclusao } = await supabase.from("contas_pagar").delete().eq("id", contaCriada.id);
+      if (erroExclusao) {
+        await registrarLog({
+          acao: "excluiu",
+          tabela: "contas_pagar",
+          registroId: contaCriada.id,
+          detalhes: `Falha ao desfazer conta a pagar órfã (${erroVinculo ? "erro ao vincular: " + erroVinculo.message : "perdeu corrida de vínculo"} com xml_duplicata ${duplicata.id}): ${erroExclusao.message}`,
+        });
+      }
+      return erroVinculo ? "falhou" : "corrida_perdida";
+    }
+
+    await registrarLog({
+      acao: "criou",
+      tabela: "contas_pagar",
+      registroId: contaCriada.id,
+      detalhes: `${nota.fornecedor_nome ?? "?"} - ${formatarMoeda(duplicata.valor)} gerado a partir do XML da NF-e ${nota.numero_nota ?? "?"}`,
+    });
+    return "criada";
+  }
+
   async function handleLancarContasPagar() {
     if (!podeEscrever) return;
     setLancando(true);
@@ -392,55 +452,9 @@ export default function XmlNotasPage() {
             continue;
           }
 
-          const categoriaId = encontrarCategoriaPorFornecedor(nota.fornecedor_nome ?? "", regrasAtivas);
-
-          const { data: contaCriada, error: erroConta } = await supabase
-            .from("contas_pagar")
-            .insert({
-              fornecedor: nota.fornecedor_nome ?? "(sem nome no XML)",
-              descricao: `NF-e ${nota.numero_nota ?? "?"} - parcela ${duplicata.numero ?? "(sem número)"}`,
-              valor: duplicata.valor,
-              data_vencimento: duplicata.vencimento,
-              status: "pendente",
-              categoria_id: categoriaId,
-              observacao: `Gerado a partir do XML da NF-e (chave ${nota.chave_acesso})`,
-            })
-            .select("id")
-            .single();
-          if (erroConta || !contaCriada) throw new Error(erroConta?.message ?? "Erro ao criar conta a pagar.");
-
-          // Claim-then-write: condicional a status ainda ser "candidata" --
-          // se 0 linhas mudarem, outra aba já processou esta duplicata entre
-          // a leitura e agora, e a conta que acabamos de criar ficaria órfã.
-          const { data: linhasAtualizadas, error: erroVinculo } = await supabase
-            .from("xml_duplicata")
-            .update({ status: "lancada", conta_pagar_id: contaCriada.id })
-            .eq("id", duplicata.id)
-            .eq("status", "candidata")
-            .select("id");
-          if (erroVinculo) throw new Error(erroVinculo.message);
-
-          if (!linhasAtualizadas || linhasAtualizadas.length === 0) {
-            const { error: erroExclusao } = await supabase.from("contas_pagar").delete().eq("id", contaCriada.id);
-            if (erroExclusao) {
-              await registrarLog({
-                acao: "excluiu",
-                tabela: "contas_pagar",
-                registroId: contaCriada.id,
-                detalhes: `Falha ao desfazer conta a pagar órfã (perdeu corrida de vínculo com xml_duplicata ${duplicata.id}): ${erroExclusao.message}`,
-              });
-            }
-            falharam++;
-            continue;
-          }
-
-          await registrarLog({
-            acao: "criou",
-            tabela: "contas_pagar",
-            registroId: contaCriada.id,
-            detalhes: `${nota.fornecedor_nome ?? "?"} - ${formatarMoeda(duplicata.valor)} gerado a partir do XML da NF-e ${nota.numero_nota ?? "?"}`,
-          });
-          criadas++;
+          const resultado = await criarContaPagarDeDuplicata(nota, duplicata, regrasAtivas, "candidata");
+          if (resultado === "criada") criadas++;
+          else falharam++;
         } catch {
           falharam++;
         }
@@ -483,20 +497,30 @@ export default function XmlNotasPage() {
   async function handleNaoEDuplicata() {
     if (!resolvendoSuspeita) return;
     setResolvendoAcao(true);
-    const { duplicata } = resolvendoSuspeita;
-    const { error } = await supabase
-      .from("xml_duplicata")
-      .update({ status: "candidata", contas_pagar_candidatas: null })
-      .eq("id", duplicata.id)
-      .eq("status", "duplicata_suspeita");
+    const { duplicata, nota } = resolvendoSuspeita;
+    // Lança direto, sem voltar pra "candidata": o humano já revisou e decidiu,
+    // então pular a checagem de candidatas é intencional -- se resetasse pra
+    // "candidata", o próximo lote acharia a mesma conta pendente de novo e a
+    // marcaria como suspeita antes de qualquer insert (livelock).
+    // regrasFornecedor traz ativas e inativas; encontrarCategoriaPorFornecedor
+    // já ignora as inativas internamente.
+    const resultado = await criarContaPagarDeDuplicata(nota, duplicata, regrasFornecedor, "duplicata_suspeita");
     setResolvendoAcao(false);
-    if (error) {
-      setMensagem({ tipo: "erro", texto: "Erro ao atualizar: " + error.message });
+    if (resultado !== "criada") {
+      setMensagem({
+        tipo: "erro",
+        texto:
+          resultado === "corrida_perdida"
+            ? "Esta parcela já foi resolvida em outra aba. Recarregando a lista."
+            : "Erro ao lançar a conta a pagar desta parcela.",
+      });
+      setResolvendoSuspeita(null);
+      await carregarNotas();
       return;
     }
     setResolvendoSuspeita(null);
     await carregarNotas();
-    setMensagem({ tipo: "sucesso", texto: 'Marcado pra lançar -- clique em "Lançar em Contas a Pagar" de novo pra criar a conta.' });
+    setMensagem({ tipo: "sucesso", texto: "Conta a pagar criada a partir desta parcela do XML." });
   }
 
   async function handleEDuplicataConfirmada() {
