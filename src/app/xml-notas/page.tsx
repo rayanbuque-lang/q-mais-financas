@@ -6,7 +6,7 @@ import { parseNFe, decodificarXml, NFeParseError, type NFeParseResult } from "@/
 import { extrairArquivosZip, ZipParseError } from "@/lib/zip";
 import EmptyState from "@/components/empty-state";
 import { registrarLog } from "@/lib/audit";
-import type { RegraFornecedor } from "@/lib/xml-regra-fornecedor";
+import { encontrarCategoriaPorFornecedor, encontrarContasPagarCandidatas, type RegraFornecedor } from "@/lib/xml-regra-fornecedor";
 
 interface Duplicata {
   id: string;
@@ -14,6 +14,8 @@ interface Duplicata {
   vencimento: string | null;
   valor: number;
   status: string;
+  conta_pagar_id: string | null;
+  contas_pagar_candidatas: string[] | null;
 }
 
 interface Nota {
@@ -75,6 +77,14 @@ export default function XmlNotasPage() {
   const [notas, setNotas] = useState<Nota[]>([]);
   const [carregandoNotas, setCarregandoNotas] = useState(false);
   const [notaExpandidaId, setNotaExpandidaId] = useState<string | null>(null);
+
+  const [lancando, setLancando] = useState(false);
+  const [resolvendoSuspeita, setResolvendoSuspeita] = useState<{
+    duplicata: Duplicata;
+    nota: Nota;
+    candidatas: { id: string; fornecedor: string; valor: number; data_vencimento: string; status: string }[];
+  } | null>(null);
+  const [resolvendoAcao, setResolvendoAcao] = useState(false);
 
   const [categoriasSaida, setCategoriasSaida] = useState<{ id: string; nome: string }[]>([]);
   const [regrasFornecedor, setRegrasFornecedor] = useState<RegraFornecedor[]>([]);
@@ -323,13 +333,197 @@ export default function XmlNotasPage() {
     }
   }
 
+  async function handleLancarContasPagar() {
+    if (!podeEscrever) return;
+    setLancando(true);
+    setMensagem(null);
+
+    try {
+      const candidatas: { duplicata: Duplicata; nota: Nota }[] = [];
+      let semBoleto = 0;
+      for (const nota of notas) {
+        if (nota.xml_duplicata.length === 0) {
+          semBoleto++;
+          continue;
+        }
+        for (const d of nota.xml_duplicata) {
+          if (d.status === "candidata") candidatas.push({ duplicata: d, nota });
+        }
+      }
+
+      if (candidatas.length === 0) {
+        setMensagem({
+          tipo: "sucesso",
+          texto:
+            semBoleto > 0
+              ? `Nada pra lançar agora. ${semBoleto} nota(s) sem boleto no XML precisam ser lançadas manualmente.`
+              : "Nada pendente pra lançar.",
+        });
+        return;
+      }
+
+      const [{ data: pendentes, error: erroPendentes }, { data: regras, error: erroRegras }] = await Promise.all([
+        supabase.from("contas_pagar").select("id, fornecedor, valor").eq("status", "pendente").limit(5000),
+        supabase.from("xml_regra_fornecedor").select("id, fornecedor_padrao, categoria_id, ativa").eq("ativa", true),
+      ]);
+      if (erroPendentes || erroRegras) {
+        setMensagem({ tipo: "erro", texto: "Erro ao carregar dados pra lançamento: " + (erroPendentes?.message ?? erroRegras?.message ?? "") });
+        return;
+      }
+      const contasPendentes = (pendentes ?? []) as { id: string; fornecedor: string; valor: number }[];
+      const regrasAtivas = (regras ?? []) as RegraFornecedor[];
+
+      let criadas = 0;
+      let suspeitas = 0;
+      let falharam = 0;
+
+      for (const { duplicata, nota } of candidatas) {
+        try {
+          const candidatosIds = encontrarContasPagarCandidatas(nota.fornecedor_nome ?? "", duplicata.valor, contasPendentes);
+
+          if (candidatosIds.length > 0) {
+            const { error } = await supabase
+              .from("xml_duplicata")
+              .update({ status: "duplicata_suspeita", contas_pagar_candidatas: candidatosIds })
+              .eq("id", duplicata.id)
+              .eq("status", "candidata");
+            if (error) throw new Error(error.message);
+            suspeitas++;
+            continue;
+          }
+
+          const categoriaId = encontrarCategoriaPorFornecedor(nota.fornecedor_nome ?? "", regrasAtivas);
+
+          const { data: contaCriada, error: erroConta } = await supabase
+            .from("contas_pagar")
+            .insert({
+              fornecedor: nota.fornecedor_nome ?? "(sem nome no XML)",
+              descricao: `NF-e ${nota.numero_nota ?? "?"} - parcela ${duplicata.numero ?? "(sem número)"}`,
+              valor: duplicata.valor,
+              data_vencimento: duplicata.vencimento,
+              status: "pendente",
+              categoria_id: categoriaId,
+              observacao: `Gerado a partir do XML da NF-e (chave ${nota.chave_acesso})`,
+            })
+            .select("id")
+            .single();
+          if (erroConta || !contaCriada) throw new Error(erroConta?.message ?? "Erro ao criar conta a pagar.");
+
+          // Claim-then-write: condicional a status ainda ser "candidata" --
+          // se 0 linhas mudarem, outra aba já processou esta duplicata entre
+          // a leitura e agora, e a conta que acabamos de criar ficaria órfã.
+          const { data: linhasAtualizadas, error: erroVinculo } = await supabase
+            .from("xml_duplicata")
+            .update({ status: "lancada", conta_pagar_id: contaCriada.id })
+            .eq("id", duplicata.id)
+            .eq("status", "candidata")
+            .select("id");
+          if (erroVinculo) throw new Error(erroVinculo.message);
+
+          if (!linhasAtualizadas || linhasAtualizadas.length === 0) {
+            const { error: erroExclusao } = await supabase.from("contas_pagar").delete().eq("id", contaCriada.id);
+            if (erroExclusao) {
+              await registrarLog({
+                acao: "excluiu",
+                tabela: "contas_pagar",
+                registroId: contaCriada.id,
+                detalhes: `Falha ao desfazer conta a pagar órfã (perdeu corrida de vínculo com xml_duplicata ${duplicata.id}): ${erroExclusao.message}`,
+              });
+            }
+            falharam++;
+            continue;
+          }
+
+          await registrarLog({
+            acao: "criou",
+            tabela: "contas_pagar",
+            registroId: contaCriada.id,
+            detalhes: `${nota.fornecedor_nome ?? "?"} - ${formatarMoeda(duplicata.valor)} gerado a partir do XML da NF-e ${nota.numero_nota ?? "?"}`,
+          });
+          criadas++;
+        } catch {
+          falharam++;
+        }
+      }
+
+      const partes: string[] = [];
+      if (criadas > 0) partes.push(`${criadas} conta(s) a pagar criada(s)`);
+      if (suspeitas > 0) partes.push(`${suspeitas} possível(is) duplicata(s) (revisar na tabela)`);
+      if (semBoleto > 0) partes.push(`${semBoleto} nota(s) sem boleto no XML (lançar manualmente)`);
+      if (falharam > 0) partes.push(`${falharam} erro(s) ao lançar`);
+
+      setMensagem({
+        tipo: falharam > 0 ? "erro" : "sucesso",
+        texto: partes.length > 0 ? partes.join(" · ") : "Nada pendente pra lançar.",
+      });
+      await carregarNotas();
+    } finally {
+      setLancando(false);
+    }
+  }
+
+  async function handleAbrirResolucaoSuspeita(nota: Nota, duplicata: Duplicata) {
+    if (!duplicata.contas_pagar_candidatas || duplicata.contas_pagar_candidatas.length === 0) return;
+    const { data, error } = await supabase
+      .from("contas_pagar")
+      .select("id, fornecedor, valor, data_vencimento, status")
+      .in("id", duplicata.contas_pagar_candidatas);
+    if (error || !data) {
+      setMensagem({ tipo: "erro", texto: "Erro ao carregar as contas candidatas: " + (error?.message ?? "") });
+      return;
+    }
+    setResolvendoSuspeita({ duplicata, nota, candidatas: data as { id: string; fornecedor: string; valor: number; data_vencimento: string; status: string }[] });
+  }
+
+  function fecharResolucaoSuspeita() {
+    if (resolvendoAcao) return;
+    setResolvendoSuspeita(null);
+  }
+
+  async function handleNaoEDuplicata() {
+    if (!resolvendoSuspeita) return;
+    setResolvendoAcao(true);
+    const { duplicata } = resolvendoSuspeita;
+    const { error } = await supabase
+      .from("xml_duplicata")
+      .update({ status: "candidata", contas_pagar_candidatas: null })
+      .eq("id", duplicata.id)
+      .eq("status", "duplicata_suspeita");
+    setResolvendoAcao(false);
+    if (error) {
+      setMensagem({ tipo: "erro", texto: "Erro ao atualizar: " + error.message });
+      return;
+    }
+    setResolvendoSuspeita(null);
+    await carregarNotas();
+    setMensagem({ tipo: "sucesso", texto: 'Marcado pra lançar -- clique em "Lançar em Contas a Pagar" de novo pra criar a conta.' });
+  }
+
+  async function handleEDuplicataConfirmada() {
+    if (!resolvendoSuspeita) return;
+    setResolvendoAcao(true);
+    const { duplicata } = resolvendoSuspeita;
+    const { error } = await supabase
+      .from("xml_duplicata")
+      .update({ status: "duplicata_confirmada" })
+      .eq("id", duplicata.id)
+      .eq("status", "duplicata_suspeita");
+    setResolvendoAcao(false);
+    if (error) {
+      setMensagem({ tipo: "erro", texto: "Erro ao atualizar: " + error.message });
+      return;
+    }
+    setResolvendoSuspeita(null);
+    await carregarNotas();
+  }
+
   return (
     <div>
       <div className="mb-6">
         <h1 className="text-xl font-bold text-[var(--color-text)]">XML de Notas Fiscais</h1>
         <p className="text-sm text-[var(--color-text-muted)] mt-1">
-          Fase 2 do projeto de conciliação — camada de staging, só leitura. Nada aqui é gravado em Contas a Pagar; é só para
-          observar o dado real antes de decidirmos o destino final.
+          Importe os XMLs, confira as parcelas de cada nota e lance em Contas a Pagar. Parcelas parecidas com contas já
+          cadastradas são sinalizadas pra revisão antes de virar lançamento.
         </p>
       </div>
 
@@ -415,6 +609,19 @@ export default function XmlNotasPage() {
 
       {aba === "notas" && (
         <div>
+          {podeEscrever && notas.length > 0 && (
+            <div className="mb-4">
+              <button
+                type="button"
+                onClick={handleLancarContasPagar}
+                disabled={lancando}
+                className="px-4 py-2.5 rounded-xl bg-emerald-500 text-white text-sm font-semibold disabled:opacity-50 flex items-center gap-2"
+              >
+                {lancando && <span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />}
+                {lancando ? "Lançando..." : "Lançar em Contas a Pagar"}
+              </button>
+            </div>
+          )}
           {carregandoNotas ? (
             <div className="skeleton h-40 rounded-xl" />
           ) : notas.length === 0 ? (
@@ -469,7 +676,9 @@ export default function XmlNotasPage() {
                               <span className="text-[10px] text-[var(--color-text-muted)]">{notaExpandidaId === n.id ? "▲" : "▼"}</span>
                             </button>
                           ) : (
-                            <span className="text-[10px] text-[var(--color-text-muted)]">—</span>
+                            <span className="px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-semibold whitespace-nowrap">
+                              sem boleto no XML — lançar manualmente
+                            </span>
                           )}
                         </td>
                       </tr>
@@ -494,7 +703,21 @@ export default function XmlNotasPage() {
                                       <td className="py-0.5">{formatarData(d.vencimento)}</td>
                                       <td className="py-0.5 text-right">{formatarMoeda(d.valor)}</td>
                                       <td className="py-0.5 pl-3">
-                                        <span className="px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-[10px]">{d.status}</span>
+                                        {d.status === "lancada" ? (
+                                          <span className="px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px]">lançada</span>
+                                        ) : d.status === "duplicata_suspeita" ? (
+                                          <button
+                                            type="button"
+                                            onClick={() => handleAbrirResolucaoSuspeita(n, d)}
+                                            className="px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-semibold"
+                                          >
+                                            possível duplicata — revisar
+                                          </button>
+                                        ) : d.status === "duplicata_confirmada" ? (
+                                          <span className="px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 border border-gray-200 text-[10px]">duplicata (não lançada)</span>
+                                        ) : (
+                                          <span className="px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 text-[10px]">pendente de lançar</span>
+                                        )}
                                       </td>
                                     </tr>
                                   ))}
@@ -609,6 +832,50 @@ export default function XmlNotasPage() {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {resolvendoSuspeita && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => fecharResolucaoSuspeita()}>
+          <div className="bg-[var(--color-surface)] rounded-2xl p-6 max-w-lg w-full" onClick={(e) => e.stopPropagation()}>
+            <h3 className="font-semibold text-sm mb-1">Possível duplicata</h3>
+            <p className="text-xs text-[var(--color-text-muted)] mb-4">
+              Já existe conta a pagar pendente parecida com esta parcela do XML. É a mesma conta, ou são coisas diferentes?
+            </p>
+
+            <div className="mb-3 p-3 rounded-xl bg-[var(--color-bg)] border border-[var(--color-border)] text-xs">
+              <p className="font-semibold mb-1">Do XML:</p>
+              <p>{resolvendoSuspeita.nota.fornecedor_nome ?? "—"} · {formatarMoeda(resolvendoSuspeita.duplicata.valor)} · vence {formatarData(resolvendoSuspeita.duplicata.vencimento)}</p>
+            </div>
+
+            <div className="mb-4 space-y-2">
+              <p className="text-xs font-semibold">Já cadastrado(s):</p>
+              {resolvendoSuspeita.candidatas.map((c) => (
+                <div key={c.id} className="p-3 rounded-xl bg-[var(--color-bg)] border border-[var(--color-border)] text-xs">
+                  {c.fornecedor} · {formatarMoeda(c.valor)} · vence {formatarData(c.data_vencimento)} · {c.status}
+                </div>
+              ))}
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={handleEDuplicataConfirmada}
+                disabled={resolvendoAcao}
+                className="flex-1 px-4 py-2.5 rounded-xl border border-[var(--color-border)] text-sm font-semibold disabled:opacity-50"
+              >
+                É duplicata — não lançar
+              </button>
+              <button
+                type="button"
+                onClick={handleNaoEDuplicata}
+                disabled={resolvendoAcao}
+                className="flex-1 px-4 py-2.5 rounded-xl bg-emerald-500 text-white text-sm font-semibold disabled:opacity-50"
+              >
+                Não é — lançar mesmo assim
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
