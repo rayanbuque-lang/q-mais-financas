@@ -39,6 +39,12 @@ function formatarData(iso: string | null) {
   return `${dia}/${mes}/${ano}`;
 }
 
+// criado_em é timestamptz (ex.: "2026-08-13 01:02:29.76+00"), diferente de
+// emitida_em/vencimento que são datas puras -- não dá pra usar formatarData.
+function formatarDataCadastro(iso: string) {
+  return new Date(iso).toLocaleDateString("pt-BR");
+}
+
 function formatarChave(chave: string) {
   return chave.replace(/(\d{4})(?=\d)/g, "$1 ");
 }
@@ -321,11 +327,12 @@ export default function XmlNotasPage() {
                 <thead>
                   <tr className="border-b border-[var(--color-border)] text-left text-[var(--color-text-muted)]">
                     <th className="px-3 py-2.5 font-semibold">Emissão</th>
+                    <th className="px-3 py-2.5 font-semibold">Cadastrado em</th>
                     <th className="px-3 py-2.5 font-semibold">Fornecedor</th>
                     <th className="px-3 py-2.5 font-semibold">Nº nota</th>
                     <th className="px-3 py-2.5 font-semibold text-right">Valor total</th>
                     <th className="px-3 py-2.5 font-semibold">Chave de acesso</th>
-                    <th className="px-3 py-2.5 font-semibold text-center">Duplicatas</th>
+                    <th className="px-3 py-2.5 font-semibold">Vencimento(s)</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -333,6 +340,7 @@ export default function XmlNotasPage() {
                     <Fragment key={n.id}>
                       <tr className="border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--hover-bg)]">
                         <td className="px-3 py-2.5 whitespace-nowrap">{formatarData(n.emitida_em)}</td>
+                        <td className="px-3 py-2.5 whitespace-nowrap">{formatarDataCadastro(n.criado_em)}</td>
                         <td className="px-3 py-2.5 max-w-[220px] truncate" title={n.fornecedor_nome ?? ""}>
                           {n.fornecedor_nome ?? "—"}
                           {n.fornecedor_cnpj && <span className="block text-[10px] text-[var(--color-text-muted)]">{n.fornecedor_cnpj}</span>}
@@ -342,14 +350,25 @@ export default function XmlNotasPage() {
                         <td className="px-3 py-2.5 font-mono text-[10px]" title={n.chave_acesso}>
                           {formatarChave(n.chave_acesso).slice(0, 24)}…
                         </td>
-                        <td className="px-3 py-2.5 text-center">
+                        <td className="px-3 py-2.5">
                           {n.xml_duplicata.length > 0 ? (
                             <button
                               type="button"
                               onClick={() => setNotaExpandidaId(notaExpandidaId === n.id ? null : n.id)}
-                              className="px-2 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200 text-[10px] font-semibold"
+                              className="flex flex-wrap gap-1 items-center"
+                              title="Ver valor e status de cada parcela"
                             >
-                              {n.xml_duplicata.length} {notaExpandidaId === n.id ? "▲" : "▼"}
+                              {[...n.xml_duplicata]
+                                .sort((a, b) => (a.vencimento ?? "").localeCompare(b.vencimento ?? "") || a.id.localeCompare(b.id))
+                                .map((d) => (
+                                  <span
+                                    key={d.id}
+                                    className="px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 text-[10px] font-semibold whitespace-nowrap"
+                                  >
+                                    {formatarData(d.vencimento)}
+                                  </span>
+                                ))}
+                              <span className="text-[10px] text-[var(--color-text-muted)]">{notaExpandidaId === n.id ? "▲" : "▼"}</span>
                             </button>
                           ) : (
                             <span className="text-[10px] text-[var(--color-text-muted)]">—</span>
@@ -358,7 +377,7 @@ export default function XmlNotasPage() {
                       </tr>
                       {notaExpandidaId === n.id && n.xml_duplicata.length > 0 && (
                         <tr className="bg-[var(--hover-bg)]">
-                          <td colSpan={6} className="px-3 py-2.5">
+                          <td colSpan={7} className="px-3 py-2.5">
                             <table className="w-full text-[11px]">
                               <thead>
                                 <tr className="text-[var(--color-text-muted)]">
