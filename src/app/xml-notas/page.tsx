@@ -97,23 +97,32 @@ export default function XmlNotasPage() {
     carregarNotas();
   }, []);
 
-  async function coletarXmlsDosArquivos(files: File[]): Promise<{ nomeOrigem: string; bytes: Uint8Array }[]> {
-    const resultado: { nomeOrigem: string; bytes: Uint8Array }[] = [];
+  // Por arquivo, não pro lote inteiro: um .zip corrompido não pode derrubar os
+  // XMLs que já vieram bons de outros arquivos do mesmo upload -- mesmo padrão
+  // de resiliência que já existe no parse de cada NF-e logo abaixo.
+  async function coletarXmlsDosArquivos(
+    files: File[]
+  ): Promise<{ arquivos: { nomeOrigem: string; bytes: Uint8Array }[]; erros: string[] }> {
+    const arquivos: { nomeOrigem: string; bytes: Uint8Array }[] = [];
+    const erros: string[] = [];
     for (const file of files) {
       const nomeMin = file.name.toLowerCase();
-      const bytes = new Uint8Array(await file.arrayBuffer());
-
-      if (nomeMin.endsWith(".xml")) {
-        resultado.push({ nomeOrigem: file.name, bytes });
-      } else if (nomeMin.endsWith(".zip")) {
-        const entradas = await extrairArquivosZip(bytes, file.name);
-        const xmls = entradas.filter((e) => e.nome.toLowerCase().endsWith(".xml"));
-        for (const e of xmls) {
-          resultado.push({ nomeOrigem: `${file.name} → ${e.nome}`, bytes: e.bytes });
+      try {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        if (nomeMin.endsWith(".xml")) {
+          arquivos.push({ nomeOrigem: file.name, bytes });
+        } else if (nomeMin.endsWith(".zip")) {
+          const entradas = await extrairArquivosZip(bytes, file.name);
+          const xmls = entradas.filter((e) => e.nome.toLowerCase().endsWith(".xml"));
+          for (const e of xmls) {
+            arquivos.push({ nomeOrigem: `${file.name} → ${e.nome}`, bytes: e.bytes });
+          }
         }
+      } catch (e) {
+        erros.push(e instanceof ZipParseError ? e.message : `Erro inesperado ao processar "${file.name}".`);
       }
     }
-    return resultado;
+    return { arquivos, erros };
   }
 
   async function handleImportar() {
@@ -140,13 +149,8 @@ export default function XmlNotasPage() {
     setImportando(true);
     const erros: string[] = [];
     try {
-      const xmls = await coletarXmlsDosArquivos(files).catch((e) => {
-        if (e instanceof ZipParseError) {
-          erros.push(e.message);
-          return [];
-        }
-        throw e;
-      });
+      const { arquivos: xmls, erros: errosColeta } = await coletarXmlsDosArquivos(files);
+      erros.push(...errosColeta);
 
       const notasParseadas: { resultado: NFeParseResult; xmlBruto: string }[] = [];
       for (const { nomeOrigem, bytes } of xmls) {
