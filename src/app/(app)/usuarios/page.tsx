@@ -14,6 +14,8 @@ interface Profile {
 
 const todosModulos = [
   { id: "dashboard", label: "Dashboard", icon: "📊" },
+  { id: "metas", label: "Metas e Orçamento", icon: "🎯" },
+  { id: "extrato", label: "Extrato Bancário", icon: "🏧" },
   { id: "movimentacoes", label: "Movimentações", icon: "💰" },
   { id: "captura", label: "Captura por Foto", icon: "📸" },
   { id: "recorrentes", label: "Recorrentes", icon: "🔁" },
@@ -24,6 +26,7 @@ const todosModulos = [
   { id: "fechamento-caixa", label: "Fechamento de Caixa", icon: "🧮" },
   { id: "fluxo-de-caixa", label: "Fluxo de Caixa", icon: "📈" },
   { id: "dre", label: "DRE", icon: "📑" },
+  { id: "comparativo", label: "Painel Comparativo", icon: "📊" },
   { id: "fechamento", label: "Fechamento Mensal", icon: "🔒" },
   { id: "conciliacao", label: "Conciliação Bancária", icon: "🏦" },
   { id: "relatorios", label: "Relatórios", icon: "📄" },
