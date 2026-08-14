@@ -350,6 +350,14 @@ export default function XmlNotasPage() {
     }
   }
 
+  // Categoria padrão de toda conta a pagar gerada do XML quando nenhuma regra
+  // de fornecedor bate -- categoria "Pagamento de boletos" já existe no
+  // cadastro (categorias_saida); se por algum motivo tiver sido excluída,
+  // volta null e a conta nasce sem categoria, como já acontecia antes.
+  function resolverCategoriaPadraoBoletos(): string | null {
+    return categoriasSaida.find((c) => c.nome.trim().toLowerCase() === "pagamento de boletos")?.id ?? null;
+  }
+
   // Cria a conta a pagar de UMA duplicata e faz o claim-then-write do vínculo.
   // `statusEsperado` é o status que a duplicata precisa ainda ter na hora de
   // vincular: "candidata" no fluxo em lote, "duplicata_suspeita" quando o
@@ -359,9 +367,14 @@ export default function XmlNotasPage() {
     nota: Nota,
     duplicata: Duplicata,
     regrasParaMatch: RegraFornecedor[],
-    statusEsperado: string
+    statusEsperado: string,
+    categoriaPadraoId: string | null
   ): Promise<{ resultado: "criada" | "corrida_perdida" | "falhou"; erro?: string }> {
-    const categoriaId = encontrarCategoriaPorFornecedor(nota.fornecedor_nome ?? "", regrasParaMatch);
+    // Sem regra específica de fornecedor, cai em "Pagamento de boletos" em vez
+    // de ficar sem categoria -- todo XML lançado aqui é, por natureza, boleto
+    // de fornecedor (nunca outra coisa). Regra específica sempre tem prioridade;
+    // o usuário ainda pode reclassificar manualmente na tela de Contas a Pagar.
+    const categoriaId = encontrarCategoriaPorFornecedor(nota.fornecedor_nome ?? "", regrasParaMatch) ?? categoriaPadraoId;
 
     const { data: contaCriada, error: erroConta } = await supabase
       .from("contas_pagar")
@@ -452,6 +465,7 @@ export default function XmlNotasPage() {
       }
       const contasPendentes = (pendentes ?? []) as { id: string; fornecedor: string; valor: number }[];
       const regrasAtivas = (regras ?? []) as RegraFornecedor[];
+      const categoriaPadraoId = resolverCategoriaPadraoBoletos();
 
       let criadas = 0;
       let suspeitas = 0;
@@ -473,7 +487,7 @@ export default function XmlNotasPage() {
             continue;
           }
 
-          const { resultado, erro } = await criarContaPagarDeDuplicata(nota, duplicata, regrasAtivas, "candidata");
+          const { resultado, erro } = await criarContaPagarDeDuplicata(nota, duplicata, regrasAtivas, "candidata", categoriaPadraoId);
           if (resultado === "criada") {
             criadas++;
           } else {
@@ -533,7 +547,7 @@ export default function XmlNotasPage() {
     // marcaria como suspeita antes de qualquer insert (livelock).
     // regrasFornecedor traz ativas e inativas; encontrarCategoriaPorFornecedor
     // já ignora as inativas internamente.
-    const { resultado, erro } = await criarContaPagarDeDuplicata(nota, duplicata, regrasFornecedor, "duplicata_suspeita");
+    const { resultado, erro } = await criarContaPagarDeDuplicata(nota, duplicata, regrasFornecedor, "duplicata_suspeita", resolverCategoriaPadraoBoletos());
     setResolvendoAcao(false);
     if (resultado !== "criada") {
       setMensagem({
