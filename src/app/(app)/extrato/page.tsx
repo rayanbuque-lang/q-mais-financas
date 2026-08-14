@@ -1846,19 +1846,7 @@ export default function ExtratoPage() {
   return (
     <div>
       <div className="mb-6">
-        <div className="flex items-center gap-2 flex-wrap">
-          <h1 className="text-xl font-bold text-[var(--color-text)]">Extrato Bancário (OFX)</h1>
-          <span className="text-[10px] font-semibold px-2 py-1 rounded-full bg-amber-100 text-amber-700 border border-amber-200 whitespace-nowrap">
-            🧪 Área experimental — classificação e regras são staging
-          </span>
-          <span className="text-[10px] font-semibold px-2 py-1 rounded-full bg-red-100 text-red-700 border border-red-200 whitespace-nowrap">
-            ⚠️ Baixa de contas a pagar grava em produção
-          </span>
-        </div>
-        <p className="text-sm text-[var(--color-text-muted)] mt-1">
-          Fase 1 do projeto de conciliação — a classificação por categoria e as regras continuam sendo staging, isoladas do sistema
-          principal. <b>Exceção:</b> a baixa automática de contas a pagar grava de verdade em Contas a Pagar e Movimentações.
-        </p>
+        <h1 className="text-xl font-bold text-[var(--color-text)]">Extrato Bancário (OFX)</h1>
       </div>
 
       {mensagem && (
