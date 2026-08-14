@@ -20,6 +20,7 @@ const todosModulos = [
   { id: "captura", label: "Captura por Foto", icon: "📸" },
   { id: "recorrentes", label: "Recorrentes", icon: "🔁" },
   { id: "contas-pagar", label: "Contas a Pagar", icon: "📋" },
+  { id: "xml-notas", label: "XML de Notas Fiscais", icon: "🧾" },
   { id: "maquinas", label: "Máquinas e Contas", icon: "🏦" },
   { id: "vendas", label: "Vendas Maquininha", icon: "💳" },
   { id: "categorias", label: "Categorias", icon: "🏷️" },

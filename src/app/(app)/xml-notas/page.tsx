@@ -573,7 +573,12 @@ export default function XmlNotasPage() {
   return (
     <div>
       <div className="mb-6">
-        <h1 className="text-xl font-bold text-[var(--color-text)]">XML de Notas Fiscais</h1>
+        <div className="flex items-center gap-2 flex-wrap">
+          <h1 className="text-xl font-bold text-[var(--color-text)]">XML de Notas Fiscais</h1>
+          <span className="text-[10px] font-semibold px-2 py-1 rounded-full bg-red-50 text-red-700 border border-red-200 whitespace-nowrap">
+            ⚠️ Lançar em Contas a Pagar grava em produção
+          </span>
+        </div>
         <p className="text-sm text-[var(--color-text-muted)] mt-1">
           Importe os XMLs, confira as parcelas de cada nota e lance em Contas a Pagar. Parcelas parecidas com contas já
           cadastradas são sinalizadas pra revisão antes de virar lançamento.

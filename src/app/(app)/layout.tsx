@@ -28,6 +28,7 @@ const menuItems = [
   { label: "Captura por Foto", href: "/captura", icon: "📸", modulo: "captura" },
   { label: "Recorrentes", href: "/recorrentes", icon: "🔁", modulo: "recorrentes" },
   { label: "Contas a Pagar", href: "/contas-pagar", icon: "📋", modulo: "contas-pagar" },
+  { label: "XML de Notas Fiscais", href: "/xml-notas", icon: "🧾", modulo: "xml-notas" },
   { label: "Máquinas e Contas", href: "/maquinas", icon: "🏦", modulo: "maquinas" },
   { label: "Vendas Maquininha", href: "/vendas", icon: "💳", modulo: "vendas" },
   { label: "Categorias", href: "/categorias", icon: "🏷️", modulo: "categorias" },
