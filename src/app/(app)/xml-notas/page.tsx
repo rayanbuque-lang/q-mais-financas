@@ -94,6 +94,15 @@ export default function XmlNotasPage() {
   const [carregandoNotas, setCarregandoNotas] = useState(false);
   const [notaExpandidaId, setNotaExpandidaId] = useState<string | null>(null);
 
+  const [editandoNotaId, setEditandoNotaId] = useState<string | null>(null);
+  const [formNotaEdicao, setFormNotaEdicao] = useState({ fornecedor_nome: "", numero_nota: "", valor_total: "" });
+  const [salvandoNota, setSalvandoNota] = useState(false);
+  const [excluindoNotaId, setExcluindoNotaId] = useState<string | null>(null);
+
+  const [editandoDuplicataId, setEditandoDuplicataId] = useState<string | null>(null);
+  const [formDuplicataEdicao, setFormDuplicataEdicao] = useState({ vencimento: "", valor: "" });
+  const [salvandoDuplicata, setSalvandoDuplicata] = useState(false);
+
   const [lancando, setLancando] = useState(false);
   const [errosLancamento, setErrosLancamento] = useState<string[]>([]);
   const [resolvendoSuspeita, setResolvendoSuspeita] = useState<{
@@ -348,6 +357,114 @@ export default function XmlNotasPage() {
     } finally {
       setImportando(false);
     }
+  }
+
+  // Uma nota só pode ser editada/excluída enquanto NENHUMA das suas parcelas
+  // virou conta a pagar de verdade -- depois de lançada, a fonte de verdade é
+  // a conta a pagar (editável/excluível só na tela de Contas a Pagar), editar
+  // aqui de novo criaria duas versões divergentes do mesmo dado.
+  function notaTemLancamento(n: Nota): boolean {
+    return n.xml_duplicata.some((d) => d.status === "lancada");
+  }
+
+  function iniciarEdicaoNota(n: Nota) {
+    setEditandoNotaId(n.id);
+    setFormNotaEdicao({
+      fornecedor_nome: n.fornecedor_nome ?? "",
+      numero_nota: n.numero_nota ?? "",
+      valor_total: n.valor_total != null ? String(n.valor_total) : "",
+    });
+  }
+
+  function cancelarEdicaoNota() {
+    setEditandoNotaId(null);
+  }
+
+  async function handleSalvarEdicaoNota(n: Nota) {
+    const valorTrim = formNotaEdicao.valor_total.trim();
+    const valorNum = valorTrim === "" ? null : Number(valorTrim);
+    if (valorTrim !== "" && Number.isNaN(valorNum)) {
+      setMensagem({ tipo: "erro", texto: "Valor total inválido." });
+      return;
+    }
+    setSalvandoNota(true);
+    const { error } = await supabase
+      .from("xml_nota")
+      .update({
+        fornecedor_nome: formNotaEdicao.fornecedor_nome.trim() || null,
+        numero_nota: formNotaEdicao.numero_nota.trim() || null,
+        valor_total: valorNum,
+      })
+      .eq("id", n.id);
+    setSalvandoNota(false);
+    if (error) {
+      setMensagem({ tipo: "erro", texto: "Erro ao salvar nota: " + error.message });
+      return;
+    }
+    await registrarLog({ acao: "editou", tabela: "xml_nota", registroId: n.id, detalhes: formNotaEdicao.fornecedor_nome.trim() || n.chave_acesso });
+    setEditandoNotaId(null);
+    await carregarNotas();
+  }
+
+  async function handleExcluirNota(n: Nota) {
+    if (notaTemLancamento(n)) return; // defesa em profundidade -- o botão nem aparece nesse caso
+    if (!confirm(`Excluir a nota de "${n.fornecedor_nome ?? "fornecedor desconhecido"}"? Essa ação não pode ser desfeita.`)) return;
+    setExcluindoNotaId(n.id);
+    const { error } = await supabase.from("xml_nota").delete().eq("id", n.id);
+    setExcluindoNotaId(null);
+    if (error) {
+      setMensagem({ tipo: "erro", texto: "Erro ao excluir nota: " + error.message });
+      return;
+    }
+    await registrarLog({ acao: "excluiu", tabela: "xml_nota", registroId: n.id, detalhes: n.fornecedor_nome ?? n.chave_acesso });
+    await carregarNotas();
+  }
+
+  function iniciarEdicaoDuplicata(d: Duplicata) {
+    setEditandoDuplicataId(d.id);
+    setFormDuplicataEdicao({ vencimento: d.vencimento ?? "", valor: String(d.valor) });
+  }
+
+  function cancelarEdicaoDuplicata() {
+    setEditandoDuplicataId(null);
+  }
+
+  async function handleSalvarEdicaoDuplicata(d: Duplicata) {
+    const valorNum = Number(formDuplicataEdicao.valor.replace(",", "."));
+    if (Number.isNaN(valorNum)) {
+      setMensagem({ tipo: "erro", texto: "Valor da parcela inválido." });
+      return;
+    }
+    setSalvandoDuplicata(true);
+    // Condicional a status ainda ser "candidata": se a parcela foi lançada
+    // entre abrir a edição e salvar (outra aba, ou o lote rodou nesse meio
+    // tempo), 0 linhas mudam e a edição não se aplica -- não sobrescreve uma
+    // conta a pagar que já existe.
+    const { data: linhasAtualizadas, error } = await supabase
+      .from("xml_duplicata")
+      .update({ vencimento: formDuplicataEdicao.vencimento.trim() || null, valor: valorNum })
+      .eq("id", d.id)
+      .eq("status", "candidata")
+      .select("id");
+    setSalvandoDuplicata(false);
+    if (error) {
+      setMensagem({ tipo: "erro", texto: "Erro ao salvar parcela: " + error.message });
+      return;
+    }
+    if (!linhasAtualizadas || linhasAtualizadas.length === 0) {
+      setMensagem({ tipo: "erro", texto: "Esta parcela já foi lançada — não é mais possível editar aqui." });
+      setEditandoDuplicataId(null);
+      await carregarNotas();
+      return;
+    }
+    await registrarLog({
+      acao: "editou",
+      tabela: "xml_duplicata",
+      registroId: d.id,
+      detalhes: `vencimento ${formDuplicataEdicao.vencimento || "-"}, valor ${formatarMoeda(valorNum)}`,
+    });
+    setEditandoDuplicataId(null);
+    await carregarNotas();
   }
 
   // Categoria padrão de toda conta a pagar gerada do XML quando nenhuma regra
@@ -721,6 +838,7 @@ export default function XmlNotasPage() {
                     <th className="px-3 py-2.5 font-semibold text-right">Valor total</th>
                     <th className="px-3 py-2.5 font-semibold">Chave de acesso</th>
                     <th className="px-3 py-2.5 font-semibold">Vencimento(s)</th>
+                    {podeEscrever && <th className="px-3 py-2.5 font-semibold">Ações</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -729,12 +847,48 @@ export default function XmlNotasPage() {
                       <tr className="border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--hover-bg)]">
                         <td className="px-3 py-2.5 whitespace-nowrap">{formatarData(n.emitida_em)}</td>
                         <td className="px-3 py-2.5 whitespace-nowrap">{formatarDataCadastro(n.criado_em)}</td>
-                        <td className="px-3 py-2.5 max-w-[220px] truncate" title={n.fornecedor_nome ?? ""}>
-                          {n.fornecedor_nome ?? "—"}
-                          {n.fornecedor_cnpj && <span className="block text-[10px] text-[var(--color-text-muted)]">{n.fornecedor_cnpj}</span>}
+                        <td className="px-3 py-2.5 max-w-[220px]">
+                          {editandoNotaId === n.id ? (
+                            <input
+                              type="text"
+                              value={formNotaEdicao.fornecedor_nome}
+                              onChange={(e) => setFormNotaEdicao((f) => ({ ...f, fornecedor_nome: e.target.value }))}
+                              className="w-full px-1.5 py-1 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-[11px]"
+                            />
+                          ) : (
+                            <span className="block truncate" title={n.fornecedor_nome ?? ""}>
+                              {n.fornecedor_nome ?? "—"}
+                            </span>
+                          )}
+                          {editandoNotaId !== n.id && n.fornecedor_cnpj && (
+                            <span className="block text-[10px] text-[var(--color-text-muted)]">{n.fornecedor_cnpj}</span>
+                          )}
                         </td>
-                        <td className="px-3 py-2.5 whitespace-nowrap">{n.numero_nota ?? "—"}</td>
-                        <td className="px-3 py-2.5 text-right whitespace-nowrap font-semibold">{formatarMoeda(n.valor_total)}</td>
+                        <td className="px-3 py-2.5 whitespace-nowrap">
+                          {editandoNotaId === n.id ? (
+                            <input
+                              type="text"
+                              value={formNotaEdicao.numero_nota}
+                              onChange={(e) => setFormNotaEdicao((f) => ({ ...f, numero_nota: e.target.value }))}
+                              className="w-20 px-1.5 py-1 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-[11px]"
+                            />
+                          ) : (
+                            n.numero_nota ?? "—"
+                          )}
+                        </td>
+                        <td className="px-3 py-2.5 text-right whitespace-nowrap font-semibold">
+                          {editandoNotaId === n.id ? (
+                            <input
+                              type="number"
+                              step="0.01"
+                              value={formNotaEdicao.valor_total}
+                              onChange={(e) => setFormNotaEdicao((f) => ({ ...f, valor_total: e.target.value }))}
+                              className="w-24 px-1.5 py-1 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-[11px] text-right"
+                            />
+                          ) : (
+                            formatarMoeda(n.valor_total)
+                          )}
+                        </td>
                         <td className="px-3 py-2.5 font-mono text-[10px]" title={n.chave_acesso}>
                           {formatarChave(n.chave_acesso).slice(0, 24)}…
                         </td>
@@ -764,10 +918,45 @@ export default function XmlNotasPage() {
                             </span>
                           )}
                         </td>
+                        {podeEscrever && (
+                          <td className="px-3 py-2.5 whitespace-nowrap">
+                            {editandoNotaId === n.id ? (
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => handleSalvarEdicaoNota(n)}
+                                  disabled={salvandoNota}
+                                  className="text-emerald-600 hover:underline text-[11px] font-medium disabled:opacity-50"
+                                >
+                                  {salvandoNota ? "Salvando..." : "Salvar"}
+                                </button>
+                                <button type="button" onClick={cancelarEdicaoNota} className="text-[var(--color-text-muted)] hover:underline text-[11px] font-medium">
+                                  Cancelar
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="flex gap-2">
+                                <button type="button" onClick={() => iniciarEdicaoNota(n)} className="text-blue-600 hover:underline text-[11px] font-medium">
+                                  Editar
+                                </button>
+                                {!notaTemLancamento(n) && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleExcluirNota(n)}
+                                    disabled={excluindoNotaId === n.id}
+                                    className="text-red-500 hover:underline text-[11px] font-medium disabled:opacity-50"
+                                  >
+                                    {excluindoNotaId === n.id ? "Excluindo..." : "Excluir"}
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </td>
+                        )}
                       </tr>
                       {notaExpandidaId === n.id && n.xml_duplicata.length > 0 && (
                         <tr className="bg-[var(--hover-bg)]">
-                          <td colSpan={7} className="px-3 py-2.5">
+                          <td colSpan={podeEscrever ? 8 : 7} className="px-3 py-2.5">
                             <table className="w-full text-[11px]">
                               <thead>
                                 <tr className="text-[var(--color-text-muted)]">
@@ -775,6 +964,7 @@ export default function XmlNotasPage() {
                                   <th className="text-left font-semibold pb-1">Vencimento</th>
                                   <th className="text-right font-semibold pb-1">Valor</th>
                                   <th className="text-left font-semibold pb-1 pl-3">Status</th>
+                                  {podeEscrever && <th className="text-left font-semibold pb-1 pl-3">Ações</th>}
                                 </tr>
                               </thead>
                               <tbody>
@@ -783,8 +973,31 @@ export default function XmlNotasPage() {
                                   .map((d) => (
                                     <tr key={d.id}>
                                       <td className="py-0.5">{d.numero ?? "—"}</td>
-                                      <td className="py-0.5">{formatarData(d.vencimento)}</td>
-                                      <td className="py-0.5 text-right">{formatarMoeda(d.valor)}</td>
+                                      <td className="py-0.5">
+                                        {editandoDuplicataId === d.id ? (
+                                          <input
+                                            type="date"
+                                            value={formDuplicataEdicao.vencimento}
+                                            onChange={(e) => setFormDuplicataEdicao((f) => ({ ...f, vencimento: e.target.value }))}
+                                            className="px-1 py-0.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-[11px]"
+                                          />
+                                        ) : (
+                                          formatarData(d.vencimento)
+                                        )}
+                                      </td>
+                                      <td className="py-0.5 text-right">
+                                        {editandoDuplicataId === d.id ? (
+                                          <input
+                                            type="number"
+                                            step="0.01"
+                                            value={formDuplicataEdicao.valor}
+                                            onChange={(e) => setFormDuplicataEdicao((f) => ({ ...f, valor: e.target.value }))}
+                                            className="w-20 px-1 py-0.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-[11px] text-right"
+                                          />
+                                        ) : (
+                                          formatarMoeda(d.valor)
+                                        )}
+                                      </td>
                                       <td className="py-0.5 pl-3">
                                         {d.status === "lancada" && d.conta_pagar_id === null ? (
                                           <span
@@ -809,6 +1022,29 @@ export default function XmlNotasPage() {
                                           <span className="px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 text-[10px]">pendente de lançar</span>
                                         )}
                                       </td>
+                                      {podeEscrever && (
+                                        <td className="py-0.5 pl-3 whitespace-nowrap">
+                                          {editandoDuplicataId === d.id ? (
+                                            <div className="flex gap-2">
+                                              <button
+                                                type="button"
+                                                onClick={() => handleSalvarEdicaoDuplicata(d)}
+                                                disabled={salvandoDuplicata}
+                                                className="text-emerald-600 hover:underline font-medium disabled:opacity-50"
+                                              >
+                                                {salvandoDuplicata ? "Salvando..." : "Salvar"}
+                                              </button>
+                                              <button type="button" onClick={cancelarEdicaoDuplicata} className="text-[var(--color-text-muted)] hover:underline font-medium">
+                                                Cancelar
+                                              </button>
+                                            </div>
+                                          ) : d.status === "candidata" ? (
+                                            <button type="button" onClick={() => iniciarEdicaoDuplicata(d)} className="text-blue-600 hover:underline font-medium">
+                                              Editar
+                                            </button>
+                                          ) : null}
+                                        </td>
+                                      )}
                                     </tr>
                                   ))}
                               </tbody>
