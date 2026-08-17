@@ -92,6 +92,8 @@ interface LancamentoParaBaixa {
   valor: number;
   descricao_normalizada: string;
   status: string;
+  conta_pagar_id: string | null;
+  movimentacao_id: string | null;
   contas_pagar_candidatas?: string[] | null;
   contas_pagar_duplicatas?: string[] | null;
 }
@@ -246,7 +248,13 @@ async function processarBaixasAutomaticas(
   const idsBaixados = new Set<string>();
   const idsAmbiguos = new Set<string>();
   const idsDuplicatas = new Set<string>();
-  const saidas = lancamentosNovos.filter((l) => l.valor < 0 && l.status === "nao_classificado");
+  // classificarPorRegras agora roda ANTES da baixa automática (Task 3 do plano
+  // de confirmação em lote) -- uma saída pode já estar "classificado" sem
+  // nunca ter sido baixada de verdade. Elegível é quem ainda não tem
+  // conta_pagar_id nem movimentacao_id, independente de status/categoria
+  // (comentário já existente no arquivo: "categoria preenchida NÃO significa
+  // resolvido").
+  const saidas = lancamentosNovos.filter((l) => l.valor < 0 && !l.conta_pagar_id && !l.movimentacao_id);
   if (saidas.length === 0) return { baixados: 0, ambiguos: 0, duplicatas: 0, mesFechado: 0, falharam: 0, idsBaixados, idsAmbiguos, idsDuplicatas };
 
   // Consultas separadas (não uma só com .in) -- contas pendentes e pagas têm
@@ -1154,7 +1162,7 @@ export default function ExtratoPage() {
       const { data: inseridos, error: erroUpsert } = await supabase
         .from("extrato_lancamento")
         .upsert(linhas, { onConflict: "conta_id,data_lancamento,valor,descricao_normalizada,ocorrencia", ignoreDuplicates: true })
-        .select("id, conta_id, descricao_normalizada, valor, status, data_lancamento");
+        .select("id, conta_id, descricao_normalizada, valor, status, data_lancamento, conta_pagar_id, movimentacao_id");
 
       if (erroUpsert) throw new Error(erroUpsert.message);
 
@@ -1191,43 +1199,20 @@ export default function ExtratoPage() {
         detalhes: `${arquivo.name} - ${novas} novo(s), ${duplicadas} já existente(s)`,
       });
 
-      let baixasAuto = { baixados: 0, ambiguos: 0, duplicatas: 0, mesFechado: 0, falharam: 0, idsBaixados: new Set<string>(), idsAmbiguos: new Set<string>(), idsDuplicatas: new Set<string>() };
-      if (inseridos && inseridos.length > 0) {
-        baixasAuto = await processarBaixasAutomaticas(inseridos as LancamentoParaBaixa[]);
-      }
-
       let classificadosAuto = 0;
-      let lancamentosDiretos = { lancados: 0, mesFechado: 0, falharam: 0, sinalIncompativel: 0, categoriaInativa: 0, diaFechadoCaixa: 0, pixCaixaNaoSincronizado: 0 };
       if (inseridos && inseridos.length > 0) {
-        const paraClassificar = (inseridos as LancamentoParaBaixa[]).filter(
-          (l) => !baixasAuto.idsBaixados.has(l.id) && !baixasAuto.idsAmbiguos.has(l.id) && !baixasAuto.idsDuplicatas.has(l.id)
-        );
-        if (paraClassificar.length > 0) {
-          const resultadosRegra = await classificarPorRegras(paraClassificar as LancamentoClassificavel[]);
-          classificadosAuto = resultadosRegra.length;
-          lancamentosDiretos = await processarLancamentosDiretos(paraClassificar, resultadosRegra);
-        }
+        const resultadosRegra = await classificarPorRegras(inseridos as LancamentoClassificavel[]);
+        classificadosAuto = resultadosRegra.length;
       }
 
-      setResumoImportacao({ lidas: parsed.transacoes.length, novas, duplicadas, cobertos, baixados: baixasAuto.baixados, ambiguos: baixasAuto.ambiguos, duplicatas: baixasAuto.duplicatas, mesFechado: baixasAuto.mesFechado, baixasFalharam: baixasAuto.falharam, movimentacoesLancadas: lancamentosDiretos.lancados, movimentacoesMesFechado: lancamentosDiretos.mesFechado, movimentacoesFalharam: lancamentosDiretos.falharam, movimentacoesSinalIncompativel: lancamentosDiretos.sinalIncompativel, movimentacoesCategoriaInativa: lancamentosDiretos.categoriaInativa, movimentacoesDiaFechadoCaixa: lancamentosDiretos.diaFechadoCaixa, movimentacoesPixCaixaNaoSincronizado: lancamentosDiretos.pixCaixaNaoSincronizado, avisos });
+      setResumoImportacao({ lidas: parsed.transacoes.length, novas, duplicadas, cobertos, baixados: 0, ambiguos: 0, duplicatas: 0, mesFechado: 0, baixasFalharam: 0, movimentacoesLancadas: 0, movimentacoesMesFechado: 0, movimentacoesFalharam: 0, movimentacoesSinalIncompativel: 0, movimentacoesCategoriaInativa: 0, movimentacoesDiaFechadoCaixa: 0, movimentacoesPixCaixaNaoSincronizado: 0, avisos });
       setMensagem({
         tipo: "sucesso",
         texto:
           `${parsed.transacoes.length} lidas · ${novas} novas · ${duplicadas} já existentes` +
           (cobertos > 0 ? ` · ${cobertos} já cobertas pelo relatório Pix` : "") +
-          (baixasAuto.baixados > 0 ? ` · ${baixasAuto.baixados} baixado(s) automaticamente` : "") +
-          (baixasAuto.ambiguos > 0 ? ` · ${baixasAuto.ambiguos} ambígua(s) (revisar)` : "") +
-          (baixasAuto.duplicatas > 0 ? ` · ${baixasAuto.duplicatas} provável(is) duplicata(s) (revisar)` : "") +
-          (baixasAuto.mesFechado > 0 ? ` · ${baixasAuto.mesFechado} não baixada(s): mês contábil fechado` : "") +
-          (baixasAuto.falharam > 0 ? ` · ${baixasAuto.falharam} erro(s) na baixa automática (baixa ou sinalização não gravada) — revisar manualmente` : "") +
           (classificadosAuto > 0 ? ` · ${classificadosAuto} classificada(s) automaticamente` : "") +
-          (lancamentosDiretos.lancados > 0 ? ` · ${lancamentosDiretos.lancados} lançada(s) em movimentações` : "") +
-          (lancamentosDiretos.mesFechado > 0 ? ` · ${lancamentosDiretos.mesFechado} não lançada(s): mês contábil fechado` : "") +
-          (lancamentosDiretos.falharam > 0 ? ` · ${lancamentosDiretos.falharam} erro(s) ao lançar em movimentações` : "") +
-          (lancamentosDiretos.sinalIncompativel > 0 ? ` · ${lancamentosDiretos.sinalIncompativel} com categoria de sinal incompatível (entrada/saída) — revisar a regra` : "") +
-          (lancamentosDiretos.categoriaInativa > 0 ? ` · ${lancamentosDiretos.categoriaInativa} com categoria desativada — revisar a regra` : "") +
-          (lancamentosDiretos.diaFechadoCaixa > 0 ? ` · ${lancamentosDiretos.diaFechadoCaixa} Pix não lançado(s): dia fechado no Fechamento de Caixa` : "") +
-          (lancamentosDiretos.pixCaixaNaoSincronizado > 0 ? ` · ${lancamentosDiretos.pixCaixaNaoSincronizado} Pix não sincronizado(s) com o Fechamento de Caixa` : ""),
+          " — revise na aba Lançamentos e confirme quando estiver tudo certo.",
       });
       setArquivo(null);
       if (inputArquivoRef.current) inputArquivoRef.current.value = "";
@@ -1283,7 +1268,7 @@ export default function ExtratoPage() {
       const { data: inseridos, error: erroUpsert } = await supabase
         .from("extrato_lancamento")
         .upsert(linhas, { onConflict: "conta_id,data_lancamento,valor,descricao_normalizada,ocorrencia", ignoreDuplicates: true })
-        .select("id, conta_id, descricao_normalizada, valor, status, data_lancamento");
+        .select("id, conta_id, descricao_normalizada, valor, status, data_lancamento, conta_pagar_id, movimentacao_id");
 
       if (erroUpsert) throw new Error(erroUpsert.message);
 
@@ -1322,26 +1307,18 @@ export default function ExtratoPage() {
       });
 
       let classificadosAuto = 0;
-      let lancamentosDiretosPix = { lancados: 0, mesFechado: 0, falharam: 0, sinalIncompativel: 0, categoriaInativa: 0, diaFechadoCaixa: 0, pixCaixaNaoSincronizado: 0 };
       if (inseridos && inseridos.length > 0) {
         const resultadosRegra = await classificarPorRegras(inseridos as LancamentoClassificavel[]);
         classificadosAuto = resultadosRegra.length;
-        lancamentosDiretosPix = await processarLancamentosDiretos(inseridos as LancamentoParaBaixa[], resultadosRegra);
       }
 
-      setResumoImportacaoPix({ lidas: linhas.length, novas, duplicadas, movimentacoesLancadas: lancamentosDiretosPix.lancados, movimentacoesMesFechado: lancamentosDiretosPix.mesFechado, movimentacoesFalharam: lancamentosDiretosPix.falharam, movimentacoesSinalIncompativel: lancamentosDiretosPix.sinalIncompativel, movimentacoesCategoriaInativa: lancamentosDiretosPix.categoriaInativa, movimentacoesDiaFechadoCaixa: lancamentosDiretosPix.diaFechadoCaixa, movimentacoesPixCaixaNaoSincronizado: lancamentosDiretosPix.pixCaixaNaoSincronizado, avisos: parsed.avisos });
+      setResumoImportacaoPix({ lidas: linhas.length, novas, duplicadas, movimentacoesLancadas: 0, movimentacoesMesFechado: 0, movimentacoesFalharam: 0, movimentacoesSinalIncompativel: 0, movimentacoesCategoriaInativa: 0, movimentacoesDiaFechadoCaixa: 0, movimentacoesPixCaixaNaoSincronizado: 0, avisos: parsed.avisos });
       setMensagem({
         tipo: "sucesso",
         texto:
           `${linhas.length} lidas · ${novas} novas · ${duplicadas} já existentes` +
           (classificadosAuto > 0 ? ` · ${classificadosAuto} classificada(s) automaticamente` : "") +
-          (lancamentosDiretosPix.lancados > 0 ? ` · ${lancamentosDiretosPix.lancados} lançada(s) em movimentações` : "") +
-          (lancamentosDiretosPix.mesFechado > 0 ? ` · ${lancamentosDiretosPix.mesFechado} não lançada(s): mês contábil fechado` : "") +
-          (lancamentosDiretosPix.falharam > 0 ? ` · ${lancamentosDiretosPix.falharam} erro(s) ao lançar em movimentações` : "") +
-          (lancamentosDiretosPix.sinalIncompativel > 0 ? ` · ${lancamentosDiretosPix.sinalIncompativel} com categoria de sinal incompatível (entrada/saída) — revisar a regra` : "") +
-          (lancamentosDiretosPix.categoriaInativa > 0 ? ` · ${lancamentosDiretosPix.categoriaInativa} com categoria desativada — revisar a regra` : "") +
-          (lancamentosDiretosPix.diaFechadoCaixa > 0 ? ` · ${lancamentosDiretosPix.diaFechadoCaixa} Pix não lançado(s): dia fechado no Fechamento de Caixa` : "") +
-          (lancamentosDiretosPix.pixCaixaNaoSincronizado > 0 ? ` · ${lancamentosDiretosPix.pixCaixaNaoSincronizado} Pix não sincronizado(s) com o Fechamento de Caixa` : ""),
+          " — revise na aba Lançamentos e confirme quando estiver tudo certo.",
       });
       setArquivoPix(null);
       if (inputArquivoPixRef.current) inputArquivoPixRef.current.value = "";
