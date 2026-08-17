@@ -94,6 +94,13 @@ interface LancamentoParaBaixa {
   status: string;
   conta_pagar_id: string | null;
   movimentacao_id: string | null;
+  // Opcionais como os dois abaixo: nem toda query que produz este tipo seleciona
+  // estes campos (handleReprocessar, por exemplo, não seleciona). Quem precisa
+  // deles (confirmarImportacao, que relê um lote já classificado com select("*"))
+  // traz as duas colunas juntas — classificarPorRegras sempre grava `categoria` e
+  // `regra_id` no mesmo update.
+  categoria?: string | null;
+  regra_id?: string | null;
   contas_pagar_candidatas?: string[] | null;
   contas_pagar_duplicatas?: string[] | null;
 }
@@ -766,6 +773,9 @@ export default function ExtratoPage() {
   const [diaExpandido, setDiaExpandido] = useState<string | null>(null);
   const [confirmandoDia, setConfirmandoDia] = useState<string | null>(null);
   const [reprocessando, setReprocessando] = useState(false);
+  // Spinner por linha da lista de importações (a UI que consome este estado
+  // chega na Task 6 — aqui ele só existe pra confirmarImportacao já marcá-lo).
+  const [confirmandoImportacaoId, setConfirmandoImportacaoId] = useState<string | null>(null);
   const [categoriaEmEdicao, setCategoriaEmEdicao] = useState<Record<string, string>>({});
   const [acaoLancamentoId, setAcaoLancamentoId] = useState<string | null>(null);
   const [sugerirRegraPara, setSugerirRegraPara] = useState<{ lancamento: Lancamento; categoria: string } | null>(null);
@@ -1008,6 +1018,93 @@ export default function ExtratoPage() {
       setMensagem({ tipo: "erro", texto: e instanceof Error ? e.message : "Erro ao reprocessar." });
     } finally {
       setReprocessando(false);
+    }
+  }
+
+  // Lança de verdade um lote que o upload deixou apenas preparado/classificado:
+  // classificarPorRegras já rodou no import (gravando categoria/regra_id/status
+  // no staging, sem tocar em contas_pagar/movimentacoes), e é só aqui que a baixa
+  // automática e as movimentações acontecem.
+  //
+  // Re-executável com segurança: o filtro é por importacao_id + campos AINDA
+  // vazios (conta_pagar_id/movimentacao_id nulos), nunca por
+  // extrato_importacao.status. Rodar de novo num lote já "confirmada" (pra pegar
+  // o que ficou de fora por mês fechado, depois que o mês reabriu) simplesmente
+  // não acha nada na segunda vez — não duplica.
+  async function confirmarImportacao(importacaoId: string) {
+    if (!podeEscrever) return;
+    setConfirmandoImportacaoId(importacaoId);
+    setMensagem(null);
+    try {
+      const { data: lote, error } = await supabase
+        .from("extrato_lancamento")
+        .select("*")
+        .eq("importacao_id", importacaoId)
+        .is("conta_pagar_id", null)
+        .is("movimentacao_id", null)
+        .neq("status", "ignorado");
+      if (error) {
+        setMensagem({ tipo: "erro", texto: "Erro ao carregar o lote pra confirmar: " + error.message });
+        return;
+      }
+      if (!lote || lote.length === 0) {
+        setMensagem({ tipo: "sucesso", texto: "Nada pendente pra confirmar neste lote." });
+        await supabase.from("extrato_importacao").update({ status: "confirmada" }).eq("id", importacaoId);
+        await refrescarTudo();
+        return;
+      }
+
+      const baixasAuto = await processarBaixasAutomaticas(lote as LancamentoParaBaixa[]);
+      const paraLancar = (lote as LancamentoParaBaixa[]).filter(
+        (l) =>
+          !baixasAuto.idsBaixados.has(l.id) &&
+          !baixasAuto.idsAmbiguos.has(l.id) &&
+          !baixasAuto.idsDuplicatas.has(l.id) &&
+          l.status === "classificado"
+      );
+      // Reconstrói ResultadoClassificacao a partir do que classificarPorRegras já
+      // gravou na linha no momento do upload — categoria e regra_id vêm sempre no
+      // mesmo update que marca status="classificado", então os dois estão
+      // preenchidos em qualquer linha que sobreviva ao filtro acima.
+      const resultadosRegra: ResultadoClassificacao[] = paraLancar.map((l) => ({
+        lancamentoId: l.id,
+        categoria: l.categoria!,
+        regraId: l.regra_id!,
+      }));
+      const lancamentosDiretos = await processarLancamentosDiretos(paraLancar, resultadosRegra);
+
+      await supabase.from("extrato_importacao").update({ status: "confirmada" }).eq("id", importacaoId);
+      await registrarLog({
+        acao: "importou",
+        tabela: "extrato_importacao",
+        registroId: importacaoId,
+        detalhes: "Importação confirmada e lançada",
+      });
+
+      const partes: string[] = [];
+      if (baixasAuto.baixados > 0) partes.push(`${baixasAuto.baixados} baixado(s) automaticamente`);
+      if (baixasAuto.ambiguos > 0) partes.push(`${baixasAuto.ambiguos} ambígua(s) (revisar)`);
+      if (baixasAuto.duplicatas > 0) partes.push(`${baixasAuto.duplicatas} provável(is) duplicata(s) (revisar)`);
+      if (baixasAuto.mesFechado > 0) partes.push(`${baixasAuto.mesFechado} não baixada(s): mês contábil fechado`);
+      if (baixasAuto.falharam > 0) partes.push(`${baixasAuto.falharam} erro(s) na baixa automática — revisar manualmente`);
+      if (lancamentosDiretos.lancados > 0) partes.push(`${lancamentosDiretos.lancados} lançada(s) em movimentações`);
+      if (lancamentosDiretos.mesFechado > 0) partes.push(`${lancamentosDiretos.mesFechado} não lançada(s): mês contábil fechado`);
+      if (lancamentosDiretos.falharam > 0) partes.push(`${lancamentosDiretos.falharam} erro(s) ao lançar`);
+      if (lancamentosDiretos.sinalIncompativel > 0) partes.push(`${lancamentosDiretos.sinalIncompativel} com categoria de sinal incompatível — revisar a regra`);
+      if (lancamentosDiretos.categoriaInativa > 0) partes.push(`${lancamentosDiretos.categoriaInativa} com categoria desativada — revisar a regra`);
+      if (lancamentosDiretos.diaFechadoCaixa > 0) partes.push(`${lancamentosDiretos.diaFechadoCaixa} Pix não lançado(s): dia fechado no Fechamento de Caixa`);
+      if (lancamentosDiretos.pixCaixaNaoSincronizado > 0) partes.push(`${lancamentosDiretos.pixCaixaNaoSincronizado} Pix não sincronizado(s) com o Fechamento de Caixa`);
+
+      setMensagem({
+        tipo: "sucesso",
+        texto:
+          partes.length > 0
+            ? `Importação confirmada · ${partes.join(" · ")}`
+            : "Importação confirmada. Nada novo pra lançar neste lote (tudo já resolvido antes).",
+      });
+      await refrescarTudo();
+    } finally {
+      setConfirmandoImportacaoId(null);
     }
   }
 
