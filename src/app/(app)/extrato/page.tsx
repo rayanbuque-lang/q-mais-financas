@@ -744,6 +744,8 @@ export default function ExtratoPage() {
   const [mensagem, setMensagem] = useState<Mensagem>(null);
 
   const [contas, setContas] = useState<Conta[]>([]);
+  const [importacoes, setImportacoes] = useState<{ id: string; conta_id: string; nome_arquivo: string; importado_em: string; qtd_linhas: number; status: string }[]>([]);
+  const [carregandoImportacoes, setCarregandoImportacoes] = useState(false);
 
   // Importar
   const [contaImportId, setContaImportId] = useState("");
@@ -767,14 +769,14 @@ export default function ExtratoPage() {
   const [carregandoLancamentos, setCarregandoLancamentos] = useState(false);
   const [filtroContaId, setFiltroContaId] = useState("");
   const [filtroStatus, setFiltroStatus] = useState<"todos" | "nao_classificado" | "classificado" | "ignorado">("todos");
+  const [filtroImportacaoId, setFiltroImportacaoId] = useState("");
   const [ocultarRevisados, setOcultarRevisados] = useState(true);
   const [ocultarIgnorados, setOcultarIgnorados] = useState(true);
   const [resumo, setResumo] = useState({ total: 0, classificados: 0, naoClassificados: 0, automaticos: 0 });
   const [diaExpandido, setDiaExpandido] = useState<string | null>(null);
   const [confirmandoDia, setConfirmandoDia] = useState<string | null>(null);
   const [reprocessando, setReprocessando] = useState(false);
-  // Spinner por linha da lista de importações (a UI que consome este estado
-  // chega na Task 6 — aqui ele só existe pra confirmarImportacao já marcá-lo).
+  // Spinner por linha da lista de importações (aba Importar).
   const [confirmandoImportacaoId, setConfirmandoImportacaoId] = useState<string | null>(null);
   const [desfazendoImportacaoId, setDesfazendoImportacaoId] = useState<string | null>(null);
   const [categoriaEmEdicao, setCategoriaEmEdicao] = useState<Record<string, string>>({});
@@ -857,6 +859,7 @@ export default function ExtratoPage() {
       .limit(LIMITE_LANCAMENTOS);
     if (filtroContaId) query = query.eq("conta_id", filtroContaId);
     if (filtroStatus !== "todos") query = query.eq("status", filtroStatus);
+    if (filtroImportacaoId) query = query.eq("importacao_id", filtroImportacaoId);
     // Ignorado = "isso não é uma movimentação real", não deve poluir a lista de
     // trabalho. Some por padrão; só reaparece se o usuário filtrar status=ignorado
     // de propósito pra conferir o que já foi descartado.
@@ -914,8 +917,20 @@ export default function ExtratoPage() {
     setCarregandoRegras(false);
   }
 
+  async function carregarImportacoes() {
+    setCarregandoImportacoes(true);
+    const { data, error } = await supabase
+      .from("extrato_importacao")
+      .select("id, conta_id, nome_arquivo, importado_em, qtd_linhas, status")
+      .order("importado_em", { ascending: false })
+      .limit(20);
+    if (!error && data) setImportacoes(data);
+    else if (error) setMensagem({ tipo: "erro", texto: "Erro ao carregar importações: " + error.message });
+    setCarregandoImportacoes(false);
+  }
+
   async function refrescarTudo() {
-    await Promise.all([carregarLancamentos(), carregarResumo(), carregarRegras()]);
+    await Promise.all([carregarLancamentos(), carregarResumo(), carregarRegras(), carregarImportacoes()]);
   }
 
   useEffect(() => {
@@ -929,12 +944,13 @@ export default function ExtratoPage() {
     carregarContas();
     carregarRegras();
     carregarCategoriasReais();
+    carregarImportacoes();
   }, []);
 
   useEffect(() => {
     carregarLancamentos();
     carregarResumo();
-  }, [filtroContaId, filtroStatus, ocultarRevisados, ocultarIgnorados]);
+  }, [filtroContaId, filtroStatus, filtroImportacaoId, ocultarRevisados, ocultarIgnorados]);
 
   // ---------- Motor de regras ----------
 
@@ -2492,6 +2508,92 @@ export default function ExtratoPage() {
               </div>
             )}
           </div>
+
+          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-6 max-w-3xl mt-6">
+            <h2 className="font-semibold text-sm mb-3">Importações recentes</h2>
+            {carregandoImportacoes ? (
+              <div className="skeleton h-24 rounded-xl" />
+            ) : importacoes.length === 0 ? (
+              <p className="text-xs text-[var(--color-text-muted)]">Nenhuma importação ainda.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-[var(--color-border)] text-left text-[var(--color-text-muted)]">
+                      <th className="pb-2 pr-3 font-semibold">Arquivo</th>
+                      <th className="pb-2 pr-3 font-semibold">Conta</th>
+                      <th className="pb-2 pr-3 font-semibold">Importado em</th>
+                      <th className="pb-2 pr-3 font-semibold text-right">Linhas</th>
+                      <th className="pb-2 pr-3 font-semibold text-center">Status</th>
+                      {podeEscrever && <th className="pb-2 font-semibold">Ações</th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {importacoes.map((imp) => {
+                      const conta = contas.find((c) => c.id === imp.conta_id);
+                      const emAcao = confirmandoImportacaoId === imp.id || desfazendoImportacaoId === imp.id;
+                      return (
+                        <tr key={imp.id} className="border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--hover-bg)]">
+                          <td className="py-2 pr-3 max-w-[220px] truncate" title={imp.nome_arquivo}>{imp.nome_arquivo}</td>
+                          <td className="py-2 pr-3 whitespace-nowrap">{conta ? nomeConta(conta) : "—"}</td>
+                          <td className="py-2 pr-3 whitespace-nowrap">{new Date(imp.importado_em).toLocaleString("pt-BR")}</td>
+                          <td className="py-2 pr-3 text-right">{imp.qtd_linhas}</td>
+                          <td className="py-2 pr-3 text-center">
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border whitespace-nowrap ${
+                                imp.status === "confirmada"
+                                  ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                  : imp.status === "descartada"
+                                  ? "bg-gray-100 text-gray-500 border-gray-200"
+                                  : "bg-blue-50 text-blue-700 border-blue-200"
+                              }`}
+                            >
+                              {imp.status === "confirmada" ? "confirmada" : imp.status === "descartada" ? "descartada" : "pendente"}
+                            </span>
+                          </td>
+                          {podeEscrever && (
+                            <td className="py-2 whitespace-nowrap">
+                              {imp.status === "pendente" && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => confirmarImportacao(imp.id)}
+                                    disabled={emAcao}
+                                    className="text-emerald-600 hover:underline text-[11px] font-medium mr-2 disabled:opacity-50"
+                                  >
+                                    {confirmandoImportacaoId === imp.id ? "Confirmando..." : "Confirmar"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => desfazerImportacao(imp.id)}
+                                    disabled={emAcao}
+                                    className="text-red-500 hover:underline text-[11px] font-medium disabled:opacity-50"
+                                  >
+                                    {desfazendoImportacaoId === imp.id ? "Descartando..." : "Descartar"}
+                                  </button>
+                                </>
+                              )}
+                              {imp.status === "confirmada" && (
+                                <button
+                                  type="button"
+                                  onClick={() => desfazerImportacao(imp.id)}
+                                  disabled={emAcao}
+                                  className="text-red-500 hover:underline text-[11px] font-medium disabled:opacity-50"
+                                >
+                                  {desfazendoImportacaoId === imp.id ? "Desfazendo..." : "Desfazer lançamentos"}
+                                </button>
+                              )}
+                              {imp.status === "descartada" && <span className="text-[var(--color-text-muted)]">—</span>}
+                            </td>
+                          )}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -2538,6 +2640,18 @@ export default function ExtratoPage() {
               <option value="nao_classificado">Não classificados</option>
               <option value="classificado">Classificados</option>
               <option value="ignorado">Ignorados</option>
+            </select>
+            <select
+              value={filtroImportacaoId}
+              onChange={(e) => setFiltroImportacaoId(e.target.value)}
+              className="px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-xs"
+            >
+              <option value="">Todas as importações</option>
+              {importacoes.map((imp) => (
+                <option key={imp.id} value={imp.id}>
+                  {imp.nome_arquivo} ({imp.status})
+                </option>
+              ))}
             </select>
             <label className="flex items-center gap-1.5 text-xs text-[var(--color-text-muted)] px-1">
               <input type="checkbox" checked={ocultarRevisados} onChange={(e) => setOcultarRevisados(e.target.checked)} />
