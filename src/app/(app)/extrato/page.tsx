@@ -1177,6 +1177,13 @@ export default function ExtratoPage() {
         .single();
       if (erroImportacao) throw new Error(erroImportacao.message);
 
+      if (inseridos && inseridos.length > 0) {
+        await supabase
+          .from("extrato_lancamento")
+          .update({ importacao_id: importacaoCriada.id })
+          .in("id", inseridos.map((i) => i.id));
+      }
+
       await registrarLog({
         acao: "importou",
         tabela: "extrato_importacao",
@@ -1299,6 +1306,13 @@ export default function ExtratoPage() {
         .select("id")
         .single();
       if (erroImportacao) throw new Error(erroImportacao.message);
+
+      if (inseridos && inseridos.length > 0) {
+        await supabase
+          .from("extrato_lancamento")
+          .update({ importacao_id: importacaoCriada.id })
+          .in("id", inseridos.map((i) => i.id));
+      }
 
       await registrarLog({
         acao: "importou",
