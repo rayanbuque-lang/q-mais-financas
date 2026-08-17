@@ -1042,7 +1042,12 @@ export default function ExtratoPage() {
         .eq("importacao_id", importacaoId)
         .is("conta_pagar_id", null)
         .is("movimentacao_id", null)
-        .neq("status", "ignorado");
+        .neq("status", "ignorado")
+        // Sem .limit() explícito o PostgREST corta na sua página padrão (1000) e
+        // o resto do lote sumiria em silêncio — aqui isso significaria marcar a
+        // importação como "confirmada" com dinheiro nunca lançado. Mesmo teto de
+        // carregarLancamentos/handleReprocessar (ver commit 693a921).
+        .limit(LIMITE_LANCAMENTOS);
       if (error) {
         setMensagem({ tipo: "erro", texto: "Erro ao carregar o lote pra confirmar: " + error.message });
         return;
@@ -1053,6 +1058,13 @@ export default function ExtratoPage() {
         await refrescarTudo();
         return;
       }
+
+      // Bateu exatamente no teto = provavelmente há mais linhas além dele. Nesse
+      // caso processamos normalmente o que veio, mas NÃO marcamos "confirmada":
+      // como a função é idempotente, cada nova execução vai consumindo o que
+      // sobrou (o já lançado deixa de ser elegível) até o lote caber embaixo do
+      // limite e só então virar "confirmada".
+      const loteTruncado = lote.length === LIMITE_LANCAMENTOS;
 
       const baixasAuto = await processarBaixasAutomaticas(lote as LancamentoParaBaixa[]);
       const paraLancar = (lote as LancamentoParaBaixa[]).filter(
@@ -1073,12 +1085,16 @@ export default function ExtratoPage() {
       }));
       const lancamentosDiretos = await processarLancamentosDiretos(paraLancar, resultadosRegra);
 
-      await supabase.from("extrato_importacao").update({ status: "confirmada" }).eq("id", importacaoId);
+      if (!loteTruncado) {
+        await supabase.from("extrato_importacao").update({ status: "confirmada" }).eq("id", importacaoId);
+      }
       await registrarLog({
         acao: "importou",
         tabela: "extrato_importacao",
         registroId: importacaoId,
-        detalhes: "Importação confirmada e lançada",
+        detalhes: loteTruncado
+          ? `Importação lançada parcialmente (${lote.length} linhas, teto da consulta) — ainda não confirmada`
+          : "Importação confirmada e lançada",
       });
 
       const partes: string[] = [];
@@ -1095,14 +1111,30 @@ export default function ExtratoPage() {
       if (lancamentosDiretos.diaFechadoCaixa > 0) partes.push(`${lancamentosDiretos.diaFechadoCaixa} Pix não lançado(s): dia fechado no Fechamento de Caixa`);
       if (lancamentosDiretos.pixCaixaNaoSincronizado > 0) partes.push(`${lancamentosDiretos.pixCaixaNaoSincronizado} Pix não sincronizado(s) com o Fechamento de Caixa`);
 
-      setMensagem({
-        tipo: "sucesso",
-        texto:
-          partes.length > 0
-            ? `Importação confirmada · ${partes.join(" · ")}`
-            : "Importação confirmada. Nada novo pra lançar neste lote (tudo já resolvido antes).",
-      });
+      if (loteTruncado) {
+        // Marcado como "erro" de propósito: nada falhou, mas o lote NÃO terminou
+        // e a única coisa pior que um erro aqui seria um aviso verde que o
+        // usuário lê como "acabou" e nunca mais volta.
+        setMensagem({
+          tipo: "erro",
+          texto: `Lote grande demais pra confirmar de uma vez: processadas as primeiras ${lote.length} linhas${partes.length > 0 ? ` · ${partes.join(" · ")}` : ""} · A importação NÃO foi marcada como confirmada — clique em Confirmar de novo pra processar o restante.`,
+        });
+      } else {
+        setMensagem({
+          tipo: "sucesso",
+          texto:
+            partes.length > 0
+              ? `Importação confirmada · ${partes.join(" · ")}`
+              : "Importação confirmada. Nada novo pra lançar neste lote (tudo já resolvido antes).",
+        });
+      }
       await refrescarTudo();
+    } catch (e) {
+      // Cada baixa/movimentação é comitada individualmente: se algo estourou no
+      // meio, parte do dinheiro pode já ter sido escrita. Sem este catch a tela
+      // ficava muda (só o spinner sumia) — o usuário precisa saber que caiu no
+      // meio pra rodar Confirmar de novo e conferir.
+      setMensagem({ tipo: "erro", texto: e instanceof Error ? e.message : "Erro inesperado ao confirmar a importação." });
     } finally {
       setConfirmandoImportacaoId(null);
     }
