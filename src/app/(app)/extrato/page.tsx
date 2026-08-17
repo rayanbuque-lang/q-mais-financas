@@ -966,7 +966,7 @@ export default function ExtratoPage() {
     try {
       let query = supabase
         .from("extrato_lancamento")
-        .select("id, conta_id, descricao_normalizada, valor, status, data_lancamento, contas_pagar_candidatas, contas_pagar_duplicatas")
+        .select("id, conta_id, descricao_normalizada, valor, status, data_lancamento, conta_pagar_id, movimentacao_id, contas_pagar_candidatas, contas_pagar_duplicatas")
         .eq("status", "nao_classificado")
         // Mesmo teto de carregarLancamentos — sem .limit() o PostgREST corta na
         // sua página padrão e o reprocessamento silenciosamente ignora o resto.
