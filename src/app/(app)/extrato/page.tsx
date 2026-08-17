@@ -1218,8 +1218,17 @@ export default function ExtratoPage() {
 
           const { error: erroDeleteMov } = await supabase.from("movimentacoes").delete().eq("id", l.movimentacao_id);
           if (erroDeleteMov) {
-            // Não conseguiu excluir (RLS, rede) -- devolve o vínculo em vez de
-            // deixar a movimentação real órfã e sem rastro.
+            // Não conseguiu excluir (RLS, rede) -- desfaz tudo o que já tinha
+            // sido escrito nesta iteração, na ordem inversa. Primeiro devolve ao
+            // Fechamento de Caixa o valor que acabou de ser subtraído: sem essa
+            // compensação o caixa do dia fica permanentemente menor que o real
+            // (a movimentação continua viva) e um novo "Desfazer" subtrairia de
+            // novo. Depois devolve o vínculo, pra não deixar a movimentação real
+            // órfã e sem rastro. Se a própria compensação falhar não há mais o
+            // que fazer daqui -- a contagem em `pulados` é o sinal pro humano.
+            if (campoPix) {
+              await aplicarPixNoFechamentoCaixa(l.data_lancamento, campoPix, Math.abs(Number(l.valor)));
+            }
             await supabase.from("extrato_lancamento").update({ movimentacao_id: l.movimentacao_id }).eq("id", l.id);
             pulados++;
             continue;
@@ -1238,12 +1247,28 @@ export default function ExtratoPage() {
           const erroMes = await bloquearSeMesFechado(conta?.data_pagamento ?? l.data_lancamento);
           if (erroMes) { pulados++; continue; }
 
-          const { data: mov } = await supabase.from("movimentacoes").select("id").eq("conta_pagar_id", l.conta_pagar_id).limit(1).maybeSingle();
+          // O erro desta leitura precisa ser checado de verdade (mesmo cuidado
+          // que excluirMov documenta em movimentacoes/page.tsx): numa falha de
+          // rede/RLS `mov` vem null e seguir em frente devolveria a conta pra
+          // "pendente" com a movimentação de saída original ainda viva -- a
+          // conta reapareceria pra pagar de novo, pagamento duplicado.
+          const { data: mov, error: erroLeituraMov } = await supabase.from("movimentacoes").select("id").eq("conta_pagar_id", l.conta_pagar_id).limit(1).maybeSingle();
+          if (erroLeituraMov) { pulados++; continue; }
           if (mov) {
             const { error: erroDeleteMov } = await supabase.from("movimentacoes").delete().eq("id", mov.id);
             if (erroDeleteMov) { pulados++; continue; }
           }
-          await supabase.from("contas_pagar").update({ status: "pendente", data_pagamento: null }).eq("id", l.conta_pagar_id);
+          // Condicional com .select("id") pelo mesmo motivo: se este update
+          // falhar depois da movimentação já ter sido excluída, a conta fica
+          // "pago" sem nenhuma movimentação por trás -- a despesa some dos
+          // livros. Nesse caso o staging NÃO é apagado e a linha conta como
+          // pulada, pra sobrar rastro do que precisa de conserto manual.
+          const { data: contaAtualizada, error: erroContaPagar } = await supabase
+            .from("contas_pagar")
+            .update({ status: "pendente", data_pagamento: null })
+            .eq("id", l.conta_pagar_id)
+            .select("id");
+          if (erroContaPagar || !contaAtualizada || contaAtualizada.length === 0) { pulados++; continue; }
           await supabase.from("extrato_lancamento").delete().eq("id", l.id);
           revertidos++;
         } else {
