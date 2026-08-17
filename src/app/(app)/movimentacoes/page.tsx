@@ -2,10 +2,12 @@
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { CurrencyInput } from "@/components/currency-input";
-import { registrarLog } from "@/lib/audit";
+import { registrarLog, bloquearSeMesFechado } from "@/lib/audit";
 import ComprovantePicker from "@/components/comprovante-picker";
 import EmptyState from "@/components/empty-state";
 import { useRole } from "@/lib/role-context";
+import { ehPixRecebido } from "@/lib/cobertura-pix";
+import { bancoParaCampoPix, aplicarPixNoFechamentoCaixa } from "@/lib/fechamento-caixa-pix";
 
 interface Movimentacao { id: string; tipo: string; data: string; valor: number; categoria_id: string; observacao: string; revisar: boolean; comprovante_url?: string; }
 interface Cat { id: string; nome: string; }
@@ -258,6 +260,14 @@ export default function MovimentacoesPage() {
       return;
     }
 
+    const erroMes = await bloquearSeMesFechado(data);
+    if (erroMes) {
+      setMensagem(erroMes);
+      setLoading(false);
+      setTimeout(() => setMensagem(""), 5000);
+      return;
+    }
+
     const dados = { tipo, data, valor: valorNum, categoria_id: categoriaId, observacao, forma_pagamento: null, revisar: false, comprovante_url: comprovanteUrl };
     let movId = editandoId;
     let error;
@@ -348,11 +358,42 @@ export default function MovimentacoesPage() {
     // RLS), não dá pra saber se havia baixa a desfazer -- seguir em frente
     // deixaria a conta "paga" pra sempre sem movimentação, exatamente o bug
     // que esse bloco existe pra fechar. Então aborta sem excluir nada.
-    const { data: movAtual, error: erroLeitura } = await supabase.from("movimentacoes").select("conta_pagar_id").eq("id", id).maybeSingle();
+    const { data: movAtual, error: erroLeitura } = await supabase.from("movimentacoes").select("conta_pagar_id, data, valor").eq("id", id).maybeSingle();
     if (erroLeitura) {
       setMensagem("Não foi possível verificar o vínculo com contas a pagar — exclusão cancelada. Tente de novo.");
       setTimeout(() => setMensagem(""), 6000);
       return;
+    }
+    if (movAtual) {
+      const erroMes = await bloquearSeMesFechado(movAtual.data);
+      if (erroMes) {
+        setMensagem(erroMes);
+        setTimeout(() => setMensagem(""), 6000);
+        return;
+      }
+
+      // Se essa movimentação veio de um Pix recebido importado do extrato, o
+      // valor foi somado ao Fechamento de Caixa do dia (Task 2) -- precisa
+      // ser subtraído de volta ANTES de excluir, senão o caixa fica
+      // permanentemente acima do real. Aborta a exclusão inteira se o dia do
+      // caixa estiver fechado (evita deixar tudo fora de sincronia).
+      const { data: extratoVinculado } = await supabase
+        .from("extrato_lancamento")
+        .select("conta_id, descricao_normalizada")
+        .eq("movimentacao_id", id)
+        .maybeSingle();
+      if (extratoVinculado && ehPixRecebido(extratoVinculado.descricao_normalizada)) {
+        const { data: contaExtrato } = await supabase.from("extrato_conta").select("banco").eq("id", extratoVinculado.conta_id).single();
+        const campoPix = bancoParaCampoPix(contaExtrato?.banco ?? "");
+        if (campoPix) {
+          const resultado = await aplicarPixNoFechamentoCaixa(movAtual.data, campoPix, -movAtual.valor);
+          if (resultado !== "ok") {
+            setMensagem("Não foi possível ajustar o Fechamento de Caixa (dia fechado) — exclusão cancelada. Reabra o dia no Fechamento de Caixa antes de excluir.");
+            setTimeout(() => setMensagem(""), 6000);
+            return;
+          }
+        }
+      }
     }
     if (movAtual?.conta_pagar_id) {
       await supabase.from("contas_pagar").update({ status: "pendente", data_pagamento: null }).eq("id", movAtual.conta_pagar_id);

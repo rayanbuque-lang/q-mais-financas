@@ -41,7 +41,7 @@ function diasEntre(dataMenor: string, dataMaior: string): number {
 // tarifa podia cobrir outra tarifa de mesmo valor em outro dia da janela e
 // sumir do extrato. As duas formas legítimas começam com o padrão: o .ofx traz
 // "pix recebido 13020501402" e o relatório Pix sintetiza "pix recebido fulano".
-function ehPixRecebido(descricaoNormalizada: string): boolean {
+export function ehPixRecebido(descricaoNormalizada: string): boolean {
   return descricaoNormalizada.startsWith(PADRAO_PIX_RECEBIDO);
 }
 

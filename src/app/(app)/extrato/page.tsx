@@ -4,12 +4,13 @@ import { useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { parseOfx, decodificarOfx, OfxParseError } from "@/lib/ofx";
 import { parseRelatorioPix, RelatorioPixParseError } from "@/lib/relatorio-pix";
-import { calcularCobertura, type CandidatoOfx, type LancamentoExistentePix } from "@/lib/cobertura-pix";
+import { calcularCobertura, ehPixRecebido, type CandidatoOfx, type LancamentoExistentePix } from "@/lib/cobertura-pix";
 import { aplicarRegras, type RegraExtrato as RegraMotor, type LancamentoClassificavel, type ResultadoClassificacao } from "@/lib/regras-extrato";
 import { calcularTipoMovimentacao, agruparResumoPorDia, type ResumoDia } from "@/lib/preview-movimentacao";
 import EmptyState from "@/components/empty-state";
 import { calcularBaixasAutomaticas, type CandidatoBaixa, type ContaPagarPendente } from "@/lib/baixa-contas-pagar";
 import { registrarLog, verificarMesFechado } from "@/lib/audit";
+import { bancoParaCampoPix, verificarDiaFechadoCaixa, aplicarPixNoFechamentoCaixa } from "@/lib/fechamento-caixa-pix";
 
 interface Conta {
   id: string;
@@ -466,6 +467,7 @@ function ehBoletoSemResolucao(l: {
 
 interface LancamentoParaMovimentacao {
   id: string;
+  conta_id: string;
   data_lancamento: string;
   valor: number;
   descricao_normalizada: string;
@@ -487,7 +489,22 @@ interface LancamentoParaMovimentacao {
 // "nao_lancado", os dois são erro de cadastro/regra e precisam aparecer para
 // o usuário -- sem isso, dinheiro simplesmente para de ser lançado em
 // Movimentações, em silêncio.
-type ResultadoLancamentoDireto = "ok" | "mes_fechado" | "falhou" | "nao_lancado" | "categoria_sinal_incompativel" | "categoria_inativa";
+// "dia_fechado_caixa": é um Pix recebido e o dia já está fechado no
+// Fechamento de Caixa -- bloqueia TUDO (nem movimentação, nem caixa),
+// simetria com "mes_fechado". "pix_caixa_nao_sincronizado": a movimentação
+// já foi criada com sucesso, mas o incremento no Fechamento de Caixa falhou
+// ou perdeu a corrida rara contra um fechamento simultâneo do dia -- não dá
+// pra desfazer a movimentação silenciosamente, então isso precisa aparecer
+// para o usuário revisar manualmente.
+type ResultadoLancamentoDireto =
+  | "ok"
+  | "mes_fechado"
+  | "falhou"
+  | "nao_lancado"
+  | "categoria_sinal_incompativel"
+  | "categoria_inativa"
+  | "dia_fechado_caixa"
+  | "pix_caixa_nao_sincronizado";
 
 // Só categorias ATIVAS entram nos mapas de lançamento: existem nomes
 // duplicados em produção (uma ativa e uma inativa com o mesmo nome, ex.
@@ -568,6 +585,18 @@ async function lancarMovimentacaoDireta(
   }
   if (fechado) return "mes_fechado";
 
+  // Pix recebido também precisa ser somado ao Fechamento de Caixa do dia
+  // (agrupado por banco) -- se o dia já estiver fechado lá, bloqueia tudo
+  // ANTES de escrever qualquer coisa, mesma filosofia do mês fechado.
+  let campoPix: "pix_santander" | "pix_inter" | null = null;
+  if (tipo === "entrada" && ehPixRecebido(lancamento.descricao_normalizada)) {
+    const { data: contaExtrato } = await supabase.from("extrato_conta").select("banco").eq("id", lancamento.conta_id).single();
+    campoPix = bancoParaCampoPix(contaExtrato?.banco ?? "");
+    if (campoPix && (await verificarDiaFechadoCaixa(lancamento.data_lancamento))) {
+      return "dia_fechado_caixa";
+    }
+  }
+
   const { data: movimentacaoInserida, error: erroInsert } = await supabase
     .from("movimentacoes")
     .insert({
@@ -620,6 +649,21 @@ async function lancarMovimentacaoDireta(
     return "falhou";
   }
 
+  if (campoPix) {
+    const resultadoPix = await aplicarPixNoFechamentoCaixa(lancamento.data_lancamento, campoPix, Math.abs(Number(lancamento.valor)));
+    if (resultadoPix !== "ok") {
+      // A movimentação já foi criada e vinculada com sucesso -- não desfaz.
+      // Só sinaliza que o lado do Fechamento de Caixa não acompanhou (dia
+      // fechou durante o processamento, ou erro de escrita).
+      await registrarLog({
+        acao: "editou",
+        tabela: "fechamento_caixa",
+        detalhes: `Pix (${formatarMoeda(Math.abs(Number(lancamento.valor)))}) lançado em Movimentações mas NÃO somado ao Fechamento de Caixa do dia ${lancamento.data_lancamento} (${resultadoPix === "dia_fechado" ? "dia fechado durante o processamento" : "erro ao gravar"}). Ajuste manual necessário.`,
+      });
+      return "pix_caixa_nao_sincronizado";
+    }
+  }
+
   await registrarLog({
     acao: "criou",
     tabela: "movimentacoes",
@@ -635,8 +679,8 @@ async function lancarMovimentacaoDireta(
 async function processarLancamentosDiretos(
   candidatos: LancamentoParaBaixa[],
   resultadosRegra: ResultadoClassificacao[]
-): Promise<{ lancados: number; mesFechado: number; falharam: number; sinalIncompativel: number; categoriaInativa: number }> {
-  if (resultadosRegra.length === 0) return { lancados: 0, mesFechado: 0, falharam: 0, sinalIncompativel: 0, categoriaInativa: 0 };
+): Promise<{ lancados: number; mesFechado: number; falharam: number; sinalIncompativel: number; categoriaInativa: number; diaFechadoCaixa: number; pixCaixaNaoSincronizado: number }> {
+  if (resultadosRegra.length === 0) return { lancados: 0, mesFechado: 0, falharam: 0, sinalIncompativel: 0, categoriaInativa: 0, diaFechadoCaixa: 0, pixCaixaNaoSincronizado: 0 };
 
   const { entrada, saida, entradaInativas, saidaInativas } = await carregarMapasCategoria();
   const porId = new Map(candidatos.map((c) => [c.id, c]));
@@ -650,11 +694,13 @@ async function processarLancamentosDiretos(
   let falharam = 0;
   let sinalIncompativel = 0;
   let categoriaInativa = 0;
+  let diaFechadoCaixa = 0;
+  let pixCaixaNaoSincronizado = 0;
   for (const r of resultadosRegra) {
     const lancamento = porId.get(r.lancamentoId);
     if (!lancamento) continue;
     const resultado = await lancarMovimentacaoDireta(
-      { id: lancamento.id, data_lancamento: lancamento.data_lancamento, valor: lancamento.valor, descricao_normalizada: lancamento.descricao_normalizada },
+      { id: lancamento.id, conta_id: lancamento.conta_id, data_lancamento: lancamento.data_lancamento, valor: lancamento.valor, descricao_normalizada: lancamento.descricao_normalizada },
       r.categoria,
       entrada,
       saida,
@@ -667,8 +713,10 @@ async function processarLancamentosDiretos(
     else if (resultado === "falhou") falharam++;
     else if (resultado === "categoria_sinal_incompativel") sinalIncompativel++;
     else if (resultado === "categoria_inativa") categoriaInativa++;
+    else if (resultado === "dia_fechado_caixa") diaFechadoCaixa++;
+    else if (resultado === "pix_caixa_nao_sincronizado") pixCaixaNaoSincronizado++;
   }
-  return { lancados, mesFechado, falharam, sinalIncompativel, categoriaInativa };
+  return { lancados, mesFechado, falharam, sinalIncompativel, categoriaInativa, diaFechadoCaixa, pixCaixaNaoSincronizado };
 }
 
 export default function ExtratoPage() {
@@ -686,7 +734,7 @@ export default function ExtratoPage() {
   const [contaImportId, setContaImportId] = useState("");
   const [arquivo, setArquivo] = useState<File | null>(null);
   const [importando, setImportando] = useState(false);
-  const [resumoImportacao, setResumoImportacao] = useState<{ lidas: number; novas: number; duplicadas: number; cobertos: number; baixados: number; ambiguos: number; duplicatas: number; mesFechado: number; baixasFalharam: number; movimentacoesLancadas: number; movimentacoesMesFechado: number; movimentacoesFalharam: number; movimentacoesSinalIncompativel: number; movimentacoesCategoriaInativa: number; avisos: string[] } | null>(null);
+  const [resumoImportacao, setResumoImportacao] = useState<{ lidas: number; novas: number; duplicadas: number; cobertos: number; baixados: number; ambiguos: number; duplicatas: number; mesFechado: number; baixasFalharam: number; movimentacoesLancadas: number; movimentacoesMesFechado: number; movimentacoesFalharam: number; movimentacoesSinalIncompativel: number; movimentacoesCategoriaInativa: number; movimentacoesDiaFechadoCaixa: number; movimentacoesPixCaixaNaoSincronizado: number; avisos: string[] } | null>(null);
   const [mostrarNovaConta, setMostrarNovaConta] = useState(false);
   const [novaContaBanco, setNovaContaBanco] = useState("santander");
   const [novaContaApelido, setNovaContaApelido] = useState("");
@@ -696,7 +744,7 @@ export default function ExtratoPage() {
   const inputArquivoRef = useRef<HTMLInputElement>(null);
   const [arquivoPix, setArquivoPix] = useState<File | null>(null);
   const [importandoPix, setImportandoPix] = useState(false);
-  const [resumoImportacaoPix, setResumoImportacaoPix] = useState<{ lidas: number; novas: number; duplicadas: number; movimentacoesLancadas: number; movimentacoesMesFechado: number; movimentacoesFalharam: number; movimentacoesSinalIncompativel: number; movimentacoesCategoriaInativa: number; avisos: string[] } | null>(null);
+  const [resumoImportacaoPix, setResumoImportacaoPix] = useState<{ lidas: number; novas: number; duplicadas: number; movimentacoesLancadas: number; movimentacoesMesFechado: number; movimentacoesFalharam: number; movimentacoesSinalIncompativel: number; movimentacoesCategoriaInativa: number; movimentacoesDiaFechadoCaixa: number; movimentacoesPixCaixaNaoSincronizado: number; avisos: string[] } | null>(null);
   const inputArquivoPixRef = useRef<HTMLInputElement>(null);
 
   // Lançamentos
@@ -940,6 +988,8 @@ export default function ExtratoPage() {
       if (lancamentosDiretos.falharam > 0) partes.push(`${lancamentosDiretos.falharam} erro(s) ao lançar em movimentações`);
       if (lancamentosDiretos.sinalIncompativel > 0) partes.push(`${lancamentosDiretos.sinalIncompativel} lançamento(s) com categoria de sinal incompatível (entrada/saída) — revisar a regra`);
       if (lancamentosDiretos.categoriaInativa > 0) partes.push(`${lancamentosDiretos.categoriaInativa} lançamento(s) com categoria desativada — revisar a regra`);
+      if (lancamentosDiretos.diaFechadoCaixa > 0) partes.push(`${lancamentosDiretos.diaFechadoCaixa} Pix não lançado(s): dia fechado no Fechamento de Caixa`);
+      if (lancamentosDiretos.pixCaixaNaoSincronizado > 0) partes.push(`${lancamentosDiretos.pixCaixaNaoSincronizado} Pix lançado(s) em Movimentações mas não somado(s) ao Fechamento de Caixa — revisar manualmente`);
 
       setMensagem({
         tipo: "sucesso",
@@ -1140,7 +1190,7 @@ export default function ExtratoPage() {
       }
 
       let classificadosAuto = 0;
-      let lancamentosDiretos = { lancados: 0, mesFechado: 0, falharam: 0, sinalIncompativel: 0, categoriaInativa: 0 };
+      let lancamentosDiretos = { lancados: 0, mesFechado: 0, falharam: 0, sinalIncompativel: 0, categoriaInativa: 0, diaFechadoCaixa: 0, pixCaixaNaoSincronizado: 0 };
       if (inseridos && inseridos.length > 0) {
         const paraClassificar = (inseridos as LancamentoParaBaixa[]).filter(
           (l) => !baixasAuto.idsBaixados.has(l.id) && !baixasAuto.idsAmbiguos.has(l.id) && !baixasAuto.idsDuplicatas.has(l.id)
@@ -1152,7 +1202,7 @@ export default function ExtratoPage() {
         }
       }
 
-      setResumoImportacao({ lidas: parsed.transacoes.length, novas, duplicadas, cobertos, baixados: baixasAuto.baixados, ambiguos: baixasAuto.ambiguos, duplicatas: baixasAuto.duplicatas, mesFechado: baixasAuto.mesFechado, baixasFalharam: baixasAuto.falharam, movimentacoesLancadas: lancamentosDiretos.lancados, movimentacoesMesFechado: lancamentosDiretos.mesFechado, movimentacoesFalharam: lancamentosDiretos.falharam, movimentacoesSinalIncompativel: lancamentosDiretos.sinalIncompativel, movimentacoesCategoriaInativa: lancamentosDiretos.categoriaInativa, avisos });
+      setResumoImportacao({ lidas: parsed.transacoes.length, novas, duplicadas, cobertos, baixados: baixasAuto.baixados, ambiguos: baixasAuto.ambiguos, duplicatas: baixasAuto.duplicatas, mesFechado: baixasAuto.mesFechado, baixasFalharam: baixasAuto.falharam, movimentacoesLancadas: lancamentosDiretos.lancados, movimentacoesMesFechado: lancamentosDiretos.mesFechado, movimentacoesFalharam: lancamentosDiretos.falharam, movimentacoesSinalIncompativel: lancamentosDiretos.sinalIncompativel, movimentacoesCategoriaInativa: lancamentosDiretos.categoriaInativa, movimentacoesDiaFechadoCaixa: lancamentosDiretos.diaFechadoCaixa, movimentacoesPixCaixaNaoSincronizado: lancamentosDiretos.pixCaixaNaoSincronizado, avisos });
       setMensagem({
         tipo: "sucesso",
         texto:
@@ -1168,7 +1218,9 @@ export default function ExtratoPage() {
           (lancamentosDiretos.mesFechado > 0 ? ` · ${lancamentosDiretos.mesFechado} não lançada(s): mês contábil fechado` : "") +
           (lancamentosDiretos.falharam > 0 ? ` · ${lancamentosDiretos.falharam} erro(s) ao lançar em movimentações` : "") +
           (lancamentosDiretos.sinalIncompativel > 0 ? ` · ${lancamentosDiretos.sinalIncompativel} com categoria de sinal incompatível (entrada/saída) — revisar a regra` : "") +
-          (lancamentosDiretos.categoriaInativa > 0 ? ` · ${lancamentosDiretos.categoriaInativa} com categoria desativada — revisar a regra` : ""),
+          (lancamentosDiretos.categoriaInativa > 0 ? ` · ${lancamentosDiretos.categoriaInativa} com categoria desativada — revisar a regra` : "") +
+          (lancamentosDiretos.diaFechadoCaixa > 0 ? ` · ${lancamentosDiretos.diaFechadoCaixa} Pix não lançado(s): dia fechado no Fechamento de Caixa` : "") +
+          (lancamentosDiretos.pixCaixaNaoSincronizado > 0 ? ` · ${lancamentosDiretos.pixCaixaNaoSincronizado} Pix não sincronizado(s) com o Fechamento de Caixa` : ""),
       });
       setArquivo(null);
       if (inputArquivoRef.current) inputArquivoRef.current.value = "";
@@ -1256,14 +1308,14 @@ export default function ExtratoPage() {
       });
 
       let classificadosAuto = 0;
-      let lancamentosDiretosPix = { lancados: 0, mesFechado: 0, falharam: 0, sinalIncompativel: 0, categoriaInativa: 0 };
+      let lancamentosDiretosPix = { lancados: 0, mesFechado: 0, falharam: 0, sinalIncompativel: 0, categoriaInativa: 0, diaFechadoCaixa: 0, pixCaixaNaoSincronizado: 0 };
       if (inseridos && inseridos.length > 0) {
         const resultadosRegra = await classificarPorRegras(inseridos as LancamentoClassificavel[]);
         classificadosAuto = resultadosRegra.length;
         lancamentosDiretosPix = await processarLancamentosDiretos(inseridos as LancamentoParaBaixa[], resultadosRegra);
       }
 
-      setResumoImportacaoPix({ lidas: linhas.length, novas, duplicadas, movimentacoesLancadas: lancamentosDiretosPix.lancados, movimentacoesMesFechado: lancamentosDiretosPix.mesFechado, movimentacoesFalharam: lancamentosDiretosPix.falharam, movimentacoesSinalIncompativel: lancamentosDiretosPix.sinalIncompativel, movimentacoesCategoriaInativa: lancamentosDiretosPix.categoriaInativa, avisos: parsed.avisos });
+      setResumoImportacaoPix({ lidas: linhas.length, novas, duplicadas, movimentacoesLancadas: lancamentosDiretosPix.lancados, movimentacoesMesFechado: lancamentosDiretosPix.mesFechado, movimentacoesFalharam: lancamentosDiretosPix.falharam, movimentacoesSinalIncompativel: lancamentosDiretosPix.sinalIncompativel, movimentacoesCategoriaInativa: lancamentosDiretosPix.categoriaInativa, movimentacoesDiaFechadoCaixa: lancamentosDiretosPix.diaFechadoCaixa, movimentacoesPixCaixaNaoSincronizado: lancamentosDiretosPix.pixCaixaNaoSincronizado, avisos: parsed.avisos });
       setMensagem({
         tipo: "sucesso",
         texto:
@@ -1273,7 +1325,9 @@ export default function ExtratoPage() {
           (lancamentosDiretosPix.mesFechado > 0 ? ` · ${lancamentosDiretosPix.mesFechado} não lançada(s): mês contábil fechado` : "") +
           (lancamentosDiretosPix.falharam > 0 ? ` · ${lancamentosDiretosPix.falharam} erro(s) ao lançar em movimentações` : "") +
           (lancamentosDiretosPix.sinalIncompativel > 0 ? ` · ${lancamentosDiretosPix.sinalIncompativel} com categoria de sinal incompatível (entrada/saída) — revisar a regra` : "") +
-          (lancamentosDiretosPix.categoriaInativa > 0 ? ` · ${lancamentosDiretosPix.categoriaInativa} com categoria desativada — revisar a regra` : ""),
+          (lancamentosDiretosPix.categoriaInativa > 0 ? ` · ${lancamentosDiretosPix.categoriaInativa} com categoria desativada — revisar a regra` : "") +
+          (lancamentosDiretosPix.diaFechadoCaixa > 0 ? ` · ${lancamentosDiretosPix.diaFechadoCaixa} Pix não lançado(s): dia fechado no Fechamento de Caixa` : "") +
+          (lancamentosDiretosPix.pixCaixaNaoSincronizado > 0 ? ` · ${lancamentosDiretosPix.pixCaixaNaoSincronizado} Pix não sincronizado(s) com o Fechamento de Caixa` : ""),
       });
       setArquivoPix(null);
       if (inputArquivoPixRef.current) inputArquivoPixRef.current.value = "";
@@ -1332,7 +1386,7 @@ export default function ExtratoPage() {
 
     const { entrada, saida, entradaInativas, saidaInativas } = await carregarMapasCategoria();
     const resultadoLancamento = await lancarMovimentacaoDireta(
-      { id: lancamento.id, data_lancamento: lancamento.data_lancamento, valor: lancamento.valor, descricao_normalizada: lancamento.descricao_normalizada },
+      { id: lancamento.id, conta_id: lancamento.conta_id, data_lancamento: lancamento.data_lancamento, valor: lancamento.valor, descricao_normalizada: lancamento.descricao_normalizada },
       categoria.trim(),
       entrada,
       saida,
@@ -1358,6 +1412,16 @@ export default function ExtratoPage() {
       setMensagem({
         tipo: "erro",
         texto: `Classificado, mas não lançado em Movimentações: a categoria "${categoria.trim()}" está desativada. Reative-a ou reclassifique com outra categoria.`,
+      });
+    } else if (resultadoLancamento === "dia_fechado_caixa") {
+      setMensagem({
+        tipo: "erro",
+        texto: `Classificado, mas não lançado: o dia ${formatarData(lancamento.data_lancamento)} já está fechado no Fechamento de Caixa. Reabra o dia para lançar este Pix.`,
+      });
+    } else if (resultadoLancamento === "pix_caixa_nao_sincronizado") {
+      setMensagem({
+        tipo: "erro",
+        texto: "Lançado em Movimentações, mas não foi somado ao Fechamento de Caixa (dia fechado durante o processamento) — ajuste manualmente.",
       });
     }
 
@@ -2035,6 +2099,18 @@ export default function ExtratoPage() {
                     reative a categoria ou revise a regra e reprocesse.
                   </p>
                 )}
+                {resumoImportacao.movimentacoesDiaFechadoCaixa > 0 && (
+                  <p className="mt-1 font-semibold text-red-700">
+                    {resumoImportacao.movimentacoesDiaFechadoCaixa} Pix recebido(s) NÃO lançados: o dia já está fechado no Fechamento de Caixa —
+                    reabra o dia para lançar.
+                  </p>
+                )}
+                {resumoImportacao.movimentacoesPixCaixaNaoSincronizado > 0 && (
+                  <p className="mt-1 font-semibold text-red-700">
+                    {resumoImportacao.movimentacoesPixCaixaNaoSincronizado} Pix lançado(s) em Movimentações mas NÃO somado(s) ao Fechamento de Caixa
+                    (dia fechou durante o processamento) — ajuste manualmente.
+                  </p>
+                )}
                 {resumoImportacao.avisos.length > 0 && (
                   <ul className="mt-2 list-disc list-inside text-amber-700">
                     {resumoImportacao.avisos.map((a, i) => (
@@ -2106,6 +2182,18 @@ export default function ExtratoPage() {
                   <p className="mt-1 font-semibold text-red-700">
                     {resumoImportacaoPix.movimentacoesCategoriaInativa} lançamento(s) com categoria desativada (a categoria da regra foi desativada depois de criada) —
                     reative a categoria ou revise a regra e reprocesse.
+                  </p>
+                )}
+                {resumoImportacaoPix.movimentacoesDiaFechadoCaixa > 0 && (
+                  <p className="mt-1 font-semibold text-red-700">
+                    {resumoImportacaoPix.movimentacoesDiaFechadoCaixa} Pix recebido(s) NÃO lançados: o dia já está fechado no Fechamento de Caixa —
+                    reabra o dia para lançar.
+                  </p>
+                )}
+                {resumoImportacaoPix.movimentacoesPixCaixaNaoSincronizado > 0 && (
+                  <p className="mt-1 font-semibold text-red-700">
+                    {resumoImportacaoPix.movimentacoesPixCaixaNaoSincronizado} Pix lançado(s) em Movimentações mas NÃO somado(s) ao Fechamento de Caixa
+                    (dia fechou durante o processamento) — ajuste manualmente.
                   </p>
                 )}
                 {resumoImportacaoPix.avisos.length > 0 && (

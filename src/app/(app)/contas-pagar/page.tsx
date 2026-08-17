@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { registrarLog, verificarMesFechado, verificarAdmin } from "@/lib/audit";
+import { registrarLog, bloquearSeMesFechado } from "@/lib/audit";
 import ComprovantePicker from "@/components/comprovante-picker";
 import { CurrencyInput } from "@/components/currency-input";
 import EmptyState from "@/components/empty-state";
@@ -282,19 +282,32 @@ export default function ContasPagarPage() {
 
   async function handleSalvar(e: React.FormEvent) {
     e.preventDefault(); setLoading(true); setMensagem("");
-    if (editandoId) {
-      const { fechado, nomeMes } = await verificarMesFechado(dataVencimento);
-      if (fechado) {
-        const isAdmin = await verificarAdmin();
-        if (!isAdmin) {
-          setMensagem(`Não é possível editar. ${nomeMes} está fechado.`);
-          setLoading(false); setTimeout(() => setMensagem(""), 5000); return;
-        }
-      }
+
+    const erroVencimento = await bloquearSeMesFechado(dataVencimento);
+    if (erroVencimento) {
+      setMensagem(erroVencimento);
+      setLoading(false); setTimeout(() => setMensagem(""), 5000); return;
     }
 
     const dados: Record<string, unknown> = { fornecedor, descricao, valor: valor, data_vencimento: dataVencimento, categoria_id: categoriaId, observacao, status: statusInicial, comprovante_url: comprovanteUrl };
     if (statusInicial === "pago") { dados.data_pagamento = dataPagamento || new Date().toISOString().split("T")[0]; } else { dados.data_pagamento = null; }
+
+    if (statusInicial === "pago") {
+      const erroPagamento = await bloquearSeMesFechado(dados.data_pagamento as string);
+      if (erroPagamento) {
+        setMensagem(erroPagamento);
+        setLoading(false); setTimeout(() => setMensagem(""), 5000); return;
+      }
+    }
+    // Editar uma conta que já estava paga (revertendo para pendente, ou só
+    // ajustando) também mexe no mês do pagamento original -- trava também.
+    if (statusOriginal === "pago" && contaOriginal?.data_pagamento) {
+      const erroPagamentoOriginal = await bloquearSeMesFechado(contaOriginal.data_pagamento);
+      if (erroPagamentoOriginal) {
+        setMensagem(erroPagamentoOriginal);
+        setLoading(false); setTimeout(() => setMensagem(""), 5000); return;
+      }
+    }
 
     // Só o fluxo pendente -> pago precisa do guard de concorrência: é o único
     // em que salvar o formulário BAIXA a conta e lança uma saída nova. Se a
@@ -402,6 +415,8 @@ export default function ContasPagarPage() {
   async function confirmarPagamento(conta: ContaPagar) {
     setLoading(true);
     const dataPag = dataPagamentoInline;
+    const erroMes = await bloquearSeMesFechado(dataPag);
+    if (erroMes) { setMensagem(erroMes); setLoading(false); setTimeout(() => setMensagem(""), 5000); return; }
     // O filtro por status='pendente' torna a baixa idempotente: se outra aba
     // (ou a baixa automática do /extrato) já pagou esta conta, o update não
     // afeta nenhuma linha e a movimentação duplicada não chega a ser criada.
@@ -455,6 +470,8 @@ export default function ContasPagarPage() {
     const contasSelecionadas = contas.filter((c) => selecionadas.has(c.id));
     const total = contasSelecionadas.reduce((a, c) => a + c.valor, 0);
     if (!confirm(`Pagar ${contasSelecionadas.length} contas no valor total de ${fmt(total)}?`)) return;
+    const erroMes = await bloquearSeMesFechado(loteDataPagamento);
+    if (erroMes) { setMensagem(erroMes); setTimeout(() => setMensagem(""), 5000); return; }
     setLoading(true);
     let pagas = 0;
     let ignoradas = 0;
@@ -488,6 +505,8 @@ export default function ContasPagarPage() {
 
   async function desfazerPagamento(conta: ContaPagar) {
     if (!confirm("Desfazer?")) return;
+    const erroMes = await bloquearSeMesFechado(conta.data_pagamento as string);
+    if (erroMes) { setMensagem(erroMes); setTimeout(() => setMensagem(""), 5000); return; }
     setLoading(true);
     const movId = await buscarMovimentacaoVinculada(conta.id, conta.valor, conta.fornecedor, conta.data_pagamento);
     if (movId) await supabase.from("movimentacoes").delete().eq("id", movId);
@@ -507,6 +526,8 @@ export default function ContasPagarPage() {
 
   async function handleExcluir(conta: ContaPagar) {
     if (!confirm("Excluir?")) return;
+    const erroMes = await bloquearSeMesFechado(conta.data_pagamento ?? conta.data_vencimento);
+    if (erroMes) { setMensagem(erroMes); setTimeout(() => setMensagem(""), 5000); return; }
     // Se o extrato bancário ligou algum lançamento a esta conta (baixa
     // automática), o vínculo tem que ser desfeito ANTES de excluir a conta --
     // a FK bloqueia a exclusão enquanto o vínculo existir. O lançamento volta

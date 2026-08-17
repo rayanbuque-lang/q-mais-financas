@@ -2,9 +2,10 @@
 
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { registrarLog } from "@/lib/audit";
+import { registrarLog, bloquearSeMesFechado } from "@/lib/audit";
 import { CurrencyInput } from "@/components/currency-input";
 import { useRole } from "@/lib/role-context";
+import { calcularDinheiro } from "@/lib/fechamento-caixa-calc";
 
 const mesesNomes = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
 const diasSemana = ["Dom","Seg","Ter","Qua","Qui","Sex","Sáb"];
@@ -12,8 +13,6 @@ const diasSemanaLong = ["Domingo","Segunda-feira","Terça-feira","Quarta-feira",
 
 const CAMPOS_CONFIG = [
   { field: "cartao",        label: "Cartão",          emoji: "💳", bg: "var(--blue-subtle)",   border: "var(--blue-border)",   color: "var(--blue-strong)" },
-  { field: "pix_santander", label: "Pix Santander",   emoji: "📱", bg: "var(--red-subtle)",    border: "var(--red-border)",    color: "var(--red)" },
-  { field: "pix_inter",     label: "Pix Inter",       emoji: "📱", bg: "var(--orange-subtle)", border: "var(--orange-border)", color: "var(--orange)" },
   { field: "rom_card",      label: "Rom Card",        emoji: "💳", bg: "var(--purple-subtle)", border: "var(--purple-border)", color: "var(--purple)" },
   { field: "app",           label: "App",             emoji: "📲", bg: "var(--brand-subtle)",  border: "var(--brand-border)",  color: "var(--brand-strong)" },
   { field: "prefeitura",    label: "Prefeitura",      emoji: "🏛️", bg: "var(--cyan-subtle)",   border: "var(--cyan-border)",   color: "var(--cyan)" },
@@ -35,7 +34,7 @@ const RESUMO_COLS = [
   { key: "total" as const,         label: "📊 Total" },
 ];
 const RESUMO_PADRAO = ["cartao","pix_santander","pix_inter","rom_card","dinheiro","total"];
-const CAMPOS_PADRAO: CampoKey[] = ["cartao","pix_santander","pix_inter","rom_card","app","prefeitura","compras_prazo","sobras_faltas"];
+const CAMPOS_PADRAO: CampoKey[] = ["cartao","rom_card","app","prefeitura","compras_prazo","sobras_faltas"];
 
 interface CaixaDia {
   id: string; data: string; turnos: number;
@@ -135,8 +134,7 @@ export default function FechamentoCaixaPage() {
   function fmt(v: number) { return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }); }
 
   function calcDinheiro(f: CaixaForm) {
-    const sub = f.cartao + f.pix_santander + f.pix_inter + f.rom_card + f.app + f.prefeitura + f.compras_prazo;
-    return Math.max(f.valor_total_vendas - sub, 0);
+    return calcularDinheiro(f);
   }
 
   function getRecord(data: string) { return caixas.find(c => c.data === data); }
@@ -191,14 +189,20 @@ export default function FechamentoCaixaPage() {
 
   async function salvarRascunho() {
     if (!detailData) return;
+    const erroMes = await bloquearSeMesFechado(detailData);
+    if (erroMes) { setMensagem(erroMes); setTimeout(() => setMensagem(""), 5000); return; }
     setLoading(true);
     const dinheiro = calcDinheiro(form);
     const sobrasValor = sfSigno * sfAbs;
+    // pix_santander/pix_inter NÃO entram aqui -- são preenchidos só pela
+    // importação do extrato (aplicarPixNoFechamentoCaixa). Escrevê-los aqui
+    // com o valor local do form arriscaria sobrescrever, com um valor
+    // desatualizado, um Pix que chegou via extrato entre abrir o formulário
+    // e salvar.
     const dados = {
       data: detailData, turnos,
       valor_total_vendas: form.valor_total_vendas,
-      cartao: form.cartao, pix_santander: form.pix_santander,
-      pix_inter: form.pix_inter, rom_card: form.rom_card,
+      cartao: form.cartao, rom_card: form.rom_card,
       app: form.app, prefeitura: form.prefeitura,
       compras_prazo: form.compras_prazo,
       dinheiro, sobras_faltas: sobrasValor, total: dinheiro,
@@ -220,14 +224,16 @@ export default function FechamentoCaixaPage() {
 
   async function fecharDia() {
     if (!detailData) return;
+    const erroMes = await bloquearSeMesFechado(detailData);
+    if (erroMes) { setMensagem(erroMes); setTimeout(() => setMensagem(""), 5000); return; }
     setLoading(true);
     const dinheiro = calcDinheiro(form);
     const sobrasValor = sfSigno * sfAbs;
+    // pix_santander/pix_inter não entram aqui -- mesmo motivo de salvarRascunho.
     const dados = {
       data: detailData, turnos,
       valor_total_vendas: form.valor_total_vendas,
-      cartao: form.cartao, pix_santander: form.pix_santander,
-      pix_inter: form.pix_inter, rom_card: form.rom_card,
+      cartao: form.cartao, rom_card: form.rom_card,
       app: form.app, prefeitura: form.prefeitura,
       compras_prazo: form.compras_prazo,
       dinheiro, sobras_faltas: sobrasValor, total: dinheiro,
@@ -269,6 +275,8 @@ export default function FechamentoCaixaPage() {
 
   async function reabrirDia() {
     if (!detailRecord || !isAdmin) { setMensagem("Apenas administradores podem reabrir."); setTimeout(() => setMensagem(""), 3000); return; }
+    const erroMes = await bloquearSeMesFechado(detailRecord.data);
+    if (erroMes) { setMensagem(erroMes); setTimeout(() => setMensagem(""), 5000); return; }
     setLoading(true);
     const catId = await garantirCategoria();
     if (catId) {
@@ -290,6 +298,8 @@ export default function FechamentoCaixaPage() {
 
   async function excluirDia() {
     if (!detailRecord || !confirm("Excluir este dia e sua movimentação?")) return;
+    const erroMes = await bloquearSeMesFechado(detailRecord.data);
+    if (erroMes) { setMensagem(erroMes); setTimeout(() => setMensagem(""), 5000); return; }
     setLoading(true);
     const catId = await garantirCategoria();
     if (catId && detailRecord.fechado) {
@@ -427,6 +437,22 @@ export default function FechamentoCaixaPage() {
                 <label style={{ fontSize: 10, fontWeight: 700, color: "var(--green)", textTransform: "uppercase" }}>💵 Dinheiro (auto)</label>
                 <div style={{ marginTop: 6, padding: "8px 10px", borderRadius: 8, background: "var(--input-bg)", border: "1px solid var(--green-border)", fontSize: 16, fontWeight: 700, color: "var(--green)" }}>
                   {fmt(dinheiro)}
+                </div>
+              </div>
+
+              {/* Pix Santander (auto) — só entra via importação do extrato */}
+              <div style={{ background: "var(--red-subtle)", border: "2px solid var(--red-border)", borderRadius: 12, padding: 12 }}>
+                <label style={{ fontSize: 10, fontWeight: 700, color: "var(--red)", textTransform: "uppercase" }}>📱 Pix Santander (auto)</label>
+                <div style={{ marginTop: 6, padding: "8px 10px", borderRadius: 8, background: "var(--input-bg)", border: "1px solid var(--red-border)", fontSize: 16, fontWeight: 700, color: "var(--red)" }}>
+                  {fmt(form.pix_santander)}
+                </div>
+              </div>
+
+              {/* Pix Inter (auto) — só entra via importação do extrato */}
+              <div style={{ background: "var(--orange-subtle)", border: "2px solid var(--orange-border)", borderRadius: 12, padding: 12 }}>
+                <label style={{ fontSize: 10, fontWeight: 700, color: "var(--orange)", textTransform: "uppercase" }}>📱 Pix Inter (auto)</label>
+                <div style={{ marginTop: 6, padding: "8px 10px", borderRadius: 8, background: "var(--input-bg)", border: "1px solid var(--orange-border)", fontSize: 16, fontWeight: 700, color: "var(--orange)" }}>
+                  {fmt(form.pix_inter)}
                 </div>
               </div>
 

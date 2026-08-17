@@ -49,6 +49,14 @@ export async function verificarMesFechado(data: string): Promise<{ fechado: bool
   };
 }
 
+// Helper compartilhado para os pontos de escrita que precisam bloquear
+// incondicionalmente (sem bypass de admin) quando a data cai num mês já
+// fechado -- o único jeito de mexer é reabrir o mês em Fechamento Mensal.
+export async function bloquearSeMesFechado(data: string): Promise<string | null> {
+  const { fechado, nomeMes } = await verificarMesFechado(data);
+  return fechado ? `Não é possível lançar. ${nomeMes} está fechado. Reabra o mês em Fechamento Mensal para ajustar.` : null;
+}
+
 export async function verificarAdmin(): Promise<boolean> {
   const supabase = createClient();
   const { data: { user } } = await supabase.auth.getUser();
