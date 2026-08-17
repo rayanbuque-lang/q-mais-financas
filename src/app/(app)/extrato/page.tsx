@@ -9,7 +9,7 @@ import { aplicarRegras, type RegraExtrato as RegraMotor, type LancamentoClassifi
 import { calcularTipoMovimentacao, agruparResumoPorDia, type ResumoDia } from "@/lib/preview-movimentacao";
 import EmptyState from "@/components/empty-state";
 import { calcularBaixasAutomaticas, type CandidatoBaixa, type ContaPagarPendente } from "@/lib/baixa-contas-pagar";
-import { registrarLog, verificarMesFechado } from "@/lib/audit";
+import { registrarLog, verificarMesFechado, bloquearSeMesFechado } from "@/lib/audit";
 import { bancoParaCampoPix, verificarDiaFechadoCaixa, aplicarPixNoFechamentoCaixa } from "@/lib/fechamento-caixa-pix";
 
 interface Conta {
@@ -776,6 +776,7 @@ export default function ExtratoPage() {
   // Spinner por linha da lista de importações (a UI que consome este estado
   // chega na Task 6 — aqui ele só existe pra confirmarImportacao já marcá-lo).
   const [confirmandoImportacaoId, setConfirmandoImportacaoId] = useState<string | null>(null);
+  const [desfazendoImportacaoId, setDesfazendoImportacaoId] = useState<string | null>(null);
   const [categoriaEmEdicao, setCategoriaEmEdicao] = useState<Record<string, string>>({});
   const [acaoLancamentoId, setAcaoLancamentoId] = useState<string | null>(null);
   const [sugerirRegraPara, setSugerirRegraPara] = useState<{ lancamento: Lancamento; categoria: string } | null>(null);
@@ -1137,6 +1138,146 @@ export default function ExtratoPage() {
       setMensagem({ tipo: "erro", texto: e instanceof Error ? e.message : "Erro inesperado ao confirmar a importação." });
     } finally {
       setConfirmandoImportacaoId(null);
+    }
+  }
+
+  // Desfaz um lote inteiro, esteja ele apenas preparado (nunca confirmado) ou
+  // já lançado: reverte o dinheiro real que a confirmação escreveu
+  // (movimentações, baixas de contas a pagar, Pix somado ao Fechamento de
+  // Caixa) e apaga as linhas de staging do lote.
+  //
+  // O staging é EXCLUÍDO, não resetado pra "nao_classificado": a linha ficaria
+  // presa pela constraint única natural (uq_extrato_chave_natural sobre
+  // conta_id, data_lancamento, valor, descricao_normalizada, ocorrencia) e um
+  // reimport corrigido do mesmo período não conseguiria mais entrar.
+  async function desfazerImportacao(importacaoId: string) {
+    if (!podeEscrever) return;
+    setDesfazendoImportacaoId(importacaoId);
+    setMensagem(null);
+    try {
+      const { data: linhas, error } = await supabase
+        .from("extrato_lancamento")
+        .select("*")
+        .eq("importacao_id", importacaoId)
+        .limit(LIMITE_LANCAMENTOS);
+      if (error) {
+        setMensagem({ tipo: "erro", texto: "Erro ao carregar o lote pra desfazer: " + error.message });
+        return;
+      }
+
+      // Mesmo cuidado de confirmarImportacao: sem isso, um lote maior que
+      // LIMITE_LANCAMENTOS marcaria "descartada" tendo revertido só uma parte,
+      // em silêncio.
+      const loteTruncado = (linhas ?? []).length === LIMITE_LANCAMENTOS;
+
+      let revertidos = 0;
+      let pulados = 0;
+
+      for (const l of (linhas ?? []) as LancamentoParaBaixa[]) {
+        if (l.movimentacao_id) {
+          // Capacidade A (inclui Pix). A ordem aqui é imposta pela FK:
+          // extrato_lancamento_movimentacao_id_fkey é ON DELETE NO ACTION
+          // (confdeltype = 'a'), então o extrato precisa parar de apontar pra
+          // movimentação ANTES dela poder ser excluída -- exatamente o mesmo
+          // cuidado que excluirMov em movimentacoes/page.tsx já toma. Zerar o
+          // vínculo primeiro (update condicional, sem excluir a linha ainda)
+          // também é seguro: se esse update falhar ou perder uma corrida, o
+          // delete da movimentação é bloqueado pela mesma FK e nada fica
+          // inconsistente.
+          const erroMes = await bloquearSeMesFechado(l.data_lancamento);
+          if (erroMes) { pulados++; continue; }
+
+          // Só é Pix somado ao caixa o que a ida somou: entrada (sinal do
+          // valor, igual calcularTipoMovimentacao) + descrição de Pix recebido
+          // + banco com campo no Fechamento de Caixa.
+          let campoPix: "pix_santander" | "pix_inter" | null = null;
+          if (calcularTipoMovimentacao(Number(l.valor)) === "entrada" && ehPixRecebido(l.descricao_normalizada)) {
+            const { data: contaExtrato } = await supabase.from("extrato_conta").select("banco").eq("id", l.conta_id).single();
+            campoPix = bancoParaCampoPix(contaExtrato?.banco ?? "");
+          }
+
+          const { data: linhaZerada, error: erroZerar } = await supabase
+            .from("extrato_lancamento")
+            .update({ movimentacao_id: null })
+            .eq("id", l.id)
+            .eq("movimentacao_id", l.movimentacao_id)
+            .select("id");
+          if (erroZerar || !linhaZerada || linhaZerada.length === 0) { pulados++; continue; }
+
+          if (campoPix) {
+            const resultadoPix = await aplicarPixNoFechamentoCaixa(l.data_lancamento, campoPix, -Math.abs(Number(l.valor)));
+            if (resultadoPix !== "ok") {
+              // Dia do caixa fechado (ou erro de escrita) -- desfaz o zerar do
+              // vínculo pra não deixar a movimentação real sem trilha nenhuma
+              // até alguém agir.
+              await supabase.from("extrato_lancamento").update({ movimentacao_id: l.movimentacao_id }).eq("id", l.id);
+              pulados++;
+              continue;
+            }
+          }
+
+          const { error: erroDeleteMov } = await supabase.from("movimentacoes").delete().eq("id", l.movimentacao_id);
+          if (erroDeleteMov) {
+            // Não conseguiu excluir (RLS, rede) -- devolve o vínculo em vez de
+            // deixar a movimentação real órfã e sem rastro.
+            await supabase.from("extrato_lancamento").update({ movimentacao_id: l.movimentacao_id }).eq("id", l.id);
+            pulados++;
+            continue;
+          }
+
+          await supabase.from("extrato_lancamento").delete().eq("id", l.id);
+          revertidos++;
+        } else if (l.conta_pagar_id) {
+          // Capacidade B -- mesma reversão de desfazerPagamento em
+          // contas-pagar/page.tsx. Aqui a movimentação da baixa é achada por
+          // conta_pagar_id e nunca é referenciada por
+          // extrato_lancamento.movimentacao_id (baixarContaPagar só grava
+          // conta_pagar_id no staging), então a ordem não tem o risco de FK do
+          // branch acima.
+          const { data: conta } = await supabase.from("contas_pagar").select("data_pagamento").eq("id", l.conta_pagar_id).single();
+          const erroMes = await bloquearSeMesFechado(conta?.data_pagamento ?? l.data_lancamento);
+          if (erroMes) { pulados++; continue; }
+
+          const { data: mov } = await supabase.from("movimentacoes").select("id").eq("conta_pagar_id", l.conta_pagar_id).limit(1).maybeSingle();
+          if (mov) {
+            const { error: erroDeleteMov } = await supabase.from("movimentacoes").delete().eq("id", mov.id);
+            if (erroDeleteMov) { pulados++; continue; }
+          }
+          await supabase.from("contas_pagar").update({ status: "pendente", data_pagamento: null }).eq("id", l.conta_pagar_id);
+          await supabase.from("extrato_lancamento").delete().eq("id", l.id);
+          revertidos++;
+        } else {
+          // Nunca comitado (lote ainda pendente, ou sobra não classificada) --
+          // só descarta o staging.
+          await supabase.from("extrato_lancamento").delete().eq("id", l.id);
+          revertidos++;
+        }
+      }
+
+      if (!loteTruncado) {
+        await supabase.from("extrato_importacao").update({ status: "descartada" }).eq("id", importacaoId);
+      }
+      await registrarLog({
+        acao: "excluiu",
+        tabela: "extrato_importacao",
+        registroId: importacaoId,
+        detalhes: `Importação descartada: ${revertidos} revertido(s), ${pulados} não puderam ser desfeitos (mês/dia fechado ou erro)${loteTruncado ? " -- lote grande, clique em desfazer de novo pra continuar" : ""}`,
+      });
+      setMensagem({
+        tipo: pulados > 0 || loteTruncado ? "erro" : "sucesso",
+        texto:
+          `${revertidos} revertido(s)` +
+          (pulados > 0 ? ` · ${pulados} não puderam ser desfeitos: mês/dia fechado ou erro — revise manualmente` : "") +
+          (loteTruncado ? ` · lote grande demais pra desfazer de uma vez — clique em "Desfazer" de novo pra continuar` : ""),
+      });
+      await refrescarTudo();
+    } catch (e) {
+      // Cada reversão é comitada individualmente: se estourou no meio, parte do
+      // lote já foi desfeita. A tela precisa dizer isso em vez de só parar o
+      // spinner.
+      setMensagem({ tipo: "erro", texto: e instanceof Error ? e.message : "Erro inesperado ao desfazer a importação." });
+    } finally {
+      setDesfazendoImportacaoId(null);
     }
   }
 
