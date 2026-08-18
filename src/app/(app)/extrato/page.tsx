@@ -1167,6 +1167,107 @@ export default function ExtratoPage() {
   // presa pela constraint única natural (uq_extrato_chave_natural sobre
   // conta_id, data_lancamento, valor, descricao_normalizada, ocorrencia) e um
   // reimport corrigido do mesmo período não conseguiria mais entrar.
+  // Desfaz o que UM lançamento já gerou em movimentações/contas_pagar/
+  // fechamento_caixa -- sem mexer no extrato_lancamento em si (quem chama
+  // decide se depois disso a linha é excluída, como desfazerImportacao faz,
+  // ou marcada "ignorado", como handleIgnorar faz). "pulado" cobre mês/dia
+  // fechado ou erro de escrita -- nesses casos nada foi alterado (as escritas
+  // são condicionais/compensadas, mesmo cuidado documentado abaixo).
+  async function desfazerEfeitosDoLancamento(l: LancamentoParaBaixa): Promise<"ok" | "pulado"> {
+    if (l.movimentacao_id) {
+      // Capacidade A (inclui Pix). A ordem aqui é imposta pela FK:
+      // extrato_lancamento_movimentacao_id_fkey é ON DELETE NO ACTION
+      // (confdeltype = 'a'), então o extrato precisa parar de apontar pra
+      // movimentação ANTES dela poder ser excluída -- mesmo cuidado que
+      // excluirMov em movimentacoes/page.tsx já toma. Zerar o vínculo
+      // primeiro (update condicional) também é seguro: se esse update falhar
+      // ou perder uma corrida, o delete da movimentação é bloqueado pela
+      // mesma FK e nada fica inconsistente.
+      const erroMes = await bloquearSeMesFechado(l.data_lancamento);
+      if (erroMes) return "pulado";
+
+      // Só é Pix somado ao caixa o que a ida somou: entrada (sinal do valor,
+      // igual calcularTipoMovimentacao) + descrição de Pix recebido + banco
+      // com campo no Fechamento de Caixa.
+      let campoPix: "pix_santander" | "pix_inter" | null = null;
+      if (calcularTipoMovimentacao(Number(l.valor)) === "entrada" && ehPixRecebido(l.descricao_normalizada)) {
+        const { data: contaExtrato } = await supabase.from("extrato_conta").select("banco").eq("id", l.conta_id).single();
+        campoPix = bancoParaCampoPix(contaExtrato?.banco ?? "");
+      }
+
+      const { data: linhaZerada, error: erroZerar } = await supabase
+        .from("extrato_lancamento")
+        .update({ movimentacao_id: null })
+        .eq("id", l.id)
+        .eq("movimentacao_id", l.movimentacao_id)
+        .select("id");
+      if (erroZerar || !linhaZerada || linhaZerada.length === 0) return "pulado";
+
+      if (campoPix) {
+        const resultadoPix = await aplicarPixNoFechamentoCaixa(l.data_lancamento, campoPix, -Math.abs(Number(l.valor)));
+        if (resultadoPix !== "ok") {
+          // Dia do caixa fechado (ou erro de escrita) -- desfaz o zerar do
+          // vínculo pra não deixar a movimentação real sem trilha nenhuma
+          // até alguém agir.
+          await supabase.from("extrato_lancamento").update({ movimentacao_id: l.movimentacao_id }).eq("id", l.id);
+          return "pulado";
+        }
+      }
+
+      const { error: erroDeleteMov } = await supabase.from("movimentacoes").delete().eq("id", l.movimentacao_id);
+      if (erroDeleteMov) {
+        // Não conseguiu excluir (RLS, rede) -- desfaz tudo o que já tinha
+        // sido escrito nesta chamada, na ordem inversa: devolve ao
+        // Fechamento de Caixa o valor que acabou de ser subtraído, depois
+        // devolve o vínculo, pra não deixar a movimentação real órfã e sem
+        // rastro.
+        if (campoPix) {
+          await aplicarPixNoFechamentoCaixa(l.data_lancamento, campoPix, Math.abs(Number(l.valor)));
+        }
+        await supabase.from("extrato_lancamento").update({ movimentacao_id: l.movimentacao_id }).eq("id", l.id);
+        return "pulado";
+      }
+      return "ok";
+    }
+
+    if (l.conta_pagar_id) {
+      // Capacidade B -- mesma reversão de desfazerPagamento em
+      // contas-pagar/page.tsx. Aqui a movimentação da baixa é achada por
+      // conta_pagar_id e nunca é referenciada por
+      // extrato_lancamento.movimentacao_id (baixarContaPagar só grava
+      // conta_pagar_id no staging), então a ordem não tem o risco de FK do
+      // branch acima.
+      const { data: conta } = await supabase.from("contas_pagar").select("data_pagamento").eq("id", l.conta_pagar_id).single();
+      const erroMes = await bloquearSeMesFechado(conta?.data_pagamento ?? l.data_lancamento);
+      if (erroMes) return "pulado";
+
+      // O erro desta leitura precisa ser checado de verdade (mesmo cuidado
+      // que excluirMov documenta em movimentacoes/page.tsx): numa falha de
+      // rede/RLS `mov` vem null e seguir em frente devolveria a conta pra
+      // "pendente" com a movimentação de saída original ainda viva -- a
+      // conta reapareceria pra pagar de novo, pagamento duplicado.
+      const { data: mov, error: erroLeituraMov } = await supabase.from("movimentacoes").select("id").eq("conta_pagar_id", l.conta_pagar_id).limit(1).maybeSingle();
+      if (erroLeituraMov) return "pulado";
+      if (mov) {
+        const { error: erroDeleteMov } = await supabase.from("movimentacoes").delete().eq("id", mov.id);
+        if (erroDeleteMov) return "pulado";
+      }
+      // Condicional com .select("id") pelo mesmo motivo: se este update
+      // falhar depois da movimentação já ter sido excluída, a conta fica
+      // "pago" sem nenhuma movimentação por trás -- a despesa some dos
+      // livros.
+      const { data: contaAtualizada, error: erroContaPagar } = await supabase
+        .from("contas_pagar")
+        .update({ status: "pendente", data_pagamento: null })
+        .eq("id", l.conta_pagar_id)
+        .select("id");
+      if (erroContaPagar || !contaAtualizada || contaAtualizada.length === 0) return "pulado";
+      return "ok";
+    }
+
+    return "ok"; // nada comitado ainda -- nada a desfazer
+  }
+
   async function desfazerImportacao(importacaoId: string) {
     if (!podeEscrever) return;
     setDesfazendoImportacaoId(importacaoId);
@@ -1191,109 +1292,10 @@ export default function ExtratoPage() {
       let pulados = 0;
 
       for (const l of (linhas ?? []) as LancamentoParaBaixa[]) {
-        if (l.movimentacao_id) {
-          // Capacidade A (inclui Pix). A ordem aqui é imposta pela FK:
-          // extrato_lancamento_movimentacao_id_fkey é ON DELETE NO ACTION
-          // (confdeltype = 'a'), então o extrato precisa parar de apontar pra
-          // movimentação ANTES dela poder ser excluída -- exatamente o mesmo
-          // cuidado que excluirMov em movimentacoes/page.tsx já toma. Zerar o
-          // vínculo primeiro (update condicional, sem excluir a linha ainda)
-          // também é seguro: se esse update falhar ou perder uma corrida, o
-          // delete da movimentação é bloqueado pela mesma FK e nada fica
-          // inconsistente.
-          const erroMes = await bloquearSeMesFechado(l.data_lancamento);
-          if (erroMes) { pulados++; continue; }
-
-          // Só é Pix somado ao caixa o que a ida somou: entrada (sinal do
-          // valor, igual calcularTipoMovimentacao) + descrição de Pix recebido
-          // + banco com campo no Fechamento de Caixa.
-          let campoPix: "pix_santander" | "pix_inter" | null = null;
-          if (calcularTipoMovimentacao(Number(l.valor)) === "entrada" && ehPixRecebido(l.descricao_normalizada)) {
-            const { data: contaExtrato } = await supabase.from("extrato_conta").select("banco").eq("id", l.conta_id).single();
-            campoPix = bancoParaCampoPix(contaExtrato?.banco ?? "");
-          }
-
-          const { data: linhaZerada, error: erroZerar } = await supabase
-            .from("extrato_lancamento")
-            .update({ movimentacao_id: null })
-            .eq("id", l.id)
-            .eq("movimentacao_id", l.movimentacao_id)
-            .select("id");
-          if (erroZerar || !linhaZerada || linhaZerada.length === 0) { pulados++; continue; }
-
-          if (campoPix) {
-            const resultadoPix = await aplicarPixNoFechamentoCaixa(l.data_lancamento, campoPix, -Math.abs(Number(l.valor)));
-            if (resultadoPix !== "ok") {
-              // Dia do caixa fechado (ou erro de escrita) -- desfaz o zerar do
-              // vínculo pra não deixar a movimentação real sem trilha nenhuma
-              // até alguém agir.
-              await supabase.from("extrato_lancamento").update({ movimentacao_id: l.movimentacao_id }).eq("id", l.id);
-              pulados++;
-              continue;
-            }
-          }
-
-          const { error: erroDeleteMov } = await supabase.from("movimentacoes").delete().eq("id", l.movimentacao_id);
-          if (erroDeleteMov) {
-            // Não conseguiu excluir (RLS, rede) -- desfaz tudo o que já tinha
-            // sido escrito nesta iteração, na ordem inversa. Primeiro devolve ao
-            // Fechamento de Caixa o valor que acabou de ser subtraído: sem essa
-            // compensação o caixa do dia fica permanentemente menor que o real
-            // (a movimentação continua viva) e um novo "Desfazer" subtrairia de
-            // novo. Depois devolve o vínculo, pra não deixar a movimentação real
-            // órfã e sem rastro. Se a própria compensação falhar não há mais o
-            // que fazer daqui -- a contagem em `pulados` é o sinal pro humano.
-            if (campoPix) {
-              await aplicarPixNoFechamentoCaixa(l.data_lancamento, campoPix, Math.abs(Number(l.valor)));
-            }
-            await supabase.from("extrato_lancamento").update({ movimentacao_id: l.movimentacao_id }).eq("id", l.id);
-            pulados++;
-            continue;
-          }
-
-          await supabase.from("extrato_lancamento").delete().eq("id", l.id);
-          revertidos++;
-        } else if (l.conta_pagar_id) {
-          // Capacidade B -- mesma reversão de desfazerPagamento em
-          // contas-pagar/page.tsx. Aqui a movimentação da baixa é achada por
-          // conta_pagar_id e nunca é referenciada por
-          // extrato_lancamento.movimentacao_id (baixarContaPagar só grava
-          // conta_pagar_id no staging), então a ordem não tem o risco de FK do
-          // branch acima.
-          const { data: conta } = await supabase.from("contas_pagar").select("data_pagamento").eq("id", l.conta_pagar_id).single();
-          const erroMes = await bloquearSeMesFechado(conta?.data_pagamento ?? l.data_lancamento);
-          if (erroMes) { pulados++; continue; }
-
-          // O erro desta leitura precisa ser checado de verdade (mesmo cuidado
-          // que excluirMov documenta em movimentacoes/page.tsx): numa falha de
-          // rede/RLS `mov` vem null e seguir em frente devolveria a conta pra
-          // "pendente" com a movimentação de saída original ainda viva -- a
-          // conta reapareceria pra pagar de novo, pagamento duplicado.
-          const { data: mov, error: erroLeituraMov } = await supabase.from("movimentacoes").select("id").eq("conta_pagar_id", l.conta_pagar_id).limit(1).maybeSingle();
-          if (erroLeituraMov) { pulados++; continue; }
-          if (mov) {
-            const { error: erroDeleteMov } = await supabase.from("movimentacoes").delete().eq("id", mov.id);
-            if (erroDeleteMov) { pulados++; continue; }
-          }
-          // Condicional com .select("id") pelo mesmo motivo: se este update
-          // falhar depois da movimentação já ter sido excluída, a conta fica
-          // "pago" sem nenhuma movimentação por trás -- a despesa some dos
-          // livros. Nesse caso o staging NÃO é apagado e a linha conta como
-          // pulada, pra sobrar rastro do que precisa de conserto manual.
-          const { data: contaAtualizada, error: erroContaPagar } = await supabase
-            .from("contas_pagar")
-            .update({ status: "pendente", data_pagamento: null })
-            .eq("id", l.conta_pagar_id)
-            .select("id");
-          if (erroContaPagar || !contaAtualizada || contaAtualizada.length === 0) { pulados++; continue; }
-          await supabase.from("extrato_lancamento").delete().eq("id", l.id);
-          revertidos++;
-        } else {
-          // Nunca comitado (lote ainda pendente, ou sobra não classificada) --
-          // só descarta o staging.
-          await supabase.from("extrato_lancamento").delete().eq("id", l.id);
-          revertidos++;
-        }
+        const resultado = await desfazerEfeitosDoLancamento(l);
+        if (resultado === "pulado") { pulados++; continue; }
+        await supabase.from("extrato_lancamento").delete().eq("id", l.id);
+        revertidos++;
       }
 
       if (!loteTruncado && pulados === 0) {
@@ -2023,15 +2025,32 @@ export default function ExtratoPage() {
     await Promise.all([carregarLancamentos(), carregarResumo()]);
   }
 
+  // Descarta QUALQUER lançamento, independente do estado -- se ele já gerou
+  // uma movimentação (Capacidade A/Pix) ou baixou uma conta a pagar
+  // (Capacidade B), desfazerEfeitosDoLancamento reverte isso primeiro (mesma
+  // lógica de desfazerImportacao, reaproveitada); só então marca "ignorado".
   async function handleIgnorar(lancamento: Lancamento) {
+    if (lancamento.movimentacao_id || lancamento.conta_pagar_id) {
+      if (!confirm("Este lançamento já gerou uma movimentação ou baixou uma conta a pagar real. Ignorar vai desfazer isso também. Confirma?")) return;
+    }
     setAcaoLancamentoId(lancamento.id);
     setMensagem(null);
+
+    const resultado = await desfazerEfeitosDoLancamento(lancamento);
+    if (resultado === "pulado") {
+      setAcaoLancamentoId(null);
+      setMensagem({ tipo: "erro", texto: "Não foi possível ignorar: mês/dia fechado, ou erro ao desfazer o lançamento vinculado. Reabra o mês/dia ou revise manualmente." });
+      return;
+    }
+
     const { error } = await supabase
       .from("extrato_lancamento")
-      // Limpa as DUAS sinalizações: um lançamento descartado não tem mais o
-      // que resolver, e deixar contas_pagar_candidatas preenchido mantinha o
-      // botão "Baixa ambígua" vivo em cima de algo já ignorado.
-      .update({ status: "ignorado", contas_pagar_duplicatas: null, contas_pagar_candidatas: null })
+      // Limpa todas as sinalizações: um lançamento descartado não tem mais o
+      // que resolver (mantinha o botão "Baixa ambígua" vivo em cima de algo
+      // já ignorado), e não pode continuar apontando pra uma
+      // movimentação/conta a pagar que desfazerEfeitosDoLancamento acabou de
+      // reverter.
+      .update({ status: "ignorado", contas_pagar_duplicatas: null, contas_pagar_candidatas: null, conta_pagar_id: null, movimentacao_id: null })
       .eq("id", lancamento.id);
     setAcaoLancamentoId(null);
     if (error) {
@@ -2834,7 +2853,13 @@ export default function ExtratoPage() {
                                         preenche `categoria` sem resolver nada, e nesse caso a
                                         ação (cadastrar a conta a pagar) é mais importante do
                                         que o rótulo -- que continua visível logo acima do botão. */}
-                                    {podeEscrever && ehBoletoSemResolucao(l) ? (
+                                    {l.status === "ignorado" ? (
+                                      // PRIMEIRO de todos: um lançamento ignorado que ainda carregue
+                                      // categoria/conta_pagar_id/movimentacao_id (dado antigo, gravado
+                                      // antes de handleIgnorar passar a limpá-los) não pode cair nos
+                                      // ramos abaixo como se ainda estivesse pendente de ação.
+                                      <span className="text-[10px] text-[var(--color-text-muted)]">—</span>
+                                    ) : podeEscrever && ehBoletoSemResolucao(l) ? (
                                       <div className="flex flex-col gap-1 items-start">
                                         {l.categoria && (
                                           <span className="px-2 py-1 rounded-full bg-slate-50 text-slate-600 border border-slate-200 text-[10px] font-semibold whitespace-nowrap">
@@ -2884,13 +2909,21 @@ export default function ExtratoPage() {
                                             Lançado em Movimentações
                                           </span>
                                         )}
+                                        {/* Descarta QUALQUER lançamento já resolvido -- Gabi decide
+                                            que não precisa por qualquer motivo (duplicidade não
+                                            detectada, erro, o que for). Se já baixou conta a pagar ou
+                                            lançou movimentação, handleIgnorar desfaz isso primeiro. */}
+                                        {podeEscrever && (
+                                          <button
+                                            type="button"
+                                            disabled={acaoLancamentoId === l.id}
+                                            onClick={() => handleIgnorar(l)}
+                                            className="px-2 py-0.5 rounded-full border border-[var(--color-border)] text-[9px] font-medium whitespace-nowrap hover:bg-[var(--hover-bg)] disabled:opacity-50"
+                                          >
+                                            {acaoLancamentoId === l.id ? "..." : "Ignorar"}
+                                          </button>
+                                        )}
                                       </div>
-                                    ) : l.status === "ignorado" ? (
-                                      // ANTES dos ramos de candidatas/duplicatas: um lançamento
-                                      // ignorado que ainda carregue esses campos (dado antigo,
-                                      // gravado antes de handleIgnorar passar a limpá-los) não pode
-                                      // oferecer botão de resolução -- não há mais nada a resolver.
-                                      <span className="text-[10px] text-[var(--color-text-muted)]">—</span>
                                     ) : podeEscrever && l.contas_pagar_candidatas && l.contas_pagar_candidatas.length > 0 ? (
                                       <button
                                         type="button"
