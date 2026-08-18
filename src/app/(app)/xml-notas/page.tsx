@@ -93,6 +93,7 @@ export default function XmlNotasPage() {
   const [notas, setNotas] = useState<Nota[]>([]);
   const [carregandoNotas, setCarregandoNotas] = useState(false);
   const [notaExpandidaId, setNotaExpandidaId] = useState<string | null>(null);
+  const [diaHistoricoExpandido, setDiaHistoricoExpandido] = useState<string | null>(null);
 
   const [editandoNotaId, setEditandoNotaId] = useState<string | null>(null);
   const [formNotaEdicao, setFormNotaEdicao] = useState({ fornecedor_nome: "", numero_nota: "", valor_total: "" });
@@ -365,6 +366,16 @@ export default function XmlNotasPage() {
   // aqui de novo criaria duas versões divergentes do mesmo dado.
   function notaTemLancamento(n: Nota): boolean {
     return n.xml_duplicata.some((d) => d.status === "lancada");
+  }
+
+  // Nota "resolvida" sai da lista de trabalho e vai pro histórico: toda
+  // parcela dela já terminou (lançada ou marcada como duplicata, nunca as
+  // duas coisas ao mesmo tempo pendentes). Nota sem nenhuma parcela nunca
+  // conta como resolvida -- precisa de lançamento manual em Contas a Pagar,
+  // fora do alcance desta tela, então fica sempre visível como pendente.
+  function notaEstaResolvida(n: Nota): boolean {
+    if (n.xml_duplicata.length === 0) return false;
+    return n.xml_duplicata.every((d) => d.status === "lancada" || d.status === "duplicata_confirmada");
   }
 
   function iniciarEdicaoNota(n: Nota) {
@@ -701,6 +712,9 @@ export default function XmlNotasPage() {
     await carregarNotas();
   }
 
+  const notasPendentes = notas.filter((n) => !notaEstaResolvida(n));
+  const notasHistorico = notas.filter(notaEstaResolvida);
+
   return (
     <div>
       <div className="mb-6">
@@ -824,8 +838,13 @@ export default function XmlNotasPage() {
           )}
           {carregandoNotas ? (
             <div className="skeleton h-40 rounded-xl" />
-          ) : notas.length === 0 ? (
-            <EmptyState variant="search" title="Nenhuma nota importada" description="Importe XMLs na aba Importar para começar." compact />
+          ) : notasPendentes.length === 0 ? (
+            <EmptyState
+              variant="search"
+              title={notas.length === 0 ? "Nenhuma nota importada" : "Nada pendente"}
+              description={notas.length === 0 ? "Importe XMLs na aba Importar para começar." : "Toda nota importada já foi lançada ou resolvida — veja o histórico abaixo."}
+              compact
+            />
           ) : (
             <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-x-auto">
               <table className="w-full text-xs">
@@ -842,7 +861,7 @@ export default function XmlNotasPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {notas.map((n) => (
+                  {notasPendentes.map((n) => (
                     <Fragment key={n.id}>
                       <tr className="border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--hover-bg)]">
                         <td className="px-3 py-2.5 whitespace-nowrap">{formatarData(n.emitida_em)}</td>
@@ -1058,6 +1077,82 @@ export default function XmlNotasPage() {
               </table>
             </div>
           )}
+
+          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-6 mt-6">
+            <h2 className="font-semibold text-sm mb-3">Histórico</h2>
+            {carregandoNotas ? (
+              <div className="skeleton h-24 rounded-xl" />
+            ) : notasHistorico.length === 0 ? (
+              <p className="text-xs text-[var(--color-text-muted)]">Nenhuma nota resolvida ainda.</p>
+            ) : (
+              (() => {
+                // Agrupado por dia de cadastro no sistema (criado_em) -- não pela
+                // emissão da nota, que pode ser bem anterior ao dia em que foi lançada.
+                const porDia = new Map<string, Nota[]>();
+                for (const n of notasHistorico) {
+                  const dia = n.criado_em.slice(0, 10);
+                  if (!porDia.has(dia)) porDia.set(dia, []);
+                  porDia.get(dia)!.push(n);
+                }
+                return (
+                  <div className="space-y-2">
+                    {Array.from(porDia.entries()).map(([dia, ns]) => {
+                      const lancadas = ns.reduce((soma, n) => soma + n.xml_duplicata.filter((d) => d.status === "lancada").length, 0);
+                      const duplicatas = ns.reduce((soma, n) => soma + n.xml_duplicata.filter((d) => d.status === "duplicata_confirmada").length, 0);
+                      const expandido = diaHistoricoExpandido === dia;
+                      return (
+                        <div key={dia} className="border border-[var(--color-border)] rounded-xl overflow-hidden">
+                          <button
+                            type="button"
+                            onClick={() => setDiaHistoricoExpandido(expandido ? null : dia)}
+                            className="w-full flex items-center justify-between px-3 py-2 text-xs hover:bg-[var(--hover-bg)]"
+                          >
+                            <span className="font-semibold">{formatarDataCadastro(dia)}</span>
+                            <span className="text-[var(--color-text-muted)]">
+                              {ns.length} nota(s) · {lancadas} parcela(s) lançada(s)
+                              {duplicatas > 0 ? ` · ${duplicatas} marcada(s) como duplicata` : ""} {expandido ? "▲" : "▼"}
+                            </span>
+                          </button>
+                          {expandido && (
+                            <table className="w-full text-xs border-t border-[var(--color-border)]">
+                              <thead>
+                                <tr className="text-left text-[var(--color-text-muted)]">
+                                  <th className="px-3 py-1.5 font-semibold">Fornecedor</th>
+                                  <th className="px-3 py-1.5 font-semibold">Nº nota</th>
+                                  <th className="px-3 py-1.5 font-semibold text-right">Valor total</th>
+                                  <th className="px-3 py-1.5 font-semibold text-center">Parcelas</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {ns.map((n) => (
+                                  <tr key={n.id} className="border-t border-[var(--color-border)]">
+                                    <td className="px-3 py-1.5 max-w-[220px] truncate" title={n.fornecedor_nome ?? ""}>{n.fornecedor_nome ?? "—"}</td>
+                                    <td className="px-3 py-1.5 whitespace-nowrap">{n.numero_nota ?? "—"}</td>
+                                    <td className="px-3 py-1.5 text-right whitespace-nowrap">{formatarMoeda(n.valor_total)}</td>
+                                    <td className="px-3 py-1.5 text-center">
+                                      {n.xml_duplicata.every((d) => d.status === "lancada") ? (
+                                        <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold border bg-emerald-50 text-emerald-700 border-emerald-200">
+                                          lançada
+                                        </span>
+                                      ) : (
+                                        <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold border bg-gray-100 text-gray-500 border-gray-200">
+                                          duplicata
+                                        </span>
+                                      )}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()
+            )}
+          </div>
         </div>
       )}
 
