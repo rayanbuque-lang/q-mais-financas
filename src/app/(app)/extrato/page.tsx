@@ -1295,7 +1295,7 @@ export default function ExtratoPage() {
         }
       }
 
-      if (!loteTruncado) {
+      if (!loteTruncado && pulados === 0) {
         await supabase.from("extrato_importacao").update({ status: "descartada" }).eq("id", importacaoId);
       }
       await registrarLog({
@@ -2565,7 +2565,9 @@ export default function ExtratoPage() {
                                   </button>
                                   <button
                                     type="button"
-                                    onClick={() => desfazerImportacao(imp.id)}
+                                    onClick={() => {
+                                      if (confirm("Descartar esta importação?")) desfazerImportacao(imp.id);
+                                    }}
                                     disabled={emAcao}
                                     className="text-red-500 hover:underline text-[11px] font-medium disabled:opacity-50"
                                   >
@@ -2576,7 +2578,14 @@ export default function ExtratoPage() {
                               {imp.status === "confirmada" && (
                                 <button
                                   type="button"
-                                  onClick={() => desfazerImportacao(imp.id)}
+                                  onClick={() => {
+                                    if (
+                                      confirm(
+                                        "Isso vai excluir as movimentações, reabrir as contas a pagar e ajustar o Fechamento de Caixa deste lote. Continuar?"
+                                      )
+                                    )
+                                      desfazerImportacao(imp.id);
+                                  }}
                                   disabled={emAcao}
                                   className="text-red-500 hover:underline text-[11px] font-medium disabled:opacity-50"
                                 >
