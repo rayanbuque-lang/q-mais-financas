@@ -412,6 +412,74 @@ async function processarBaixasAutomaticas(
   return { baixados, ambiguos, duplicatas, mesFechado, falharam, idsBaixados, idsAmbiguos, idsDuplicatas };
 }
 
+// Roda no IMPORT (não na confirmação) -- só SINALIZA candidatas/duplicatas
+// pra já aparecerem na revisão, ANTES do usuário clicar "Confirmar e
+// Lançar" (mesmos botões "Baixa ambígua"/"Provável duplicata" que já
+// existem na lista). Não baixa nem lança nada -- processarBaixasAutomaticas
+// (chamada em confirmarImportacao/handleReprocessar) recalcula tudo de novo
+// na hora de confirmar, então isto é só uma prévia pro usuário decidir com
+// informação (reaproveita o mesmo motor puro calcularBaixasAutomaticas).
+// Sem isso, um boleto do extrato que já bate com uma conta a pagar PAGA
+// hoje mesmo não mostrava aviso nenhum enquanto o lote ainda não fosse
+// confirmado -- risco real de duplicar o lançamento.
+async function sinalizarDuplicatasEAmbiguos(lancamentosNovos: LancamentoParaBaixa[]): Promise<{ ambiguos: number; duplicatas: number }> {
+  const supabase = createClient();
+  const saidas = lancamentosNovos.filter((l) => l.valor < 0 && !l.conta_pagar_id && !l.movimentacao_id);
+  if (saidas.length === 0) return { ambiguos: 0, duplicatas: 0 };
+
+  const dataMinimaPagas = new Date();
+  dataMinimaPagas.setFullYear(dataMinimaPagas.getFullYear() - 1);
+  const dataMinimaPagasIso = dataMinimaPagas.toISOString().slice(0, 10);
+
+  const [{ data: pendentesRaw, error: erroPendentes }, { data: pagasRaw, error: erroPagas }] = await Promise.all([
+    supabase.from("contas_pagar").select("id, fornecedor, valor").eq("status", "pendente").limit(2000),
+    supabase
+      .from("contas_pagar")
+      .select("id, fornecedor, valor, data_pagamento")
+      .eq("status", "pago")
+      .gte("data_pagamento", dataMinimaPagasIso)
+      .order("data_pagamento", { ascending: false })
+      .limit(LIMITE_LANCAMENTOS),
+  ]);
+  if (erroPendentes || erroPagas) return { ambiguos: 0, duplicatas: 0 };
+
+  const pendentes = pendentesRaw ?? [];
+  const pagas = pagasRaw ?? [];
+  if (pendentes.length === 0 && pagas.length === 0) return { ambiguos: 0, duplicatas: 0 };
+
+  const candidatos: CandidatoBaixa[] = saidas.map((l, indice) => ({
+    indice,
+    valor: Math.abs(Number(l.valor)),
+    descricaoNormalizada: l.descricao_normalizada,
+    data: l.data_lancamento,
+  }));
+  const contasPendentes: ContaPagarPendente[] = pendentes.map((c) => ({ id: c.id as string, fornecedor: c.fornecedor as string, valor: Number(c.valor) }));
+  const contasPagas: ContaPagarPendente[] = pagas.map((c) => ({
+    id: c.id as string,
+    fornecedor: c.fornecedor as string,
+    valor: Number(c.valor),
+    dataPagamento: c.data_pagamento as string | null,
+  }));
+
+  const resultado = calcularBaixasAutomaticas(candidatos, contasPendentes, contasPagas);
+
+  let ambiguos = 0;
+  for (const a of resultado.ambiguos) {
+    const lancamento = saidas[a.indice];
+    const { error } = await supabase.from("extrato_lancamento").update({ contas_pagar_candidatas: a.candidatosIds }).eq("id", lancamento.id);
+    if (!error) ambiguos++;
+  }
+
+  let duplicatas = 0;
+  for (const d of resultado.duplicatas) {
+    const lancamento = saidas[d.indice];
+    const { error } = await supabase.from("extrato_lancamento").update({ contas_pagar_duplicatas: d.candidatosIds }).eq("id", lancamento.id);
+    if (!error) duplicatas++;
+  }
+
+  return { ambiguos, duplicatas };
+}
+
 // Um lançamento que já ficou ambíguo carrega contas_pagar_candidatas até
 // alguém resolver. Se num reprocessamento posterior o motor não encontra mais
 // candidato nenhum (as contas empatadas foram pagas por outro meio, ou o
@@ -1514,18 +1582,30 @@ export default function ExtratoPage() {
       });
 
       let classificadosAuto = 0;
+      let ambiguosPrevia = 0;
+      let duplicatasPrevia = 0;
       if (inseridos && inseridos.length > 0) {
+        // Sinaliza candidatas/duplicatas ANTES de classificar por regra: um
+        // boleto que já bate com uma conta paga precisa desse aviso visível
+        // na revisão, independente de alguma regra genérica também ter
+        // preenchido categoria nele (a lista prioriza esse aviso -- ver
+        // ordem dos ramos na renderização).
+        const sinalizacao = await sinalizarDuplicatasEAmbiguos(inseridos as LancamentoParaBaixa[]);
+        ambiguosPrevia = sinalizacao.ambiguos;
+        duplicatasPrevia = sinalizacao.duplicatas;
         const resultadosRegra = await classificarPorRegras(inseridos as LancamentoClassificavel[]);
         classificadosAuto = resultadosRegra.length;
       }
 
-      setResumoImportacao({ lidas: parsed.transacoes.length, novas, duplicadas, cobertos, baixados: 0, ambiguos: 0, duplicatas: 0, mesFechado: 0, baixasFalharam: 0, movimentacoesLancadas: 0, movimentacoesMesFechado: 0, movimentacoesFalharam: 0, movimentacoesSinalIncompativel: 0, movimentacoesCategoriaInativa: 0, movimentacoesDiaFechadoCaixa: 0, movimentacoesPixCaixaNaoSincronizado: 0, avisos });
+      setResumoImportacao({ lidas: parsed.transacoes.length, novas, duplicadas, cobertos, baixados: 0, ambiguos: ambiguosPrevia, duplicatas: duplicatasPrevia, mesFechado: 0, baixasFalharam: 0, movimentacoesLancadas: 0, movimentacoesMesFechado: 0, movimentacoesFalharam: 0, movimentacoesSinalIncompativel: 0, movimentacoesCategoriaInativa: 0, movimentacoesDiaFechadoCaixa: 0, movimentacoesPixCaixaNaoSincronizado: 0, avisos });
       setMensagem({
         tipo: "sucesso",
         texto:
           `${parsed.transacoes.length} lidas · ${novas} novas · ${duplicadas} já existentes` +
           (cobertos > 0 ? ` · ${cobertos} já cobertas pelo relatório Pix` : "") +
           (classificadosAuto > 0 ? ` · ${classificadosAuto} classificada(s) automaticamente` : "") +
+          (ambiguosPrevia > 0 ? ` · ${ambiguosPrevia} ambígua(s) (revisar)` : "") +
+          (duplicatasPrevia > 0 ? ` · ${duplicatasPrevia} provável(is) duplicata(s) (revisar)` : "") +
           " — revise na aba Lançamentos e confirme quando estiver tudo certo.",
       });
       setArquivo(null);
@@ -2371,10 +2451,14 @@ export default function ExtratoPage() {
                   {resumoImportacao.lidas} lidas · {resumoImportacao.novas} novas · {resumoImportacao.duplicadas} já existentes
                   {resumoImportacao.cobertos > 0 && ` · ${resumoImportacao.cobertos} já cobertas pelo relatório Pix`}
                 </p>
-                {(resumoImportacao.baixados > 0 || resumoImportacao.ambiguos > 0) && (
+                {resumoImportacao.baixados > 0 && (
                   <p className="mt-1 font-semibold">
                     {resumoImportacao.baixados} lançamento(s) de saída baixados automaticamente em Contas a Pagar
-                    {resumoImportacao.ambiguos > 0 && ` · ${resumoImportacao.ambiguos} ambíguo(s) — revisar na aba Lançamentos`}
+                  </p>
+                )}
+                {resumoImportacao.ambiguos > 0 && (
+                  <p className="mt-1 font-semibold text-amber-700">
+                    {resumoImportacao.ambiguos} lançamento(s) ambíguo(s) (batem com 2+ contas a pagar) — revisar na aba Lançamentos.
                   </p>
                 )}
                 {resumoImportacao.duplicatas > 0 && (
@@ -2887,6 +2971,33 @@ export default function ExtratoPage() {
                                           {acaoLancamentoId === l.id ? "..." : "Ignorar (já pago)"}
                                         </button>
                                       </div>
+                                    ) : podeEscrever && l.contas_pagar_candidatas && l.contas_pagar_candidatas.length > 0 ? (
+                                      // ANTES do ramo de categoria: uma regra genérica pode ter
+                                      // preenchido `categoria` no mesmo lançamento (mesmo motivo
+                                      // documentado em ehBoletoSemResolucao) -- o aviso de ambiguidade
+                                      // não pode ficar escondido atrás de um badge de categoria.
+                                      <button
+                                        type="button"
+                                        disabled={carregandoCandidatos}
+                                        onClick={() => handleAbrirResolucaoAmbigua(l)}
+                                        className="px-2 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-semibold whitespace-nowrap hover:bg-amber-100 disabled:opacity-50"
+                                      >
+                                        {carregandoCandidatos ? "..." : `Baixa ambígua (${l.contas_pagar_candidatas.length})`}
+                                      </button>
+                                    ) : podeEscrever && l.contas_pagar_duplicatas && l.contas_pagar_duplicatas.length > 0 ? (
+                                      // Mesmo motivo do ramo acima: o aviso de provável duplicata
+                                      // (este lançamento já bate com uma conta a pagar PAGA) tem que
+                                      // aparecer sempre, mesmo que uma regra genérica de boleto também
+                                      // tenha preenchido `categoria` -- risco real de duplicar o
+                                      // lançamento se isso ficar escondido.
+                                      <button
+                                        type="button"
+                                        disabled={carregandoDuplicata}
+                                        onClick={() => handleAbrirDuplicata(l)}
+                                        className="px-2 py-1 rounded-full bg-orange-50 text-orange-700 border border-orange-200 text-[10px] font-semibold whitespace-nowrap hover:bg-orange-100 disabled:opacity-50"
+                                      >
+                                        {carregandoDuplicata ? "..." : `Provável duplicata (${l.contas_pagar_duplicatas.length})`}
+                                      </button>
                                     ) : l.categoria ? (
                                       <div className="flex flex-col gap-1 items-start">
                                         <span
@@ -2924,24 +3035,6 @@ export default function ExtratoPage() {
                                           </button>
                                         )}
                                       </div>
-                                    ) : podeEscrever && l.contas_pagar_candidatas && l.contas_pagar_candidatas.length > 0 ? (
-                                      <button
-                                        type="button"
-                                        disabled={carregandoCandidatos}
-                                        onClick={() => handleAbrirResolucaoAmbigua(l)}
-                                        className="px-2 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-semibold whitespace-nowrap hover:bg-amber-100 disabled:opacity-50"
-                                      >
-                                        {carregandoCandidatos ? "..." : `Baixa ambígua (${l.contas_pagar_candidatas.length})`}
-                                      </button>
-                                    ) : podeEscrever && l.contas_pagar_duplicatas && l.contas_pagar_duplicatas.length > 0 ? (
-                                      <button
-                                        type="button"
-                                        disabled={carregandoDuplicata}
-                                        onClick={() => handleAbrirDuplicata(l)}
-                                        className="px-2 py-1 rounded-full bg-orange-50 text-orange-700 border border-orange-200 text-[10px] font-semibold whitespace-nowrap hover:bg-orange-100 disabled:opacity-50"
-                                      >
-                                        {carregandoDuplicata ? "..." : `Provável duplicata (${l.contas_pagar_duplicatas.length})`}
-                                      </button>
                                     ) : (
                                       <span className="text-[10px] text-amber-600 font-medium">pendente</span>
                                     )}
