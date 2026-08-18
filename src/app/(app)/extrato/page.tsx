@@ -2849,6 +2849,18 @@ export default function ExtratoPage() {
                                         >
                                           {abrindoCadastroContaPagar ? "..." : "Cadastrar conta a pagar"}
                                         </button>
+                                        {/* Boleto que já foi pago/baixado por outro caminho (ex.: em
+                                            outro banco/forma) não deve virar conta a pagar nova --
+                                            precisa de um jeito de descartar sem sair pelo fluxo de
+                                            "nao_classificado" (que não se aplica mais aqui). */}
+                                        <button
+                                          type="button"
+                                          disabled={acaoLancamentoId === l.id}
+                                          onClick={() => handleIgnorar(l)}
+                                          className="px-2 py-1 rounded-full border border-[var(--color-border)] text-[10px] font-medium whitespace-nowrap hover:bg-[var(--hover-bg)] disabled:opacity-50"
+                                        >
+                                          {acaoLancamentoId === l.id ? "..." : "Ignorar (já pago)"}
+                                        </button>
                                       </div>
                                     ) : l.categoria ? (
                                       <div className="flex flex-col gap-1 items-start">
