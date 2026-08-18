@@ -13,6 +13,11 @@ const diasSemanaLong = ["Domingo","Segunda-feira","Terça-feira","Quarta-feira",
 
 const CAMPOS_CONFIG = [
   { field: "cartao",        label: "Cartão",          emoji: "💳", bg: "var(--blue-subtle)",   border: "var(--blue-border)",   color: "var(--blue-strong)" },
+  // Pix Inter continua manual -- diferente do Santander, ainda não existe
+  // conta cadastrada em extrato_conta pra ele, então não há automação do
+  // extrato alimentando esse campo. Só volta a virar "(auto)"/somente-leitura
+  // quando essa automação existir (mesma mudança já feita pro Santander).
+  { field: "pix_inter",     label: "Pix Inter",       emoji: "📱", bg: "var(--orange-subtle)", border: "var(--orange-border)", color: "var(--orange)" },
   { field: "rom_card",      label: "Rom Card",        emoji: "💳", bg: "var(--purple-subtle)", border: "var(--purple-border)", color: "var(--purple)" },
   { field: "app",           label: "App",             emoji: "📲", bg: "var(--brand-subtle)",  border: "var(--brand-border)",  color: "var(--brand-strong)" },
   { field: "prefeitura",    label: "Prefeitura",      emoji: "🏛️", bg: "var(--cyan-subtle)",   border: "var(--cyan-border)",   color: "var(--cyan)" },
@@ -34,7 +39,7 @@ const RESUMO_COLS = [
   { key: "total" as const,         label: "📊 Total" },
 ];
 const RESUMO_PADRAO = ["cartao","pix_santander","pix_inter","rom_card","dinheiro","total"];
-const CAMPOS_PADRAO: CampoKey[] = ["cartao","rom_card","app","prefeitura","compras_prazo","sobras_faltas"];
+const CAMPOS_PADRAO: CampoKey[] = ["cartao","pix_inter","rom_card","app","prefeitura","compras_prazo","sobras_faltas"];
 
 interface CaixaDia {
   id: string; data: string; turnos: number;
@@ -194,15 +199,16 @@ export default function FechamentoCaixaPage() {
     setLoading(true);
     const dinheiro = calcDinheiro(form);
     const sobrasValor = sfSigno * sfAbs;
-    // pix_santander/pix_inter NÃO entram aqui -- são preenchidos só pela
-    // importação do extrato (aplicarPixNoFechamentoCaixa). Escrevê-los aqui
-    // com o valor local do form arriscaria sobrescrever, com um valor
-    // desatualizado, um Pix que chegou via extrato entre abrir o formulário
-    // e salvar.
+    // pix_santander NÃO entra aqui -- é preenchido só pela importação do
+    // extrato (aplicarPixNoFechamentoCaixa). Escrevê-lo aqui com o valor
+    // local do form arriscaria sobrescrever, com um valor desatualizado, um
+    // Pix que chegou via extrato entre abrir o formulário e salvar.
+    // pix_inter continua manual (ainda não existe automação do extrato pra
+    // ele), então esse sim precisa ir no payload normalmente.
     const dados = {
       data: detailData, turnos,
       valor_total_vendas: form.valor_total_vendas,
-      cartao: form.cartao, rom_card: form.rom_card,
+      cartao: form.cartao, pix_inter: form.pix_inter, rom_card: form.rom_card,
       app: form.app, prefeitura: form.prefeitura,
       compras_prazo: form.compras_prazo,
       dinheiro, sobras_faltas: sobrasValor, total: dinheiro,
@@ -229,11 +235,11 @@ export default function FechamentoCaixaPage() {
     setLoading(true);
     const dinheiro = calcDinheiro(form);
     const sobrasValor = sfSigno * sfAbs;
-    // pix_santander/pix_inter não entram aqui -- mesmo motivo de salvarRascunho.
+    // pix_santander não entra aqui -- mesmo motivo de salvarRascunho.
     const dados = {
       data: detailData, turnos,
       valor_total_vendas: form.valor_total_vendas,
-      cartao: form.cartao, rom_card: form.rom_card,
+      cartao: form.cartao, pix_inter: form.pix_inter, rom_card: form.rom_card,
       app: form.app, prefeitura: form.prefeitura,
       compras_prazo: form.compras_prazo,
       dinheiro, sobras_faltas: sobrasValor, total: dinheiro,
@@ -448,13 +454,6 @@ export default function FechamentoCaixaPage() {
                 </div>
               </div>
 
-              {/* Pix Inter (auto) — só entra via importação do extrato */}
-              <div style={{ background: "var(--orange-subtle)", border: "2px solid var(--orange-border)", borderRadius: 12, padding: 12 }}>
-                <label style={{ fontSize: 10, fontWeight: 700, color: "var(--orange)", textTransform: "uppercase" }}>📱 Pix Inter (auto)</label>
-                <div style={{ marginTop: 6, padding: "8px 10px", borderRadius: 8, background: "var(--input-bg)", border: "1px solid var(--orange-border)", fontSize: 16, fontWeight: 700, color: "var(--orange)" }}>
-                  {fmt(form.pix_inter)}
-                </div>
-              </div>
 
               {/* Sobras e Faltas */}
               {mostrarSobras && (
