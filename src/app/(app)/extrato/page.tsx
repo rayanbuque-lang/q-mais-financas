@@ -428,10 +428,10 @@ async function processarBaixasAutomaticas(
 // Sem isso, um boleto do extrato que já bate com uma conta a pagar PAGA
 // hoje mesmo não mostrava aviso nenhum enquanto o lote ainda não fosse
 // confirmado -- risco real de duplicar o lançamento.
-async function sinalizarDuplicatasEAmbiguos(lancamentosNovos: LancamentoParaBaixa[]): Promise<{ ambiguos: number; duplicatas: number }> {
+async function sinalizarDuplicatasEAmbiguos(lancamentosNovos: LancamentoParaBaixa[]): Promise<{ selecionadas: number; ambiguos: number; duplicatas: number }> {
   const supabase = createClient();
   const saidas = lancamentosNovos.filter((l) => l.valor < 0 && !l.conta_pagar_id && !l.movimentacao_id);
-  if (saidas.length === 0) return { ambiguos: 0, duplicatas: 0 };
+  if (saidas.length === 0) return { selecionadas: 0, ambiguos: 0, duplicatas: 0 };
 
   const dataMinimaPagas = new Date();
   dataMinimaPagas.setFullYear(dataMinimaPagas.getFullYear() - 1);
@@ -447,11 +447,11 @@ async function sinalizarDuplicatasEAmbiguos(lancamentosNovos: LancamentoParaBaix
       .order("data_pagamento", { ascending: false })
       .limit(LIMITE_LANCAMENTOS),
   ]);
-  if (erroPendentes || erroPagas) return { ambiguos: 0, duplicatas: 0 };
+  if (erroPendentes || erroPagas) return { selecionadas: 0, ambiguos: 0, duplicatas: 0 };
 
   const pendentes = pendentesRaw ?? [];
   const pagas = pagasRaw ?? [];
-  if (pendentes.length === 0 && pagas.length === 0) return { ambiguos: 0, duplicatas: 0 };
+  if (pendentes.length === 0 && pagas.length === 0) return { selecionadas: 0, ambiguos: 0, duplicatas: 0 };
 
   const candidatos: CandidatoBaixa[] = saidas.map((l, indice) => ({
     indice,
@@ -469,6 +469,24 @@ async function sinalizarDuplicatasEAmbiguos(lancamentosNovos: LancamentoParaBaix
 
   const resultado = calcularBaixasAutomaticas(candidatos, contasPendentes, contasPagas);
 
+  // Match confiante (nome E valor batem com 1 pendente só) -- é exatamente o
+  // critério que processarBaixasAutomaticas já baixa sozinho na confirmação,
+  // sem pedir nada a ninguém. Só que ficar invisível até o clique em
+  // "Confirmar e Lançar" do lote inteiro é confuso: dois boletos idênticos
+  // ("pagamento de boleto") pareciam tratados diferente na revisão -- um
+  // com aviso, outro sem nada -- quando na verdade os dois já tinham sido
+  // resolvidos. Pré-seleciona aqui (conta_pagar_escolhida_id) pra aparecer
+  // com o mesmo selo "✓ Selecionada" de qualquer outra escolha -- ela pode
+  // desfazer com "Ignorar" se achar que está errado, mesmo caminho de
+  // sempre. Não conta como decisão dela, então não precisa (e não deve)
+  // bloquear o gate de confirmação como contas_pagar_candidatas bloqueia.
+  let selecionadas = 0;
+  for (const b of resultado.baixados) {
+    const lancamento = saidas[b.indice];
+    const { error } = await supabase.from("extrato_lancamento").update({ conta_pagar_escolhida_id: b.contaPagarId }).eq("id", lancamento.id);
+    if (!error) selecionadas++;
+  }
+
   let ambiguos = 0;
   for (const a of resultado.ambiguos) {
     const lancamento = saidas[a.indice];
@@ -483,7 +501,7 @@ async function sinalizarDuplicatasEAmbiguos(lancamentosNovos: LancamentoParaBaix
     if (!error) duplicatas++;
   }
 
-  return { ambiguos, duplicatas };
+  return { selecionadas, ambiguos, duplicatas };
 }
 
 // Um lançamento que já ficou ambíguo carrega contas_pagar_candidatas até
@@ -1681,28 +1699,31 @@ export default function ExtratoPage() {
       });
 
       let classificadosAuto = 0;
+      let selecionadasPrevia = 0;
       let ambiguosPrevia = 0;
       let duplicatasPrevia = 0;
       if (inseridos && inseridos.length > 0) {
-        // Sinaliza candidatas/duplicatas ANTES de classificar por regra: um
-        // boleto que já bate com uma conta paga precisa desse aviso visível
-        // na revisão, independente de alguma regra genérica também ter
-        // preenchido categoria nele (a lista prioriza esse aviso -- ver
-        // ordem dos ramos na renderização).
+        // Sinaliza candidatas/duplicatas/seleção confiante ANTES de
+        // classificar por regra: um boleto que já bate com uma conta (aberta
+        // ou paga) precisa desse aviso visível na revisão, independente de
+        // alguma regra genérica também ter preenchido categoria nele (a
+        // lista prioriza esse aviso -- ver ordem dos ramos na renderização).
         const sinalizacao = await sinalizarDuplicatasEAmbiguos(inseridos as LancamentoParaBaixa[]);
+        selecionadasPrevia = sinalizacao.selecionadas;
         ambiguosPrevia = sinalizacao.ambiguos;
         duplicatasPrevia = sinalizacao.duplicatas;
         const resultadosRegra = await classificarPorRegras(inseridos as LancamentoClassificavel[]);
         classificadosAuto = resultadosRegra.length;
       }
 
-      setResumoImportacao({ lidas: parsed.transacoes.length, novas, duplicadas, cobertos, baixados: 0, ambiguos: ambiguosPrevia, duplicatas: duplicatasPrevia, mesFechado: 0, baixasFalharam: 0, movimentacoesLancadas: 0, movimentacoesMesFechado: 0, movimentacoesFalharam: 0, movimentacoesSinalIncompativel: 0, movimentacoesCategoriaInativa: 0, movimentacoesDiaFechadoCaixa: 0, movimentacoesPixCaixaNaoSincronizado: 0, avisos });
+      setResumoImportacao({ lidas: parsed.transacoes.length, novas, duplicadas, cobertos, baixados: selecionadasPrevia, ambiguos: ambiguosPrevia, duplicatas: duplicatasPrevia, mesFechado: 0, baixasFalharam: 0, movimentacoesLancadas: 0, movimentacoesMesFechado: 0, movimentacoesFalharam: 0, movimentacoesSinalIncompativel: 0, movimentacoesCategoriaInativa: 0, movimentacoesDiaFechadoCaixa: 0, movimentacoesPixCaixaNaoSincronizado: 0, avisos });
       setMensagem({
         tipo: "sucesso",
         texto:
           `${parsed.transacoes.length} lidas · ${novas} novas · ${duplicadas} já existentes` +
           (cobertos > 0 ? ` · ${cobertos} já cobertas pelo relatório Pix` : "") +
           (classificadosAuto > 0 ? ` · ${classificadosAuto} classificada(s) automaticamente` : "") +
+          (selecionadasPrevia > 0 ? ` · ${selecionadasPrevia} conta(s) a pagar já selecionada(s) automaticamente` : "") +
           (ambiguosPrevia > 0 ? ` · ${ambiguosPrevia} ambígua(s) (revisar)` : "") +
           (duplicatasPrevia > 0 ? ` · ${duplicatasPrevia} provável(is) duplicata(s) (revisar)` : "") +
           " — revise na aba Lançamentos e confirme quando estiver tudo certo.",
@@ -2479,7 +2500,7 @@ export default function ExtratoPage() {
                 </p>
                 {resumoImportacao.baixados > 0 && (
                   <p className="mt-1 font-semibold">
-                    {resumoImportacao.baixados} lançamento(s) de saída baixados automaticamente em Contas a Pagar
+                    {resumoImportacao.baixados} lançamento(s) de saída já selecionado(s) automaticamente em Contas a Pagar — serão baixados ao confirmar
                   </p>
                 )}
                 {resumoImportacao.ambiguos > 0 && (
@@ -2979,12 +3000,12 @@ export default function ExtratoPage() {
                                         ✓ Selecionada — baixa ao confirmar
                                       </span>
                                     ) : podeEscrever && ehBoletoSemResolucao(l) ? (
+                                      // Sem o rótulo "Pagamento de boletos" aqui de propósito: é a
+                                      // mesma categoria genérica em toda linha deste ramo (não
+                                      // distingue nada) e, sendo um <span> sem onClick com a MESMA
+                                      // forma de pílula dos botões ao lado, parecia um botão morto
+                                      // ("falho", segundo o próprio usuário que testou).
                                       <div className="flex flex-col gap-1 items-start">
-                                        {l.categoria && (
-                                          <span className="px-2 py-1 rounded-full bg-slate-50 text-slate-600 border border-slate-200 text-[10px] font-semibold whitespace-nowrap">
-                                            {l.categoria}
-                                          </span>
-                                        )}
                                         <button
                                           type="button"
                                           disabled={abrindoCadastroContaPagar}
