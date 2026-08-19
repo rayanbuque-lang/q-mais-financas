@@ -891,20 +891,6 @@ export default function ExtratoPage() {
     candidatos: { id: string; fornecedor: string; valor: number; data_pagamento: string | null }[];
   } | null>(null);
   const [carregandoDuplicata, setCarregandoDuplicata] = useState(false);
-  // `pendentesMesmoValor`: contas a pagar ainda pendentes com exatamente o
-  // valor do lançamento. Existem porque o casamento automático exige valor E
-  // nome -- uma conta cujo fornecedor não aparece no texto do banco (DARF,
-  // FGTS, nome truncado) nunca é encontrada e viraria uma conta duplicada se
-  // o usuário cadastrasse outra por cima. O modal oferece dar baixa nelas.
-  const [cadastrandoContaPagar, setCadastrandoContaPagar] = useState<{
-    lancamento: Lancamento;
-    pendentesMesmoValor: { id: string; fornecedor: string; valor: number; data_vencimento: string; categoria_id: string | null }[];
-  } | null>(null);
-  const [abrindoCadastroContaPagar, setAbrindoCadastroContaPagar] = useState(false);
-  const [categoriasSaidaComId, setCategoriasSaidaComId] = useState<{ id: string; nome: string }[]>([]);
-  const [novaContaFornecedor, setNovaContaFornecedor] = useState("");
-  const [novaContaCategoriaId, setNovaContaCategoriaId] = useState("");
-  const [salvandoContaPagar, setSalvandoContaPagar] = useState(false);
 
   // Regras
   const [regras, setRegras] = useState<Regra[]>([]);
@@ -2002,156 +1988,6 @@ export default function ExtratoPage() {
     setResolvendoDuplicata(null);
   }
 
-  async function handleAbrirCadastroContaPagar(lancamento: Lancamento) {
-    if (!podeEscrever) return;
-    setAbrindoCadastroContaPagar(true);
-    const valorAbsoluto = Math.abs(Number(lancamento.valor));
-    const [{ data: categorias, error: erroCategorias }, { data: pendentes, error: erroPendentes }] = await Promise.all([
-      supabase.from("categorias_saida").select("id, nome").eq("ativo", true).order("nome"),
-      // Só valor, sem nome: é exatamente o caso que a baixa automática não
-      // consegue resolver sozinha (e que geraria a conta duplicada).
-      supabase
-        .from("contas_pagar")
-        .select("id, fornecedor, valor, data_vencimento, categoria_id")
-        .eq("status", "pendente")
-        .eq("valor", valorAbsoluto)
-        .order("data_vencimento", { ascending: true })
-        .limit(20),
-    ]);
-    setAbrindoCadastroContaPagar(false);
-    if (erroCategorias) {
-      setMensagem({ tipo: "erro", texto: "Erro ao carregar as categorias de saída: " + erroCategorias.message });
-      return;
-    }
-    // Falha aqui não pode virar "nenhuma conta pendente": abrir o cadastro sem
-    // as alternativas é justamente o caminho que duplica a conta.
-    if (erroPendentes) {
-      setMensagem({ tipo: "erro", texto: "Erro ao verificar contas pendentes com esse valor: " + erroPendentes.message });
-      return;
-    }
-    setCategoriasSaidaComId((categorias ?? []) as { id: string; nome: string }[]);
-    // Sugestão de fornecedor a partir do texto do banco -- tira os prefixos
-    // fixos mais comuns do padrão de boleto, deixando a cauda que costuma
-    // ser o nome truncado. O colapso de espaços evita "FORNECEDOR  TESTE"
-    // quando o trecho removido estava no meio. Sempre editável antes de confirmar.
-    const sugestao = lancamento.descricao
-      .replace(/pagamento de boleto/i, "")
-      .replace(/outros bancos/i, "")
-      .replace(/\s+/g, " ")
-      .trim();
-    setNovaContaFornecedor(sugestao);
-    setNovaContaCategoriaId("");
-    setCadastrandoContaPagar({
-      lancamento,
-      pendentesMesmoValor: (pendentes ?? []) as { id: string; fornecedor: string; valor: number; data_vencimento: string; categoria_id: string | null }[],
-    });
-  }
-
-  // Espelha handleResolverBaixaAmbigua: em vez de criar uma conta nova, dá
-  // baixa numa conta pendente que já existia e só não foi casada
-  // automaticamente porque o fornecedor não aparece no texto do banco.
-  // Espelha handleResolverBaixaAmbigua: escolhe a pendente existente na
-  // REVISÃO, não baixa ainda -- só marca conta_pagar_escolhida_id.
-  async function handleBaixarPendenteExistente(contaPagarId: string) {
-    if (!podeEscrever) return;
-    if (!cadastrandoContaPagar) return;
-    const conta = cadastrandoContaPagar.pendentesMesmoValor.find((c) => c.id === contaPagarId);
-    if (!conta) return;
-    const lancamento = cadastrandoContaPagar.lancamento;
-    setResolvendoBaixaId(contaPagarId);
-
-    const erroMes = await bloquearSeMesFechado(lancamento.data_lancamento);
-    if (erroMes) {
-      setResolvendoBaixaId(null);
-      setMensagem({ tipo: "erro", texto: erroMes });
-      return;
-    }
-
-    const { error } = await supabase
-      .from("extrato_lancamento")
-      .update({ conta_pagar_escolhida_id: contaPagarId, contas_pagar_candidatas: null })
-      .eq("id", lancamento.id);
-
-    setResolvendoBaixaId(null);
-    if (error) {
-      setMensagem({ tipo: "erro", texto: "Não foi possível selecionar a conta: " + error.message });
-      return;
-    }
-    setCadastrandoContaPagar(null);
-    setMensagem({ tipo: "sucesso", texto: `Selecionado: ${conta.fornecedor} — será baixado quando você confirmar a importação.` });
-    await Promise.all([carregarLancamentos(), carregarResumo()]);
-  }
-
-  function fecharCadastroContaPagar() {
-    setCadastrandoContaPagar(null);
-  }
-
-  // Cadastra a conta a pagar de verdade (é só registrar uma cobrança nova,
-  // não uma escrita arriscada -- nasce pendente, igual cadastrar direto pela
-  // tela de Contas a Pagar), mas NÃO baixa ainda: só marca
-  // conta_pagar_escolhida_id no staging. A baixa (status vira "pago" +
-  // movimentação de saída) só acontece quando o lote inteiro é confirmado.
-  async function handleConfirmarCadastroContaPagar() {
-    if (!podeEscrever) return;
-    if (!cadastrandoContaPagar) return;
-    if (!novaContaFornecedor.trim() || !novaContaCategoriaId) {
-      setMensagem({ tipo: "erro", texto: "Preencha fornecedor e categoria." });
-      return;
-    }
-    setSalvandoContaPagar(true);
-    const lancamento = cadastrandoContaPagar.lancamento;
-    const valorAbsoluto = Math.abs(Number(lancamento.valor));
-
-    const erroMes = await bloquearSeMesFechado(lancamento.data_lancamento);
-    if (erroMes) {
-      setSalvandoContaPagar(false);
-      setMensagem({ tipo: "erro", texto: erroMes });
-      return;
-    }
-
-    const { data: contaCriada, error: erroInsert } = await supabase
-      .from("contas_pagar")
-      .insert({
-        fornecedor: novaContaFornecedor.trim(),
-        valor: valorAbsoluto,
-        data_vencimento: lancamento.data_lancamento,
-        categoria_id: novaContaCategoriaId,
-        status: "pendente",
-      })
-      .select("id")
-      .single();
-    if (erroInsert || !contaCriada) {
-      setSalvandoContaPagar(false);
-      setMensagem({ tipo: "erro", texto: "Erro ao cadastrar conta a pagar: " + (erroInsert?.message ?? "") });
-      return;
-    }
-
-    await registrarLog({
-      acao: "criou",
-      tabela: "contas_pagar",
-      registroId: contaCriada.id as string,
-      detalhes: `${novaContaFornecedor.trim()} - ${formatarMoeda(valorAbsoluto)} - cadastrada a partir do extrato (${formatarData(lancamento.data_lancamento)})`,
-    });
-
-    const { error: erroSelecao } = await supabase
-      .from("extrato_lancamento")
-      .update({ conta_pagar_escolhida_id: contaCriada.id as string })
-      .eq("id", lancamento.id);
-
-    setSalvandoContaPagar(false);
-    if (erroSelecao) {
-      // A conta foi cadastrada de verdade, mas não deu pra vincular ao
-      // lançamento -- não apaga a conta (já é dado real), só avisa.
-      setMensagem({ tipo: "erro", texto: "Conta cadastrada, mas não foi possível vincular a este lançamento — vincule manualmente ou resolva pela tela de Contas a Pagar." });
-      setCadastrandoContaPagar(null);
-      await Promise.all([carregarLancamentos(), carregarResumo()]);
-      return;
-    }
-    setCadastrandoContaPagar(null);
-    setMensagem({ tipo: "sucesso", texto: `Conta cadastrada: ${novaContaFornecedor.trim()} — será baixada quando você confirmar a importação.` });
-    await Promise.all([carregarLancamentos(), carregarResumo()]);
-  }
-
   // Descarta QUALQUER lançamento, independente do estado -- se ele já gerou
   // uma movimentação (Capacidade A/Pix) ou baixou uma conta a pagar
   // (Capacidade B), desfazerEfeitosDoLancamento reverte isso primeiro (mesma
@@ -2999,33 +2835,29 @@ export default function ExtratoPage() {
                                       <span className="px-2 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-semibold whitespace-nowrap">
                                         ✓ Selecionada — baixa ao confirmar
                                       </span>
-                                    ) : podeEscrever && ehBoletoSemResolucao(l) ? (
-                                      // Sem o rótulo "Pagamento de boletos" aqui de propósito: é a
-                                      // mesma categoria genérica em toda linha deste ramo (não
-                                      // distingue nada) e, sendo um <span> sem onClick com a MESMA
-                                      // forma de pílula dos botões ao lado, parecia um botão morto
-                                      // ("falho", segundo o próprio usuário que testou).
+                                    ) : ehBoletoSemResolucao(l) ? (
+                                      // Sem atalho de "cadastrar conta nova" aqui de propósito: o
+                                      // processo é sempre cadastrar a conta a pagar ANTES dela ser
+                                      // paga, então um boleto sem nenhuma correspondência é, por si
+                                      // só, uma anomalia -- precisa de investigação (conta cadastrada
+                                      // com fornecedor/valor diferente? pagamento fora do processo?),
+                                      // não de um clique que cria outra conta por cima e esconde o
+                                      // problema. Pra cadastrar mesmo assim, é preciso ir na tela de
+                                      // Contas a Pagar de propósito, fora do fluxo rápido do extrato.
                                       <div className="flex flex-col gap-1 items-start">
-                                        <button
-                                          type="button"
-                                          disabled={abrindoCadastroContaPagar}
-                                          onClick={() => handleAbrirCadastroContaPagar(l)}
-                                          className="px-2 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-300 text-[10px] font-semibold whitespace-nowrap hover:bg-slate-200 disabled:opacity-50"
-                                        >
-                                          {abrindoCadastroContaPagar ? "..." : "Cadastrar conta a pagar"}
-                                        </button>
-                                        {/* Boleto que já foi pago/baixado por outro caminho (ex.: em
-                                            outro banco/forma) não deve virar conta a pagar nova --
-                                            precisa de um jeito de descartar sem sair pelo fluxo de
-                                            "nao_classificado" (que não se aplica mais aqui). */}
-                                        <button
-                                          type="button"
-                                          disabled={acaoLancamentoId === l.id}
-                                          onClick={() => handleIgnorar(l)}
-                                          className="px-2 py-1 rounded-full border border-[var(--color-border)] text-[10px] font-medium whitespace-nowrap hover:bg-[var(--hover-bg)] disabled:opacity-50"
-                                        >
-                                          {acaoLancamentoId === l.id ? "..." : "Ignorar (já pago)"}
-                                        </button>
+                                        <span className="px-2 py-1 rounded-lg bg-red-50 text-red-700 border border-red-200 text-[10px] font-semibold">
+                                          ⚠️ Nenhuma conta a pagar encontrada — confira antes de ignorar
+                                        </span>
+                                        {podeEscrever && (
+                                          <button
+                                            type="button"
+                                            disabled={acaoLancamentoId === l.id}
+                                            onClick={() => handleIgnorar(l)}
+                                            className="px-2 py-1 rounded-full border border-[var(--color-border)] text-[10px] font-medium whitespace-nowrap hover:bg-[var(--hover-bg)] disabled:opacity-50"
+                                          >
+                                            {acaoLancamentoId === l.id ? "..." : "Ignorar (já pago)"}
+                                          </button>
+                                        )}
                                       </div>
                                     ) : podeEscrever && l.contas_pagar_candidatas && l.contas_pagar_candidatas.length > 0 ? (
                                       // ANTES do ramo de categoria: uma regra genérica pode ter
@@ -3283,98 +3115,6 @@ export default function ExtratoPage() {
             </div>
           )}
 
-          {cadastrandoContaPagar && (
-            <div
-              className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50"
-              onClick={() => {
-                // Mesma trava do modal de ambíguo: enquanto a conta está sendo
-                // cadastrada/baixada, fechar pelo fundo esconderia o resultado
-                // de uma escrita que já está em andamento.
-                if (!salvandoContaPagar && resolvendoBaixaId === null) fecharCadastroContaPagar();
-              }}
-            >
-              <div className="bg-[var(--color-surface)] rounded-2xl p-5 max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
-                <h3 className="font-semibold text-sm mb-1">Cadastrar conta a pagar</h3>
-                <p className="text-xs text-[var(--color-text-muted)] mb-3">
-                  Nenhuma conta a pagar correspondente foi encontrada para este lançamento de{" "}
-                  {formatarData(cadastrandoContaPagar.lancamento.data_lancamento)} ({formatarMoeda(Math.abs(cadastrandoContaPagar.lancamento.valor))}).
-                  Cadastre o fornecedor e a categoria — a baixa só acontece quando você confirmar a importação.
-                </p>
-                {cadastrandoContaPagar.pendentesMesmoValor.length > 0 && (
-                  <div className="mb-4 p-3 rounded-xl bg-amber-50 border border-amber-200">
-                    <p className="text-xs font-semibold text-amber-800 mb-1">
-                      {cadastrandoContaPagar.pendentesMesmoValor.length === 1
-                        ? "Já existe uma conta pendente com esse valor — é essa?"
-                        : `Já existem ${cadastrandoContaPagar.pendentesMesmoValor.length} contas pendentes com esse valor — é alguma delas?`}
-                    </p>
-                    <p className="text-[10px] text-amber-700 mb-2">
-                      O casamento automático exige valor e nome do fornecedor; se o nome não aparece no texto do banco, a conta certa
-                      não é encontrada sozinha. Selecione essa em vez de cadastrar outra.
-                    </p>
-                    <div className="space-y-2">
-                      {cadastrandoContaPagar.pendentesMesmoValor.map((c) => (
-                        <button
-                          key={c.id}
-                          type="button"
-                          disabled={resolvendoBaixaId !== null || salvandoContaPagar}
-                          onClick={() => handleBaixarPendenteExistente(c.id)}
-                          className="w-full flex justify-between items-center px-3 py-2 rounded-lg border border-amber-300 bg-[var(--color-surface)] text-xs hover:bg-amber-100 disabled:opacity-50 text-left"
-                        >
-                          <span>
-                            <span className="font-semibold">{c.fornecedor}</span>
-                            <br />
-                            <span className="text-[var(--color-text-muted)]">Vencimento: {formatarData(c.data_vencimento)}</span>
-                          </span>
-                          <span className="font-semibold whitespace-nowrap">
-                            {resolvendoBaixaId === c.id ? "..." : `Selecionar · ${formatarMoeda(c.valor)}`}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                    <p className="text-[10px] text-amber-700 mt-2">
-                      Não é nenhuma dessas? Cadastre uma conta nova abaixo.
-                    </p>
-                  </div>
-                )}
-                <label className="block text-xs font-semibold mb-1 text-[var(--color-text-muted)]">Fornecedor</label>
-                <input
-                  value={novaContaFornecedor}
-                  onChange={(e) => setNovaContaFornecedor(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-sm mb-3"
-                />
-                <label className="block text-xs font-semibold mb-1 text-[var(--color-text-muted)]">Categoria</label>
-                <select
-                  value={novaContaCategoriaId}
-                  onChange={(e) => setNovaContaCategoriaId(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-sm mb-4"
-                >
-                  <option value="">Selecione...</option>
-                  {categoriasSaidaComId.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.nome}
-                    </option>
-                  ))}
-                </select>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={fecharCadastroContaPagar}
-                    className="flex-1 px-3 py-2 rounded-lg border border-[var(--color-border)] text-xs font-semibold hover:bg-[var(--hover-bg)]"
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    type="button"
-                    disabled={salvandoContaPagar || resolvendoBaixaId !== null || !novaContaFornecedor.trim() || !novaContaCategoriaId}
-                    onClick={handleConfirmarCadastroContaPagar}
-                    className="flex-1 px-3 py-2 rounded-lg bg-emerald-500 text-white text-xs font-semibold disabled:opacity-50"
-                  >
-                    {salvandoContaPagar ? "Salvando..." : "Cadastrar conta"}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
         </div>
       )}
 
