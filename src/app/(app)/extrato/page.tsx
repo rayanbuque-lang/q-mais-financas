@@ -38,6 +38,11 @@ interface Lancamento {
   contas_pagar_candidatas: string[] | null;
   movimentacao_id: string | null;
   contas_pagar_duplicatas: string[] | null;
+  // Escolhida manualmente durante a revisão (ambíguo, pendente existente ou
+  // recém-cadastrada), mas AINDA NÃO baixada -- só vira baixa/movimentação
+  // real quando o lote inteiro é confirmado. Diferente de conta_pagar_id,
+  // que já significa baixa comitada.
+  conta_pagar_escolhida_id: string | null;
 }
 
 interface Regra {
@@ -103,6 +108,7 @@ interface LancamentoParaBaixa {
   regra_id?: string | null;
   contas_pagar_candidatas?: string[] | null;
   contas_pagar_duplicatas?: string[] | null;
+  conta_pagar_escolhida_id?: string | null;
 }
 
 // "ok" baixou; "mes_fechado" recusou de propósito (competência já fechada);
@@ -539,12 +545,14 @@ function ehBoletoSemResolucao(l: {
   movimentacao_id: string | null;
   contas_pagar_candidatas: string[] | null;
   contas_pagar_duplicatas: string[] | null;
+  conta_pagar_escolhida_id?: string | null;
 }): boolean {
   if (!ehPagamentoDeBoleto(l.descricao_normalizada)) return false;
   if (l.conta_pagar_id || l.movimentacao_id) return false;
   if (l.status === "ignorado") return false;
   if (l.contas_pagar_candidatas?.length) return false;
   if (l.contas_pagar_duplicatas?.length) return false;
+  if (l.conta_pagar_escolhida_id) return false;
   return true;
 }
 
@@ -1152,8 +1160,50 @@ export default function ExtratoPage() {
       // limite e só então virar "confirmada".
       const loteTruncado = lote.length === LIMITE_LANCAMENTOS;
 
-      const baixasAuto = await processarBaixasAutomaticas(lote as LancamentoParaBaixa[]);
-      const paraLancar = (lote as LancamentoParaBaixa[]).filter(
+      // 1) Processa PRIMEIRO toda escolha já feita na revisão (ambíguo
+      // resolvido, pendente existente escolhida, ou conta recém-cadastrada
+      // vinculada) -- decisão humana já tomada, só falta comitar. Precisa
+      // rodar antes da busca automática: se rodasse depois, essas linhas
+      // ainda apareceriam como candidatas pro calcularBaixasAutomaticas
+      // (conta_pagar_id continua null até aqui), arriscando um resultado
+      // diferente do que a Gabi já escolheu na tela.
+      const comEscolha = (lote as LancamentoParaBaixa[]).filter((l) => l.conta_pagar_escolhida_id);
+      let escolhidasBaixadas = 0;
+      let escolhidasMesFechado = 0;
+      let escolhidasFalharam = 0;
+      if (comEscolha.length > 0) {
+        const idsContasEscolhidas = comEscolha.map((l) => l.conta_pagar_escolhida_id as string);
+        const [{ data: contasEscolhidas }, { data: categoriasSaidaTodas }] = await Promise.all([
+          supabase.from("contas_pagar").select("id, fornecedor, valor, categoria_id").in("id", idsContasEscolhidas),
+          supabase.from("categorias_saida").select("id, nome"),
+        ]);
+        const contaPorId = new Map((contasEscolhidas ?? []).map((c) => [c.id as string, c]));
+        const nomeCategoriaPorId = new Map((categoriasSaidaTodas ?? []).map((c) => [c.id as string, c.nome as string]));
+        const cacheMesFechadoEscolhas = new Map<string, boolean>();
+
+        for (const l of comEscolha) {
+          const conta = contaPorId.get(l.conta_pagar_escolhida_id as string);
+          if (!conta) { escolhidasFalharam++; continue; } // conta sumiu (excluída depois da escolha) -- fica pro "sem destino" no resumo
+          const categoriaNome = conta.categoria_id ? nomeCategoriaPorId.get(conta.categoria_id as string) ?? "Contas a pagar" : "Contas a pagar";
+          const resultado = await baixarContaPagar(
+            { id: l.id, data_lancamento: l.data_lancamento },
+            { id: conta.id as string, fornecedor: conta.fornecedor as string, valor: Number(conta.valor), categoria_id: conta.categoria_id as string | null },
+            categoriaNome,
+            "manual",
+            cacheMesFechadoEscolhas
+          );
+          if (resultado === "ok") escolhidasBaixadas++;
+          else if (resultado === "mes_fechado") escolhidasMesFechado++;
+          else escolhidasFalharam++;
+        }
+      }
+
+      // 2) Só então roda a busca automática no restante -- exclui quem já
+      // tinha uma escolha (comitada ou não) pra não ser recalculado de novo.
+      const idsComEscolha = new Set(comEscolha.map((l) => l.id));
+      const loteSemEscolha = (lote as LancamentoParaBaixa[]).filter((l) => !idsComEscolha.has(l.id));
+      const baixasAuto = await processarBaixasAutomaticas(loteSemEscolha);
+      const paraLancar = loteSemEscolha.filter(
         (l) =>
           !baixasAuto.idsBaixados.has(l.id) &&
           !baixasAuto.idsAmbiguos.has(l.id) &&
@@ -1196,7 +1246,12 @@ export default function ExtratoPage() {
               l.status === "nao_classificado" ||
               ehBoletoSemResolucao(l as Lancamento) ||
               ((l as Lancamento).contas_pagar_candidatas?.length ?? 0) > 0 ||
-              ((l as Lancamento).contas_pagar_duplicatas?.length ?? 0) > 0
+              ((l as Lancamento).contas_pagar_duplicatas?.length ?? 0) > 0 ||
+              // Restante já filtra conta_pagar_id null -- se ainda tem uma
+              // escolha marcada aqui, é porque ela FALHOU ao comitar (mês
+              // fechado, conta excluída, erro de escrita) e continua sem
+              // destino de verdade.
+              !!(l as Lancamento).conta_pagar_escolhida_id
           ).length;
 
       if (!loteTruncado && semDestino === 0) {
@@ -1214,6 +1269,9 @@ export default function ExtratoPage() {
       });
 
       const partes: string[] = [];
+      if (escolhidasBaixadas > 0) partes.push(`${escolhidasBaixadas} baixado(s) conforme escolhido na revisão`);
+      if (escolhidasMesFechado > 0) partes.push(`${escolhidasMesFechado} escolhido(s) mas não baixado(s): mês contábil fechado`);
+      if (escolhidasFalharam > 0) partes.push(`${escolhidasFalharam} escolhido(s) com erro ao baixar — revisar manualmente`);
       if (baixasAuto.baixados > 0) partes.push(`${baixasAuto.baixados} baixado(s) automaticamente`);
       if (baixasAuto.ambiguos > 0) partes.push(`${baixasAuto.ambiguos} ambígua(s) (revisar)`);
       if (baixasAuto.duplicatas > 0) partes.push(`${baixasAuto.duplicatas} provável(is) duplicata(s) (revisar)`);
@@ -1768,6 +1826,12 @@ export default function ExtratoPage() {
 
   // ---------- Classificação manual ----------
 
+  // Classifica manualmente na REVISÃO -- só grava a categoria no staging.
+  // NÃO lança em Movimentações aqui: isso fica represado até o clique em
+  // "Confirmar e Lançar" do lote inteiro (confirmarImportacao chama
+  // processarLancamentosDiretos, que já pega qualquer lançamento
+  // status="classificado", venha ele de regra automática ou de classificação
+  // manual como esta -- mesmo caminho, sem escrita nova).
   async function handleClassificarManual(lancamento: Lancamento, categoria: string) {
     if (!categoria.trim()) return;
     // Lançamento ambíguo tem 2+ contas a pagar candidatas ainda pendentes.
@@ -1783,9 +1847,7 @@ export default function ExtratoPage() {
     const { data: { user } } = await supabase.auth.getUser();
     // Condicional a status ainda ser "nao_classificado" -- fecha a corrida na
     // origem: se duas abas tentarem classificar o MESMO lançamento quase ao
-    // mesmo tempo, só a primeira realmente muda uma linha; a segunda vê
-    // linhasAtualizadas vazio e nem chega a chamar lancarMovimentacaoDireta,
-    // evitando duas movimentações reais para o mesmo débito/crédito bancário.
+    // mesmo tempo, só a primeira realmente muda uma linha.
     const { data: linhasAtualizadas, error } = await supabase
       .from("extrato_lancamento")
       .update({
@@ -1810,47 +1872,7 @@ export default function ExtratoPage() {
       return;
     }
 
-    const { entrada, saida, entradaInativas, saidaInativas } = await carregarMapasCategoria();
-    const resultadoLancamento = await lancarMovimentacaoDireta(
-      { id: lancamento.id, conta_id: lancamento.conta_id, data_lancamento: lancamento.data_lancamento, valor: lancamento.valor, descricao_normalizada: lancamento.descricao_normalizada },
-      categoria.trim(),
-      entrada,
-      saida,
-      entradaInativas,
-      saidaInativas
-    );
-    if (resultadoLancamento === "mes_fechado") {
-      setMensagem({
-        tipo: "erro",
-        texto: `Classificado, mas não lançado em Movimentações: ${formatarData(lancamento.data_lancamento)} está num mês contábil já fechado.`,
-      });
-    } else if (resultadoLancamento === "falhou") {
-      setMensagem({
-        tipo: "erro",
-        texto: "Classificado, mas houve um erro ao lançar a movimentação. Tente novamente ou lance manualmente.",
-      });
-    } else if (resultadoLancamento === "categoria_sinal_incompativel") {
-      setMensagem({
-        tipo: "erro",
-        texto: `Classificado, mas não lançado em Movimentações: a categoria "${categoria.trim()}" só existe do lado oposto (este lançamento é de ${calcularTipoMovimentacao(lancamento.valor) === "entrada" ? "entrada" : "saída"}). Escolha uma categoria de ${calcularTipoMovimentacao(lancamento.valor) === "entrada" ? "entrada" : "saída"} ou cadastre-a.`,
-      });
-    } else if (resultadoLancamento === "categoria_inativa") {
-      setMensagem({
-        tipo: "erro",
-        texto: `Classificado, mas não lançado em Movimentações: a categoria "${categoria.trim()}" está desativada. Reative-a ou reclassifique com outra categoria.`,
-      });
-    } else if (resultadoLancamento === "dia_fechado_caixa") {
-      setMensagem({
-        tipo: "erro",
-        texto: `Classificado, mas não lançado: o dia ${formatarData(lancamento.data_lancamento)} já está fechado no Fechamento de Caixa. Reabra o dia para lançar este Pix.`,
-      });
-    } else if (resultadoLancamento === "pix_caixa_nao_sincronizado") {
-      setMensagem({
-        tipo: "erro",
-        texto: "Lançado em Movimentações, mas não foi somado ao Fechamento de Caixa (dia fechado durante o processamento) — ajuste manualmente.",
-      });
-    }
-
+    setMensagem({ tipo: "sucesso", texto: `Classificado como "${categoria.trim()}" — será lançado em Movimentações quando você confirmar a importação.` });
     setCategoriaEmEdicao((prev) => {
       const cp = { ...prev };
       delete cp[lancamento.id];
@@ -1888,6 +1910,11 @@ export default function ExtratoPage() {
     });
   }
 
+  // Escolhe a conta na REVISÃO -- não baixa ainda. Só marca
+  // conta_pagar_escolhida_id no staging; a baixa de verdade (contas_pagar
+  // vira "pago" + movimentação de saída) só acontece quando o lote inteiro é
+  // confirmado (confirmarImportacao processa toda escolha pendente antes de
+  // rodar a busca automática no resto do lote).
   async function handleResolverBaixaAmbigua(contaPagarId: string) {
     if (!podeEscrever) return;
     if (!resolvendoAmbiguo) return;
@@ -1895,34 +1922,25 @@ export default function ExtratoPage() {
     if (!conta) return;
     setResolvendoBaixaId(contaPagarId);
 
-    let categoriaNome = "Contas a pagar";
-    if (conta.categoria_id) {
-      const { data: categoria } = await supabase.from("categorias_saida").select("nome").eq("id", conta.categoria_id).single();
-      if (categoria?.nome) categoriaNome = categoria.nome as string;
-    }
-
-    const resultadoEscrita = await baixarContaPagar(
-      { id: resolvendoAmbiguo.lancamento.id, data_lancamento: resolvendoAmbiguo.lancamento.data_lancamento },
-      { id: conta.id, fornecedor: conta.fornecedor, valor: Number(conta.valor), categoria_id: conta.categoria_id },
-      categoriaNome,
-      "manual"
-    );
-
-    setResolvendoBaixaId(null);
-    if (resultadoEscrita === "mes_fechado") {
-      setMensagem({
-        tipo: "erro",
-        texto: `Não foi possível confirmar a baixa: ${formatarData(resolvendoAmbiguo.lancamento.data_lancamento)} está num mês contábil já fechado.`,
-      });
+    const erroMes = await bloquearSeMesFechado(resolvendoAmbiguo.lancamento.data_lancamento);
+    if (erroMes) {
+      setResolvendoBaixaId(null);
+      setMensagem({ tipo: "erro", texto: erroMes });
       return;
     }
-    if (resultadoEscrita !== "ok") {
-      setMensagem({ tipo: "erro", texto: "Não foi possível confirmar a baixa — a conta pode já ter sido paga, ou este lançamento já foi baixado em outra aba." });
-      await Promise.all([carregarLancamentos(), carregarResumo()]);
+
+    const { error } = await supabase
+      .from("extrato_lancamento")
+      .update({ conta_pagar_escolhida_id: contaPagarId, contas_pagar_candidatas: null })
+      .eq("id", resolvendoAmbiguo.lancamento.id);
+
+    setResolvendoBaixaId(null);
+    if (error) {
+      setMensagem({ tipo: "erro", texto: "Não foi possível selecionar a conta: " + error.message });
       return;
     }
     setResolvendoAmbiguo(null);
-    setMensagem({ tipo: "sucesso", texto: `Baixa confirmada: ${conta.fornecedor}.` });
+    setMensagem({ tipo: "sucesso", texto: `Selecionado: ${conta.fornecedor} — será baixado quando você confirmar a importação.` });
     await Promise.all([carregarLancamentos(), carregarResumo()]);
   }
 
@@ -2011,6 +2029,8 @@ export default function ExtratoPage() {
   // Espelha handleResolverBaixaAmbigua: em vez de criar uma conta nova, dá
   // baixa numa conta pendente que já existia e só não foi casada
   // automaticamente porque o fornecedor não aparece no texto do banco.
+  // Espelha handleResolverBaixaAmbigua: escolhe a pendente existente na
+  // REVISÃO, não baixa ainda -- só marca conta_pagar_escolhida_id.
   async function handleBaixarPendenteExistente(contaPagarId: string) {
     if (!podeEscrever) return;
     if (!cadastrandoContaPagar) return;
@@ -2019,35 +2039,25 @@ export default function ExtratoPage() {
     const lancamento = cadastrandoContaPagar.lancamento;
     setResolvendoBaixaId(contaPagarId);
 
-    let categoriaNome = "Contas a pagar";
-    if (conta.categoria_id) {
-      const { data: categoria } = await supabase.from("categorias_saida").select("nome").eq("id", conta.categoria_id).single();
-      if (categoria?.nome) categoriaNome = categoria.nome as string;
-    }
-
-    const resultadoEscrita = await baixarContaPagar(
-      { id: lancamento.id, data_lancamento: lancamento.data_lancamento },
-      { id: conta.id, fornecedor: conta.fornecedor, valor: Number(conta.valor), categoria_id: conta.categoria_id },
-      categoriaNome,
-      "manual"
-    );
-
-    setResolvendoBaixaId(null);
-    if (resultadoEscrita === "mes_fechado") {
-      setMensagem({
-        tipo: "erro",
-        texto: `Não foi possível confirmar a baixa: ${formatarData(lancamento.data_lancamento)} está num mês contábil já fechado.`,
-      });
+    const erroMes = await bloquearSeMesFechado(lancamento.data_lancamento);
+    if (erroMes) {
+      setResolvendoBaixaId(null);
+      setMensagem({ tipo: "erro", texto: erroMes });
       return;
     }
-    if (resultadoEscrita !== "ok") {
-      setMensagem({ tipo: "erro", texto: "Não foi possível confirmar a baixa — a conta pode já ter sido paga, ou este lançamento já foi baixado em outra aba." });
-      setCadastrandoContaPagar(null);
-      await Promise.all([carregarLancamentos(), carregarResumo()]);
+
+    const { error } = await supabase
+      .from("extrato_lancamento")
+      .update({ conta_pagar_escolhida_id: contaPagarId, contas_pagar_candidatas: null })
+      .eq("id", lancamento.id);
+
+    setResolvendoBaixaId(null);
+    if (error) {
+      setMensagem({ tipo: "erro", texto: "Não foi possível selecionar a conta: " + error.message });
       return;
     }
     setCadastrandoContaPagar(null);
-    setMensagem({ tipo: "sucesso", texto: `Baixa confirmada: ${conta.fornecedor}.` });
+    setMensagem({ tipo: "sucesso", texto: `Selecionado: ${conta.fornecedor} — será baixado quando você confirmar a importação.` });
     await Promise.all([carregarLancamentos(), carregarResumo()]);
   }
 
@@ -2055,6 +2065,11 @@ export default function ExtratoPage() {
     setCadastrandoContaPagar(null);
   }
 
+  // Cadastra a conta a pagar de verdade (é só registrar uma cobrança nova,
+  // não uma escrita arriscada -- nasce pendente, igual cadastrar direto pela
+  // tela de Contas a Pagar), mas NÃO baixa ainda: só marca
+  // conta_pagar_escolhida_id no staging. A baixa (status vira "pago" +
+  // movimentação de saída) só acontece quando o lote inteiro é confirmado.
   async function handleConfirmarCadastroContaPagar() {
     if (!podeEscrever) return;
     if (!cadastrandoContaPagar) return;
@@ -2066,8 +2081,13 @@ export default function ExtratoPage() {
     const lancamento = cadastrandoContaPagar.lancamento;
     const valorAbsoluto = Math.abs(Number(lancamento.valor));
 
-    // Nasce pendente de propósito -- baixarContaPagar reivindica e dá baixa
-    // do mesmo jeito que já faz pra qualquer outra conta, sem escrita nova.
+    const erroMes = await bloquearSeMesFechado(lancamento.data_lancamento);
+    if (erroMes) {
+      setSalvandoContaPagar(false);
+      setMensagem({ tipo: "erro", texto: erroMes });
+      return;
+    }
+
     const { data: contaCriada, error: erroInsert } = await supabase
       .from("contas_pagar")
       .insert({
@@ -2092,57 +2112,22 @@ export default function ExtratoPage() {
       detalhes: `${novaContaFornecedor.trim()} - ${formatarMoeda(valorAbsoluto)} - cadastrada a partir do extrato (${formatarData(lancamento.data_lancamento)})`,
     });
 
-    const categoriaSelecionada = categoriasSaidaComId.find((c) => c.id === novaContaCategoriaId);
-    const categoriaNome = categoriaSelecionada?.nome ?? "Contas a pagar";
+    const { error: erroSelecao } = await supabase
+      .from("extrato_lancamento")
+      .update({ conta_pagar_escolhida_id: contaCriada.id as string })
+      .eq("id", lancamento.id);
 
-    const resultadoEscrita = await baixarContaPagar(
-      { id: lancamento.id, data_lancamento: lancamento.data_lancamento },
-      { id: contaCriada.id as string, fornecedor: novaContaFornecedor.trim(), valor: valorAbsoluto, categoria_id: novaContaCategoriaId },
-      categoriaNome,
-      "manual"
-    );
-
-    if (resultadoEscrita === "mes_fechado") {
-      // Mês fechado é o PRIMEIRO passo de baixarContaPagar: nada além do
-      // insert acima foi escrito, e o lançamento do extrato nem foi tocado --
-      // o botão reaparece igual e cada nova tentativa criaria outra conta.
-      // Desfaz o insert (guardado por status='pendente', ninguém referencia
-      // essa conta ainda) pra não acumular contas órfãs.
-      const { error: erroExclusao } = await supabase
-        .from("contas_pagar")
-        .delete()
-        .eq("id", contaCriada.id as string)
-        .eq("status", "pendente");
-      if (!erroExclusao) {
-        await registrarLog({
-          acao: "excluiu",
-          tabela: "contas_pagar",
-          registroId: contaCriada.id as string,
-          detalhes: `${novaContaFornecedor.trim()} - cadastro desfeito: baixa recusada por mês contábil fechado`,
-        });
-      }
-      setSalvandoContaPagar(false);
-      setMensagem({
-        tipo: "erro",
-        texto: erroExclusao
-          ? `Não foi possível dar baixa: ${formatarData(lancamento.data_lancamento)} está num mês contábil já fechado. A conta cadastrada não pôde ser removida — verifique em Contas a Pagar.`
-          : `Não foi possível dar baixa: ${formatarData(lancamento.data_lancamento)} está num mês contábil já fechado. Nada foi cadastrado.`,
-      });
-      setCadastrandoContaPagar(null);
-      await Promise.all([carregarLancamentos(), carregarResumo()]);
-      return;
-    }
     setSalvandoContaPagar(false);
-    if (resultadoEscrita !== "ok") {
-      // Diferente do mês fechado: aqui o estado é ambíguo (pode ter havido
-      // claim parcial), então a conta criada NÃO é apagada -- resolver na mão.
-      setMensagem({ tipo: "erro", texto: "A conta foi cadastrada, mas houve um erro ao dar baixa — ela ficou pendente. Resolva manualmente pela tela de Contas a Pagar." });
+    if (erroSelecao) {
+      // A conta foi cadastrada de verdade, mas não deu pra vincular ao
+      // lançamento -- não apaga a conta (já é dado real), só avisa.
+      setMensagem({ tipo: "erro", texto: "Conta cadastrada, mas não foi possível vincular a este lançamento — vincule manualmente ou resolva pela tela de Contas a Pagar." });
       setCadastrandoContaPagar(null);
       await Promise.all([carregarLancamentos(), carregarResumo()]);
       return;
     }
     setCadastrandoContaPagar(null);
-    setMensagem({ tipo: "sucesso", texto: `Conta cadastrada e baixada: ${novaContaFornecedor.trim()}.` });
+    setMensagem({ tipo: "sucesso", texto: `Conta cadastrada: ${novaContaFornecedor.trim()} — será baixada quando você confirmar a importação.` });
     await Promise.all([carregarLancamentos(), carregarResumo()]);
   }
 
@@ -2171,7 +2156,7 @@ export default function ExtratoPage() {
       // já ignorado), e não pode continuar apontando pra uma
       // movimentação/conta a pagar que desfazerEfeitosDoLancamento acabou de
       // reverter.
-      .update({ status: "ignorado", contas_pagar_duplicatas: null, contas_pagar_candidatas: null, conta_pagar_id: null, movimentacao_id: null })
+      .update({ status: "ignorado", contas_pagar_duplicatas: null, contas_pagar_candidatas: null, conta_pagar_id: null, movimentacao_id: null, conta_pagar_escolhida_id: null })
       .eq("id", lancamento.id);
     setAcaoLancamentoId(null);
     if (error) {
@@ -2984,6 +2969,15 @@ export default function ExtratoPage() {
                                       // antes de handleIgnorar passar a limpá-los) não pode cair nos
                                       // ramos abaixo como se ainda estivesse pendente de ação.
                                       <span className="text-[10px] text-[var(--color-text-muted)]">—</span>
+                                    ) : l.conta_pagar_escolhida_id ? (
+                                      // Conta já escolhida na revisão (ambíguo resolvido, pendente
+                                      // existente ou conta recém-cadastrada) -- ainda NÃO foi baixada,
+                                      // só fica assim até confirmar a importação. Precisa aparecer
+                                      // clara e distinta de "pendente": já tem destino, só falta
+                                      // confirmar o lote. Pra desfazer a escolha, usar "Ignorar".
+                                      <span className="px-2 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-semibold whitespace-nowrap">
+                                        ✓ Selecionada — baixa ao confirmar
+                                      </span>
                                     ) : podeEscrever && ehBoletoSemResolucao(l) ? (
                                       <div className="flex flex-col gap-1 items-start">
                                         {l.categoria && (
@@ -3085,7 +3079,7 @@ export default function ExtratoPage() {
                                     )}
                                   </td>
                                   <td className="px-3 py-2 whitespace-nowrap text-[10px] text-[var(--color-text-muted)]">
-                                    {l.status === "ignorado" ? "ignorado" : l.regra_id ? "regra" : l.conta_pagar_id ? "baixa" : l.categoria ? "manual" : "—"}
+                                    {l.status === "ignorado" ? "ignorado" : l.regra_id ? "regra" : l.conta_pagar_id ? "baixa" : l.conta_pagar_escolhida_id ? "selecionada" : l.categoria ? "manual" : "—"}
                                   </td>
                                   <td className="px-3 py-2">
                                     {l.status === "nao_classificado" && podeEscrever ? (
@@ -3283,7 +3277,7 @@ export default function ExtratoPage() {
                 <p className="text-xs text-[var(--color-text-muted)] mb-3">
                   Nenhuma conta a pagar correspondente foi encontrada para este lançamento de{" "}
                   {formatarData(cadastrandoContaPagar.lancamento.data_lancamento)} ({formatarMoeda(Math.abs(cadastrandoContaPagar.lancamento.valor))}).
-                  Cadastre o fornecedor e a categoria — a baixa é feita automaticamente.
+                  Cadastre o fornecedor e a categoria — a baixa só acontece quando você confirmar a importação.
                 </p>
                 {cadastrandoContaPagar.pendentesMesmoValor.length > 0 && (
                   <div className="mb-4 p-3 rounded-xl bg-amber-50 border border-amber-200">
@@ -3294,7 +3288,7 @@ export default function ExtratoPage() {
                     </p>
                     <p className="text-[10px] text-amber-700 mb-2">
                       O casamento automático exige valor e nome do fornecedor; se o nome não aparece no texto do banco, a conta certa
-                      não é encontrada sozinha. Dê baixa nela em vez de cadastrar outra.
+                      não é encontrada sozinha. Selecione essa em vez de cadastrar outra.
                     </p>
                     <div className="space-y-2">
                       {cadastrandoContaPagar.pendentesMesmoValor.map((c) => (
@@ -3311,7 +3305,7 @@ export default function ExtratoPage() {
                             <span className="text-[var(--color-text-muted)]">Vencimento: {formatarData(c.data_vencimento)}</span>
                           </span>
                           <span className="font-semibold whitespace-nowrap">
-                            {resolvendoBaixaId === c.id ? "..." : `Dar baixa · ${formatarMoeda(c.valor)}`}
+                            {resolvendoBaixaId === c.id ? "..." : `Selecionar · ${formatarMoeda(c.valor)}`}
                           </span>
                         </button>
                       ))}
@@ -3354,7 +3348,7 @@ export default function ExtratoPage() {
                     onClick={handleConfirmarCadastroContaPagar}
                     className="flex-1 px-3 py-2 rounded-lg bg-emerald-500 text-white text-xs font-semibold disabled:opacity-50"
                   >
-                    {salvandoContaPagar ? "Salvando..." : "Cadastrar e dar baixa"}
+                    {salvandoContaPagar ? "Salvando..." : "Cadastrar conta"}
                   </button>
                 </div>
               </div>
