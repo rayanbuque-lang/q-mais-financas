@@ -83,7 +83,21 @@ export function calcularBaixasAutomaticas(
       continue;
     }
 
-    // Nenhuma pendente bateu -- só então procura entre as já pagas. Primeiro
+    // Nenhuma pendente bateu por NOME -- tenta só por valor entre as
+    // pendentes. Cobre fornecedor curto demais pro nome ser evidência
+    // sozinho (ex.: "ARC", "JJ" -- abaixo de TAMANHO_MINIMO_FORNECEDOR) e
+    // qualquer outro caso em que o nome cadastrado não aparece no texto do
+    // banco por formatação/abreviação diferente. Critério mais fraco que
+    // "nome E valor" -- nunca decide baixa sozinho com ele, mesmo quando só
+    // existe 1 candidato: vai sempre pro balde de ambíguos, exigindo
+    // confirmação humana antes de baixar.
+    const casadasPendentesPorValor = contasPendentes.filter((conta) => conta.valor === candidato.valor);
+    if (casadasPendentesPorValor.length > 0) {
+      ambiguos.push({ indice: candidato.indice, candidatosIds: casadasPendentesPorValor.map((c) => c.id) });
+      continue;
+    }
+
+    // Nenhuma pendente bateu de jeito nenhum -- só então procura entre as já pagas. Primeiro
     // por nome (mesmo critério de sempre); se nada bater por nome, tenta
     // valor + mesma data de pagamento -- cobre contas cujo fornecedor
     // cadastrado não aparece no texto do banco. Só serve pra sinalizar,

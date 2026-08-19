@@ -1171,7 +1171,35 @@ export default function ExtratoPage() {
       }));
       const lancamentosDiretos = await processarLancamentosDiretos(paraLancar, resultadosRegra);
 
-      if (!loteTruncado) {
+      // Depois de baixar/lançar de verdade tudo que dava pra resolver
+      // sozinho, confere se ainda sobrou algo sem destino neste lote: boleto
+      // que não achou conta nenhuma (nem por nome, nem por valor),
+      // lançamento sem nenhuma regra que bateu, ou ambiguidade/duplicata
+      // ainda não resolvida por um clique. Enquanto sobrar isso, a
+      // importação NÃO pode virar "confirmada" -- confirmar só faz sentido
+      // quando tudo tem destino de verdade, senão fica parecendo que
+      // terminou e o lançamento sem resolução é esquecido pra sempre no
+      // staging (foi exatamente essa a reclamação: boletos ficavam
+      // invisíveis, sem sinalização, até depois de já ter confirmado).
+      const { data: restante, error: erroRestante } = await supabase
+        .from("extrato_lancamento")
+        .select("*")
+        .eq("importacao_id", importacaoId)
+        .is("conta_pagar_id", null)
+        .is("movimentacao_id", null)
+        .neq("status", "ignorado")
+        .limit(LIMITE_LANCAMENTOS);
+      const semDestino = erroRestante
+        ? 0
+        : (restante ?? []).filter(
+            (l) =>
+              l.status === "nao_classificado" ||
+              ehBoletoSemResolucao(l as Lancamento) ||
+              ((l as Lancamento).contas_pagar_candidatas?.length ?? 0) > 0 ||
+              ((l as Lancamento).contas_pagar_duplicatas?.length ?? 0) > 0
+          ).length;
+
+      if (!loteTruncado && semDestino === 0) {
         await supabase.from("extrato_importacao").update({ status: "confirmada" }).eq("id", importacaoId);
       }
       await registrarLog({
@@ -1180,6 +1208,8 @@ export default function ExtratoPage() {
         registroId: importacaoId,
         detalhes: loteTruncado
           ? `Importação lançada parcialmente (${lote.length} linhas, teto da consulta) — ainda não confirmada`
+          : semDestino > 0
+          ? `Importação lançada mas NÃO confirmada: ${semDestino} lançamento(s) ainda sem destino`
           : "Importação confirmada e lançada",
       });
 
@@ -1204,6 +1234,17 @@ export default function ExtratoPage() {
         setMensagem({
           tipo: "erro",
           texto: `Lote grande demais pra confirmar de uma vez: processadas as primeiras ${lote.length} linhas${partes.length > 0 ? ` · ${partes.join(" · ")}` : ""} · A importação NÃO foi marcada como confirmada — clique em Confirmar de novo pra processar o restante.`,
+        });
+      } else if (semDestino > 0) {
+        // Mesma lógica do loteTruncado: "erro" de propósito -- nada quebrou,
+        // mas a importação continua pendente até tudo ter destino.
+        setMensagem({
+          tipo: "erro",
+          texto:
+            `Confirmação incompleta: ainda há ${semDestino} lançamento(s) sem destino nesta importação ` +
+            `(classifique, cadastre a conta a pagar, resolva a ambiguidade/provável duplicata, ou ignore cada um na lista)` +
+            (partes.length > 0 ? ` · Nesta rodada: ${partes.join(" · ")}` : "") +
+            " · A importação NÃO foi confirmada — resolva o que falta e clique em Confirmar de novo.",
         });
       } else {
         setMensagem({
@@ -2982,7 +3023,11 @@ export default function ExtratoPage() {
                                         onClick={() => handleAbrirResolucaoAmbigua(l)}
                                         className="px-2 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-semibold whitespace-nowrap hover:bg-amber-100 disabled:opacity-50"
                                       >
-                                        {carregandoCandidatos ? "..." : `Baixa ambígua (${l.contas_pagar_candidatas.length})`}
+                                        {carregandoCandidatos
+                                          ? "..."
+                                          : l.contas_pagar_candidatas.length === 1
+                                          ? "Confirmar conta a pagar"
+                                          : `Baixa ambígua (${l.contas_pagar_candidatas.length})`}
                                       </button>
                                     ) : podeEscrever && l.contas_pagar_duplicatas && l.contas_pagar_duplicatas.length > 0 ? (
                                       // Mesmo motivo do ramo acima: o aviso de provável duplicata
@@ -3141,11 +3186,11 @@ export default function ExtratoPage() {
               }}
             >
               <div className="bg-[var(--color-surface)] rounded-2xl p-5 max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
-                <h3 className="font-semibold text-sm mb-1">Qual conta foi paga?</h3>
+                <h3 className="font-semibold text-sm mb-1">{resolvendoAmbiguo.candidatos.length === 1 ? "Esta é a conta paga?" : "Qual conta foi paga?"}</h3>
                 <p className="text-xs text-[var(--color-text-muted)] mb-3">
-                  {resolvendoAmbiguo.candidatos.length} contas a pagar têm o mesmo fornecedor e o mesmo valor
-                  ({formatarMoeda(Math.abs(resolvendoAmbiguo.lancamento.valor))}) — escolha qual foi paga em{" "}
-                  {formatarData(resolvendoAmbiguo.lancamento.data_lancamento)}.
+                  {resolvendoAmbiguo.candidatos.length === 1
+                    ? `Esta conta a pagar bate com o valor do lançamento (${formatarMoeda(Math.abs(resolvendoAmbiguo.lancamento.valor))}), mas o nome do fornecedor não bate com o texto do banco -- confirme antes de baixar em ${formatarData(resolvendoAmbiguo.lancamento.data_lancamento)}.`
+                    : `${resolvendoAmbiguo.candidatos.length} contas a pagar batem com o mesmo valor (${formatarMoeda(Math.abs(resolvendoAmbiguo.lancamento.valor))}) -- escolha qual foi paga em ${formatarData(resolvendoAmbiguo.lancamento.data_lancamento)}.`}
                 </p>
                 <div className="space-y-2 mb-4">
                   {resolvendoAmbiguo.candidatos.map((c) => (
