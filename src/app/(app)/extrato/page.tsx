@@ -846,6 +846,21 @@ export default function ExtratoPage() {
   const [arquivo, setArquivo] = useState<File | null>(null);
   const [importando, setImportando] = useState(false);
   const [resumoImportacao, setResumoImportacao] = useState<{ lidas: number; novas: number; duplicadas: number; cobertos: number; baixados: number; ambiguos: number; duplicatas: number; mesFechado: number; baixasFalharam: number; movimentacoesLancadas: number; movimentacoesMesFechado: number; movimentacoesFalharam: number; movimentacoesSinalIncompativel: number; movimentacoesCategoriaInativa: number; movimentacoesDiaFechadoCaixa: number; movimentacoesPixCaixaNaoSincronizado: number; avisos: string[] } | null>(null);
+  // Relatório pós-importação do OFX (item pedido depois de um incidente real
+  // de perda silenciosa de lançamentos): mostra o destino de CADA linha do
+  // arquivo e confere que a soma bate. `reconciliaOk` vira uma trava visual
+  // dura -- se der falso, não é pra ninguém confiar nesta importação.
+  const [relatorioOfx, setRelatorioOfx] = useState<{
+    arquivo: string;
+    lidos: number;
+    gravados: number;
+    ignoradosDuplicados: { fitid: string; valor: number; descricao: string }[];
+    ignoradosCobertosPix: { fitid: string; valor: number; descricao: string }[];
+    falhasDeParsing: number;
+    somaCreditos: number;
+    somaDebitos: number;
+    reconciliaOk: boolean;
+  } | null>(null);
   const [mostrarNovaConta, setMostrarNovaConta] = useState(false);
   const [novaContaBanco, setNovaContaBanco] = useState("santander");
   const [novaContaApelido, setNovaContaApelido] = useState("");
@@ -1532,6 +1547,7 @@ export default function ExtratoPage() {
   async function handleImportar() {
     setMensagem(null);
     setResumoImportacao(null);
+    setRelatorioOfx(null);
 
     if (!arquivo) {
       setMensagem({ tipo: "erro", texto: "Selecione um arquivo .ofx." });
@@ -1647,17 +1663,47 @@ export default function ExtratoPage() {
         }));
 
       // O FITID do Santander muda a cada export (é derivado do horário do export,
-      // não da transação), então a deduplicação usa a chave natural
-      // (conta + data + valor + descrição + ocorrência) em vez do FITID.
+      // não da transação, confirmado comparando dois exports reais do mesmo
+      // período), então a deduplicação usa a chave natural (conta + data +
+      // valor + descrição + ocorrência) em vez do FITID.
       const { data: inseridos, error: erroUpsert } = await supabase
         .from("extrato_lancamento")
         .upsert(linhas, { onConflict: "conta_id,data_lancamento,valor,descricao_normalizada,ocorrencia", ignoreDuplicates: true })
-        .select("id, conta_id, descricao_normalizada, valor, status, data_lancamento, conta_pagar_id, movimentacao_id");
+        .select("id, conta_id, descricao_normalizada, valor, status, data_lancamento, conta_pagar_id, movimentacao_id, fitid");
 
       if (erroUpsert) throw new Error(erroUpsert.message);
 
       const novas = inseridos?.length ?? 0;
       const duplicadas = linhas.length - novas;
+
+      // Relatório pós-importação: prova, linha a linha, o destino de CADA
+      // lançamento do arquivo -- gravado, já existente (duplicata pela chave
+      // natural), já coberto pelo relatório Pix, ou descartado no parse por
+      // falta de campo obrigatório. `lidos` é a contagem BRUTA de <STMTTRN>
+      // no arquivo (parsed.totalBlocos), não o total já filtrado -- é o que
+      // permite provar que nada sumiu sem explicação em nenhuma etapa.
+      const fitidsInseridos = new Set((inseridos ?? []).map((i) => i.fitid as string));
+      const ignoradosDuplicados = linhas
+        .filter((l) => !fitidsInseridos.has(l.fitid))
+        .map((l) => ({ fitid: l.fitid, valor: l.valor, descricao: l.descricao }));
+      const ignoradosCobertosPix = parsed.transacoes
+        .filter((_, indice) => indicesCobertosSet.has(indice))
+        .map((t) => ({ fitid: t.fitid, valor: t.valor, descricao: t.descricao }));
+      const somaCreditos = parsed.transacoes.filter((t) => t.valor > 0).reduce((soma, t) => soma + t.valor, 0);
+      const somaDebitos = parsed.transacoes.filter((t) => t.valor < 0).reduce((soma, t) => soma + Math.abs(t.valor), 0);
+      const reconciliaOk =
+        parsed.totalBlocos === novas + ignoradosDuplicados.length + ignoradosCobertosPix.length + parsed.blocosIgnorados;
+      setRelatorioOfx({
+        arquivo: arquivo.name,
+        lidos: parsed.totalBlocos,
+        gravados: novas,
+        ignoradosDuplicados,
+        ignoradosCobertosPix,
+        falhasDeParsing: parsed.blocosIgnorados,
+        somaCreditos,
+        somaDebitos,
+        reconciliaOk,
+      });
 
       const { data: importacaoCriada, error: erroImportacao } = await supabase
         .from("extrato_importacao")
@@ -1708,17 +1754,33 @@ export default function ExtratoPage() {
       }
 
       setResumoImportacao({ lidas: parsed.transacoes.length, novas, duplicadas, cobertos, baixados: selecionadasPrevia, ambiguos: ambiguosPrevia, duplicatas: duplicatasPrevia, mesFechado: 0, baixasFalharam: 0, movimentacoesLancadas: 0, movimentacoesMesFechado: 0, movimentacoesFalharam: 0, movimentacoesSinalIncompativel: 0, movimentacoesCategoriaInativa: 0, movimentacoesDiaFechadoCaixa: 0, movimentacoesPixCaixaNaoSincronizado: 0, avisos });
-      setMensagem({
-        tipo: "sucesso",
-        texto:
-          `${parsed.transacoes.length} lidas · ${novas} novas · ${duplicadas} já existentes` +
-          (cobertos > 0 ? ` · ${cobertos} já cobertas pelo relatório Pix` : "") +
-          (classificadosAuto > 0 ? ` · ${classificadosAuto} classificada(s) automaticamente` : "") +
-          (selecionadasPrevia > 0 ? ` · ${selecionadasPrevia} conta(s) a pagar já selecionada(s) automaticamente` : "") +
-          (ambiguosPrevia > 0 ? ` · ${ambiguosPrevia} ambígua(s) (revisar)` : "") +
-          (duplicatasPrevia > 0 ? ` · ${duplicatasPrevia} provável(is) duplicata(s) (revisar)` : "") +
-          " — revise na aba Lançamentos e confirme quando estiver tudo certo.",
-      });
+
+      if (!reconciliaOk) {
+        // A reconciliação do relatório pós-importação não bateu: algum
+        // lançamento do arquivo tomou um destino que a conta acima não
+        // explica. Substitui a mensagem de sucesso por um alerta -- ninguém
+        // pode achar que esta importação terminou normalmente.
+        setMensagem({
+          tipo: "erro",
+          texto:
+            `🚨 INCONSISTÊNCIA na importação: ${parsed.totalBlocos} lançamento(s) no arquivo, mas só ` +
+            `${novas + ignoradosDuplicados.length + ignoradosCobertosPix.length + parsed.blocosIgnorados} contabilizado(s) ` +
+            `(${novas} gravados + ${ignoradosDuplicados.length} já existentes + ${ignoradosCobertosPix.length} cobertos pelo relatório Pix + ${parsed.blocosIgnorados} com erro de leitura). ` +
+            "Confira o relatório detalhado abaixo antes de continuar — pode haver lançamento perdido.",
+        });
+      } else {
+        setMensagem({
+          tipo: "sucesso",
+          texto:
+            `${parsed.transacoes.length} lidas · ${novas} novas · ${duplicadas} já existentes` +
+            (cobertos > 0 ? ` · ${cobertos} já cobertas pelo relatório Pix` : "") +
+            (classificadosAuto > 0 ? ` · ${classificadosAuto} classificada(s) automaticamente` : "") +
+            (selecionadasPrevia > 0 ? ` · ${selecionadasPrevia} conta(s) a pagar já selecionada(s) automaticamente` : "") +
+            (ambiguosPrevia > 0 ? ` · ${ambiguosPrevia} ambígua(s) (revisar)` : "") +
+            (duplicatasPrevia > 0 ? ` · ${duplicatasPrevia} provável(is) duplicata(s) (revisar)` : "") +
+            " — revise na aba Lançamentos e confirme quando estiver tudo certo.",
+        });
+      }
       setArquivo(null);
       if (inputArquivoRef.current) inputArquivoRef.current.value = "";
       await refrescarTudo();
@@ -2412,6 +2474,62 @@ export default function ExtratoPage() {
                     ))}
                   </ul>
                 )}
+              </div>
+            )}
+
+            {relatorioOfx && (
+              <div
+                className={`mt-4 p-3 rounded-xl border text-xs ${
+                  relatorioOfx.reconciliaOk
+                    ? "bg-slate-50 border-slate-200 text-slate-800"
+                    : "bg-red-50 border-red-300 text-red-900"
+                }`}
+              >
+                <p className="font-semibold">
+                  Relatório de importação — {relatorioOfx.arquivo}
+                </p>
+                <p className="mt-2">
+                  {relatorioOfx.lidos} lançamento(s) lido(s) no arquivo · {relatorioOfx.gravados} gravado(s) ·{" "}
+                  {relatorioOfx.ignoradosDuplicados.length} ignorado(s) por já existirem ·{" "}
+                  {relatorioOfx.ignoradosCobertosPix.length} ignorado(s) por já cobertos pelo relatório Pix
+                  {relatorioOfx.falhasDeParsing > 0 && ` · ${relatorioOfx.falhasDeParsing} com erro de leitura`}
+                </p>
+                <p className="mt-1">
+                  Soma dos créditos do arquivo: {relatorioOfx.somaCreditos.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })} ·
+                  Soma dos débitos do arquivo: {relatorioOfx.somaDebitos.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+                </p>
+
+                {relatorioOfx.ignoradosDuplicados.length > 0 && (
+                  <div className="mt-2">
+                    <p className="font-semibold">Ignorados por já existirem:</p>
+                    <ul className="mt-1 list-disc list-inside">
+                      {relatorioOfx.ignoradosDuplicados.map((i, idx) => (
+                        <li key={idx}>
+                          FITID {i.fitid} — {i.valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })} — {i.descricao}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {relatorioOfx.ignoradosCobertosPix.length > 0 && (
+                  <div className="mt-2">
+                    <p className="font-semibold">Ignorados por já cobertos pelo relatório Pix:</p>
+                    <ul className="mt-1 list-disc list-inside">
+                      {relatorioOfx.ignoradosCobertosPix.map((i, idx) => (
+                        <li key={idx}>
+                          FITID {i.fitid} — {i.valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })} — {i.descricao}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                <p className={`mt-2 font-semibold ${relatorioOfx.reconciliaOk ? "text-emerald-700" : "text-red-800"}`}>
+                  {relatorioOfx.reconciliaOk
+                    ? "✓ Reconciliação OK: todos os lançamentos do arquivo foram contabilizados."
+                    : "🚨 Reconciliação FALHOU: nem todos os lançamentos do arquivo foram contabilizados — não confie neste lote sem investigar."}
+                </p>
               </div>
             )}
           </div>

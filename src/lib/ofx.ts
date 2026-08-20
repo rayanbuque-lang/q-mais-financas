@@ -31,6 +31,13 @@ export interface OfxParseResult {
   conta: OfxContaInfo;
   transacoes: OfxTransacao[];
   avisos: string[];
+  // Contagem bruta pra reconciliação pós-importação: totalBlocos sempre é
+  // igual a transacoes.length + blocosIgnorados (cada <STMTTRN> vira uma
+  // transação OU gera exatamente um aviso e é pulado -- nunca os dois, nunca
+  // nenhum). Usado pra provar que nenhum lançamento do arquivo sumiu sem
+  // explicação em nenhuma etapa depois do parse.
+  totalBlocos: number;
+  blocosIgnorados: number;
 }
 
 export function normalizarDescricao(texto: string): string {
@@ -100,6 +107,7 @@ export function parseOfx(texto: string, nomeArquivo: string): OfxParseResult {
 
   const transacoes: OfxTransacao[] = [];
   const avisos: string[] = [];
+  let blocosIgnorados = 0;
 
   blocos.forEach((bloco, indice) => {
     const fitid = extrairCampo(bloco, "FITID");
@@ -111,12 +119,14 @@ export function parseOfx(texto: string, nomeArquivo: string): OfxParseResult {
 
     if (!fitid || !data || !valorBruto) {
       avisos.push(`Lançamento #${indice + 1} ignorado: faltam campos obrigatórios (FITID, DTPOSTED ou TRNAMT).`);
+      blocosIgnorados++;
       return;
     }
 
     const valor = Number(valorBruto.replace(",", "."));
     if (Number.isNaN(valor)) {
       avisos.push(`Lançamento #${indice + 1} (FITID ${fitid}) ignorado: TRNAMT "${valorBruto}" não é numérico.`);
+      blocosIgnorados++;
       return;
     }
 
@@ -158,5 +168,7 @@ export function parseOfx(texto: string, nomeArquivo: string): OfxParseResult {
     conta: { bankId, acctId, periodoInicio, periodoFim },
     transacoes,
     avisos,
+    totalBlocos: blocos.length,
+    blocosIgnorados,
   };
 }
