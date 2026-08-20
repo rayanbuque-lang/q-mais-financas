@@ -1581,17 +1581,17 @@ export default function ExtratoPage() {
       // A consulta é limitada a uma janela de datas ao redor do próprio arquivo
       // .ofx (em vez de todo o histórico da conta) para não esbarrar no limite
       // padrão de linhas do PostgREST em contas com muito Pix acumulado — o mesmo
-      // tipo de bug corrigido no commit 693a921. `calcularCobertura` só casa
-      // lançamentos existentes com `data <= candidato.data` dentro de uma janela
-      // de JANELA_DIAS dias, então nada fora desse intervalo poderia casar de
-      // qualquer forma. `parseOfx` já garante `transacoes.length > 0` (lança
+      // tipo de bug corrigido no commit 693a921. Isso é só o teto de BUSCA (quantas
+      // linhas trazer pra memória) -- a precisão de quem realmente cobre quem é
+      // decidida dentro de calcularCobertura pelo critério de "próximo dia útil",
+      // não por essa largura. `parseOfx` já garante `transacoes.length > 0` (lança
       // OfxParseError caso contrário), então os reduces abaixo são seguros.
-      const JANELA_DIAS = 5; // deve bater com JANELA_DIAS em lib/cobertura-pix.ts
+      const JANELA_BUSCA_DIAS = 7; // folga confortável acima de qualquer "próximo dia útil" real, mesmo com feriados encadeados
       const datasTransacoes = parsed.transacoes.map((t) => t.data);
       const dataMaxima = datasTransacoes.reduce((max, d) => (d > max ? d : max));
       const dataMinimaArquivo = datasTransacoes.reduce((min, d) => (d < min ? d : min));
       const dataMinima = new Date(
-        new Date(dataMinimaArquivo + "T00:00:00Z").getTime() - JANELA_DIAS * 24 * 60 * 60 * 1000
+        new Date(dataMinimaArquivo + "T00:00:00Z").getTime() - JANELA_BUSCA_DIAS * 24 * 60 * 60 * 1000
       )
         .toISOString()
         .slice(0, 10);
@@ -1607,15 +1607,19 @@ export default function ExtratoPage() {
       // "PIXREL:<data>:<valor>:<ocorrencia>"; o FITID do .ofx do Santander é
       // puramente numérico (conta + timestamp do export + índice), então nunca
       // começa com letra e nunca cai neste filtro.
-      const { data: existentesPix, error: erroExistentes } = await supabase
-        .from("extrato_lancamento")
-        .select("id, data_lancamento, valor, descricao_normalizada")
-        .eq("conta_id", contaImportId)
-        .ilike("descricao_normalizada", "%pix recebido%")
-        .or("fitid.like.E%,fitid.like.PIXREL:%")
-        .gte("data_lancamento", dataMinima)
-        .lte("data_lancamento", dataMaxima);
+      const [{ data: existentesPix, error: erroExistentes }, { data: feriadosRaw, error: erroFeriados }] = await Promise.all([
+        supabase
+          .from("extrato_lancamento")
+          .select("id, data_lancamento, valor, descricao_normalizada")
+          .eq("conta_id", contaImportId)
+          .ilike("descricao_normalizada", "%pix recebido%")
+          .or("fitid.like.E%,fitid.like.PIXREL:%")
+          .gte("data_lancamento", dataMinima)
+          .lte("data_lancamento", dataMaxima),
+        supabase.from("feriados").select("data").gte("data", dataMinima).lte("data", dataMaxima),
+      ]);
       if (erroExistentes) throw new Error(erroExistentes.message);
+      if (erroFeriados) throw new Error(erroFeriados.message);
 
       const candidatosCobertura: CandidatoOfx[] = parsed.transacoes.map((t, indice) => ({
         indice,
@@ -1623,7 +1627,8 @@ export default function ExtratoPage() {
         valor: t.valor,
         descricaoNormalizada: t.descricaoNormalizada,
       }));
-      const cobertura = calcularCobertura(candidatosCobertura, (existentesPix ?? []) as LancamentoExistentePix[]);
+      const feriadosSet = new Set((feriadosRaw ?? []).map((f) => f.data as string));
+      const cobertura = calcularCobertura(candidatosCobertura, (existentesPix ?? []) as LancamentoExistentePix[], feriadosSet);
       const indicesCobertosSet = new Set(cobertura.indicesCobertos);
       const cobertos = cobertura.indicesCobertos.length;
 
