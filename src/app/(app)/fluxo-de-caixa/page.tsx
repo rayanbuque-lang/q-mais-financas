@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { fetchAllRows } from "@/lib/supabase/fetch-all";
 import EmptyState from "@/components/empty-state";
 
 interface Movimentacao {
@@ -48,14 +49,17 @@ export default function FluxoDeCaixaPage() {
     const ultimoDia = new Date(ano, mes + 1, 0).getDate();
     const fim = `${ano}-${String(mes + 1).padStart(2, "0")}-${String(ultimoDia).padStart(2, "0")}`;
 
-    const { data } = await supabase
-      .from("movimentacoes")
-      .select("*")
-      .gte("data", inicio)
-      .lte("data", fim)
-      .order("data", { ascending: true });
+    const data = await fetchAllRows<Movimentacao>((from, to) =>
+      supabase
+        .from("movimentacoes")
+        .select("*")
+        .gte("data", inicio)
+        .lte("data", fim)
+        .order("data", { ascending: true })
+        .range(from, to)
+    );
 
-    if (data) setMovimentacoes(data);
+    setMovimentacoes(data);
   }
 
   useEffect(() => {

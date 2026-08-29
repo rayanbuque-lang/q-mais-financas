@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { fetchAllRows } from "@/lib/supabase/fetch-all";
 
 const mesesNomes = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
 const diasSemana = ["Dom","Seg","Ter","Qua","Qui","Sex","Sáb"];
@@ -75,18 +76,18 @@ export default function PainelCeoPage() {
     const ultimoDiaAnt = new Date(anoAnt, mesAnt, 0).getDate();
     const fimAnt = `${anoAnt}-${String(mesAnt).padStart(2, "0")}-${String(ultimoDiaAnt).padStart(2, "0")}`;
 
-    const [r1, r2, r3, r4, r5, r6, r7] = await Promise.all([
+    const [r1, r2, movsAtualData, r4, r5, r6, movsAntData] = await Promise.all([
       supabase.from("fechamento_caixa").select("*").gte("data", inicio).lte("data", fim).order("data"),
       supabase.from("metas_vendas").select("*").eq("mes", mes).eq("ano", ano).limit(1),
-      supabase.from("movimentacoes").select("*").gte("data", inicio).lte("data", fim),
+      fetchAllRows<MovResumo>((from, to) => supabase.from("movimentacoes").select("*").gte("data", inicio).lte("data", fim).range(from, to)),
       supabase.from("contas_pagar").select("status,data_vencimento,valor").eq("status", "pendente").gte("data_vencimento", inicio).lte("data_vencimento", fim),
       supabase.from("categorias_saida").select("id,nome").eq("ativo", true),
       // Apenas para a comparação "vs mês anterior" nos KPIs — leitura, não altera nada.
       supabase.from("fechamento_caixa").select("valor_total_vendas").eq("fechado", true).gte("data", inicioAnt).lte("data", fimAnt),
-      supabase.from("movimentacoes").select("tipo,valor").gte("data", inicioAnt).lte("data", fimAnt),
+      fetchAllRows<{ tipo: string; valor: number }>((from, to) => supabase.from("movimentacoes").select("tipo,valor").gte("data", inicioAnt).lte("data", fimAnt).range(from, to)),
     ]);
 
-    const erros = [r1.error, r2.error, r3.error, r4.error, r5.error, r6.error, r7.error].filter(Boolean);
+    const erros = [r1.error, r2.error, r4.error, r5.error, r6.error].filter(Boolean);
     if (erros.length > 0) setErro("Não foi possível carregar todos os dados do período. Os números abaixo podem estar incompletos.");
 
     const caixasData = (r1.data || []) as { data: string; valor_total_vendas: number; dinheiro: number; cartao: number; pix_santander: number; pix_inter: number; rom_card: number; app: number; prefeitura: number; fechado: boolean; rascunho: boolean }[];
@@ -120,16 +121,15 @@ export default function PainelCeoPage() {
       setMetaMensal(""); setMetaDiaria("");
     }
 
-    setMovs((r3.data || []) as MovResumo[]);
+    setMovs(movsAtualData);
     const contas = r4.data || [];
     setContasPendentes(contas.length);
     setContasVencidas(contas.filter(c => c.data_vencimento < new Date().toISOString().split("T")[0]).length);
     setCats((r5.data || []) as CatInfo[]);
 
     const totalVendidoAnt = ((r6.data || []) as { valor_total_vendas: number }[]).reduce((a, c) => a + (c.valor_total_vendas || 0), 0);
-    const movsAnt = (r7.data || []) as { tipo: string; valor: number }[];
-    const totalSaidasAnt = movsAnt.filter(m => m.tipo === "saida").reduce((a, m) => a + m.valor, 0);
-    const totalEntradasAnt = movsAnt.filter(m => m.tipo === "entrada").reduce((a, m) => a + m.valor, 0);
+    const totalSaidasAnt = movsAntData.filter(m => m.tipo === "saida").reduce((a, m) => a + m.valor, 0);
+    const totalEntradasAnt = movsAntData.filter(m => m.tipo === "entrada").reduce((a, m) => a + m.valor, 0);
     setResumoAnterior({ totalVendido: totalVendidoAnt, totalSaidas: totalSaidasAnt, resultado: totalEntradasAnt - totalSaidasAnt });
 
     setLoading(false);
