@@ -44,3 +44,6 @@ next-env.d.ts
 
 # dados financeiros reais usados para testar o /extrato — nunca versionar
 /arquivos e extratos/
+
+# supabase local link metadata — não versionar
+/supabase/.temp/

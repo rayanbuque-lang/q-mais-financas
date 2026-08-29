@@ -39,6 +39,7 @@ export default function MovimentacoesPage() {
   const [showSomatoria, setShowSomatoria] = useState(false);
   const [itensTemp, setItensTemp] = useState<number[]>([]);
   const [itemInput, setItemInput] = useState("");
+  const [tinhaItensAoEditar, setTinhaItensAoEditar] = useState(false);
 
   const [detalheId, setDetalheId] = useState<string | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
@@ -111,7 +112,7 @@ export default function MovimentacoesPage() {
     // Buscar todos os itens de uma vez (evita N+1)
     const ids = resultado.map(m => m.id);
     if (ids.length > 0) {
-      const todosItens = await fetchAllByIds<Item>(ids, (chunk, from, to) =>
+      const { data: todosItens, error: errItens } = await fetchAllByIds<Item>(ids, (chunk, from, to) =>
         supabase
           .from("movimentacao_itens")
           .select("id, movimentacao_id, valor")
@@ -119,6 +120,15 @@ export default function MovimentacoesPage() {
           .order("created_at", { ascending: true })
           .range(from, to)
       );
+      if (errItens) {
+        // Busca de itens falhou (rede, RLS, etc.) -- mantém o itensPorMov
+        // anterior em vez de sobrescrever com {}. Um mapa vazio aqui faria
+        // editarMov() achar que nenhuma movimentação tem somatória, e o
+        // handleSubmit apagaria itens reais do banco ao salvar (ver
+        // tinhaItensAoEditar).
+        console.error("Falha ao carregar itens de somatória:", errItens);
+        return;
+      }
       const mapa: Record<string, Item[]> = {};
       todosItens.forEach(item => {
         if (!mapa[item.movimentacao_id]) mapa[item.movimentacao_id] = [];
@@ -186,6 +196,7 @@ export default function MovimentacoesPage() {
     setTipo("saida"); setData(""); setValor(0); setCategoriaId("");
     setObservacao(""); setEditandoId(null);
     setShowSomatoria(false); setItensTemp([]); setItemInput("");
+    setTinhaItensAoEditar(false);
     setComprovanteUrl(null);
   }
 
@@ -211,10 +222,12 @@ export default function MovimentacoesPage() {
       setItensTemp(valores);
       setValor(valores.reduce((a, b) => a + b, 0));
       setShowSomatoria(true);
+      setTinhaItensAoEditar(true);
     } else {
       setItensTemp([]);
       setShowSomatoria(false);
       setValor(m.valor);
+      setTinhaItensAoEditar(false);
     }
 
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -324,7 +337,12 @@ export default function MovimentacoesPage() {
       } else {
         setMensagem(`Salvo! ${itensInseridos?.length || 0} valores individuais registrados.`);
       }
-    } else if (movId && editandoId) {
+    } else if (movId && editandoId && tinhaItensAoEditar) {
+      // Só apaga itens existentes se eles de fato estavam carregados na tela
+      // ao abrir a edição (ou seja, o usuário viu a somatória e a esvaziou de
+      // propósito). Se tinhaItensAoEditar for false, não sabemos se há itens
+      // no banco -- não mexe neles, para não apagar uma somatória real que
+      // simplesmente não carregou na tela (ver carregarMovimentacoes).
       await supabase.from("movimentacao_itens").delete().eq("movimentacao_id", movId);
       setMensagem(editandoId ? "Atualizado!" : "Salvo!");
     } else {

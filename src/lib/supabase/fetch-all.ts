@@ -24,17 +24,28 @@ export async function fetchAllRows<T>(
 /**
  * Para consultas com .in("coluna", ids) sobre uma lista de ids potencialmente
  * grande: divide em lotes (evita URLs enormes) e pagina cada lote.
+ *
+ * Retorna o erro (se houver) em vez de engoli-lo, porque um resultado parcial
+ * tratado como "está tudo" pode ser pior que não atualizar nada — ex.: um mapa
+ * de itens incompleto pode levar quem chama a apagar itens reais ao salvar.
  */
 export async function fetchAllByIds<T>(
   ids: string[],
   buildQuery: (chunk: string[], from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>,
   chunkSize = 200
-): Promise<T[]> {
+): Promise<{ data: T[]; error: unknown | null }> {
   let todas: T[] = [];
   for (let i = 0; i < ids.length; i += chunkSize) {
     const chunk = ids.slice(i, i + chunkSize);
-    const rows = await fetchAllRows<T>((from, to) => buildQuery(chunk, from, to));
-    todas = todas.concat(rows);
+    let from = 0;
+    for (;;) {
+      const { data, error } = await buildQuery(chunk, from, from + PAGE_SIZE - 1);
+      if (error) return { data: todas, error };
+      if (!data) break;
+      todas = todas.concat(data);
+      if (data.length < PAGE_SIZE) break;
+      from += PAGE_SIZE;
+    }
   }
-  return todas;
+  return { data: todas, error: null };
 }
