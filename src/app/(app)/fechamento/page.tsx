@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { fetchAllRows } from "@/lib/supabase/fetch-all";
 import { useRole } from "@/lib/role-context";
 
 interface Fechamento {
@@ -64,14 +65,12 @@ export default function FechamentoPage() {
       const ultimoDia = new Date(ano, m + 1, 0).getDate();
       const fim = `${ano}-${String(m + 1).padStart(2, "0")}-${String(ultimoDia).padStart(2, "0")}`;
 
-      const { data: movs } = await supabase
-        .from("movimentacoes")
-        .select("tipo,valor")
-        .gte("data", inicio)
-        .lte("data", fim);
+      const movs = await fetchAllRows<{ tipo: string; valor: number }>((from, to) =>
+        supabase.from("movimentacoes").select("tipo,valor").gte("data", inicio).lte("data", fim).range(from, to)
+      );
 
-      const entradas = movs?.filter((m) => m.tipo === "entrada").reduce((a, m) => a + m.valor, 0) || 0;
-      const saidas = movs?.filter((m) => m.tipo === "saida").reduce((a, m) => a + m.valor, 0) || 0;
+      const entradas = movs.filter((m) => m.tipo === "entrada").reduce((a, m) => a + m.valor, 0);
+      const saidas = movs.filter((m) => m.tipo === "saida").reduce((a, m) => a + m.valor, 0);
 
       if (existente) {
         resultado.push({
@@ -112,23 +111,24 @@ export default function FechamentoPage() {
     const ultimoDia = new Date(ano, mes, 0).getDate();
     const fim = `${ano}-${String(mes).padStart(2, "0")}-${String(ultimoDia).padStart(2, "0")}`;
 
-    const { data: movs } = await supabase
-      .from("movimentacoes")
-      .select("*")
-      .gte("data", inicio)
-      .lte("data", fim)
-      .order("data", { ascending: true });
+    const movs = await fetchAllRows<{ id: string; tipo: string; data: string; valor: number; categoria_id: string; observacao: string }>((from, to) =>
+      supabase
+        .from("movimentacoes")
+        .select("*")
+        .gte("data", inicio)
+        .lte("data", fim)
+        .order("data", { ascending: true })
+        .range(from, to)
+    );
 
-    if (movs) {
-      const lista = await Promise.all(
-        movs.map(async (mov) => {
-          const tabela = mov.tipo === "entrada" ? "categorias_entrada" : "categorias_saida";
-          const { data: cat } = await supabase.from(tabela).select("nome").eq("id", mov.categoria_id).single();
-          return { ...mov, categoria_nome: cat?.nome || "Sem categoria" };
-        })
-      );
-      setDetalhes(lista);
-    }
+    const lista = await Promise.all(
+      movs.map(async (mov) => {
+        const tabela = mov.tipo === "entrada" ? "categorias_entrada" : "categorias_saida";
+        const { data: cat } = await supabase.from(tabela).select("nome").eq("id", mov.categoria_id).single();
+        return { ...mov, categoria_nome: cat?.nome || "Sem categoria" };
+      })
+    );
+    setDetalhes(lista);
     setDetalhesLoading(false);
   }
 

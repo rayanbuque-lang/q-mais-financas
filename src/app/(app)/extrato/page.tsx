@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { fetchAllRowsSafe } from "@/lib/supabase/fetch-all";
 import { parseOfx, decodificarOfx, OfxParseError } from "@/lib/ofx";
 import { parseRelatorioPix, RelatorioPixParseError } from "@/lib/relatorio-pix";
 import { calcularCobertura, ehPixRecebido, type CandidatoOfx, type LancamentoExistentePix } from "@/lib/cobertura-pix";
@@ -60,10 +61,6 @@ interface Regra {
 }
 
 type Mensagem = { tipo: "sucesso" | "erro"; texto: string } | null;
-
-// Teto de linhas por consulta a extrato_lancamento — supera o limite padrão do
-// PostgREST (ver commit 693a921, mesmo problema em contas_pagar).
-const LIMITE_LANCAMENTOS = 5000;
 
 function formatarMoeda(v: number) {
   return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -272,29 +269,33 @@ async function processarBaixasAutomaticas(
 
   // Consultas separadas (não uma só com .in) -- contas pendentes e pagas têm
   // volumes muito diferentes (pagas crescem ~400/mês medidos em produção,
-  // pendentes ficam baixas sempre), uma única consulta com limite
-  // compartilhado arriscava pendentes recentes ficarem de fora quando pagas
-  // passassem do teto sozinhas. Limite por precaução em cada uma -- mesma
-  // classe de problema já corrigida antes neste projeto (commit 693a921).
-  // A busca de pagas é recortada aos últimos ~12 meses (conta paga muito
-  // antiga não é candidata realista de duplicata), usa LIMITE_LANCAMENTOS
-  // (5000) porque só o recorte de 12 meses já passa de 1.100 linhas hoje, e
-  // vem ORDENADA por data_pagamento desc: se algum dia o teto for atingido,
-  // quem cai fora são as pagas mais antigas (as menos prováveis de serem
-  // duplicata) em vez de linhas arbitrárias escolhidas pelo banco.
+  // pendentes ficam baixas sempre). A busca de pagas é recortada aos últimos
+  // ~12 meses (conta paga muito antiga não é candidata realista de
+  // duplicata). Ambas paginam com fetchAllRowsSafe -- um .limit() fixo (mesmo
+  // "generoso") volta a ter esse mesmo tipo de corte silencioso assim que o
+  // volume real passar do que foi assumido (foi o que aconteceu com o antigo
+  // LIMITE_LANCAMENTOS=5000 deste arquivo, que na prática já vinha sendo
+  // cortado bem antes disso pelo teto real do projeto).
   const dataMinimaPagas = new Date();
   dataMinimaPagas.setFullYear(dataMinimaPagas.getFullYear() - 1);
   const dataMinimaPagasIso = dataMinimaPagas.toISOString().slice(0, 10);
 
-  const [{ data: pendentesRaw, error: erroPendentes }, { data: pagasRaw, error: erroPagas }] = await Promise.all([
-    supabase.from("contas_pagar").select("id, fornecedor, valor, categoria_id").eq("status", "pendente").limit(2000),
-    supabase
-      .from("contas_pagar")
-      .select("id, fornecedor, valor, categoria_id, data_pagamento")
-      .eq("status", "pago")
-      .gte("data_pagamento", dataMinimaPagasIso)
-      .order("data_pagamento", { ascending: false })
-      .limit(LIMITE_LANCAMENTOS),
+  const [
+    { data: pendentes, error: erroPendentes },
+    { data: pagas, error: erroPagas },
+  ] = await Promise.all([
+    fetchAllRowsSafe<{ id: string; fornecedor: string; valor: number; categoria_id: string | null }>((from, to) =>
+      supabase.from("contas_pagar").select("id, fornecedor, valor, categoria_id").eq("status", "pendente").range(from, to)
+    ),
+    fetchAllRowsSafe<{ id: string; fornecedor: string; valor: number; categoria_id: string | null; data_pagamento: string }>((from, to) =>
+      supabase
+        .from("contas_pagar")
+        .select("id, fornecedor, valor, categoria_id, data_pagamento")
+        .eq("status", "pago")
+        .gte("data_pagamento", dataMinimaPagasIso)
+        .order("data_pagamento", { ascending: false })
+        .range(from, to)
+    ),
   ]);
   // Erro de consulta não pode virar "zero contas": isso limparia sinalizações
   // existentes e liberaria lançamentos que na verdade não foram checados
@@ -304,9 +305,6 @@ async function processarBaixasAutomaticas(
   if (erroPendentes || erroPagas) {
     return { baixados: 0, ambiguos: 0, duplicatas: 0, mesFechado: 0, falharam: 0, idsBaixados, idsAmbiguos, idsDuplicatas };
   }
-
-  const pendentes = pendentesRaw ?? [];
-  const pagas = pagasRaw ?? [];
   if (pendentes.length === 0 && pagas.length === 0) {
     await Promise.all([limparCandidatasObsoletas(saidas, new Set<number>()), limparDuplicatasObsoletas(saidas, new Set<number>())]);
     return { baixados: 0, ambiguos: 0, duplicatas: 0, mesFechado: 0, falharam: 0, idsBaixados, idsAmbiguos, idsDuplicatas };
@@ -437,15 +435,22 @@ async function sinalizarDuplicatasEAmbiguos(lancamentosNovos: LancamentoParaBaix
   dataMinimaPagas.setFullYear(dataMinimaPagas.getFullYear() - 1);
   const dataMinimaPagasIso = dataMinimaPagas.toISOString().slice(0, 10);
 
-  const [{ data: pendentesRaw, error: erroPendentes }, { data: pagasRaw, error: erroPagas }] = await Promise.all([
-    supabase.from("contas_pagar").select("id, fornecedor, valor").eq("status", "pendente").limit(2000),
-    supabase
-      .from("contas_pagar")
-      .select("id, fornecedor, valor, data_pagamento")
-      .eq("status", "pago")
-      .gte("data_pagamento", dataMinimaPagasIso)
-      .order("data_pagamento", { ascending: false })
-      .limit(LIMITE_LANCAMENTOS),
+  const [
+    { data: pendentesRaw, error: erroPendentes },
+    { data: pagasRaw, error: erroPagas },
+  ] = await Promise.all([
+    fetchAllRowsSafe<{ id: string; fornecedor: string; valor: number }>((from, to) =>
+      supabase.from("contas_pagar").select("id, fornecedor, valor").eq("status", "pendente").range(from, to)
+    ),
+    fetchAllRowsSafe<{ id: string; fornecedor: string; valor: number; data_pagamento: string }>((from, to) =>
+      supabase
+        .from("contas_pagar")
+        .select("id, fornecedor, valor, data_pagamento")
+        .eq("status", "pago")
+        .gte("data_pagamento", dataMinimaPagasIso)
+        .order("data_pagamento", { ascending: false })
+        .range(from, to)
+    ),
   ]);
   if (erroPendentes || erroPagas) return { selecionadas: 0, ambiguos: 0, duplicatas: 0 };
 
@@ -875,6 +880,7 @@ export default function ExtratoPage() {
 
   // Lançamentos
   const [lancamentos, setLancamentos] = useState<Lancamento[]>([]);
+  const [lancamentosTruncados, setLancamentosTruncados] = useState(false);
   const [carregandoLancamentos, setCarregandoLancamentos] = useState(false);
   const [filtroContaId, setFiltroContaId] = useState("");
   const [filtroStatus, setFiltroStatus] = useState<"todos" | "nao_classificado" | "classificado" | "ignorado">("todos");
@@ -947,26 +953,27 @@ export default function ExtratoPage() {
 
   async function carregarLancamentos() {
     setCarregandoLancamentos(true);
-    let query = supabase
-      .from("extrato_lancamento")
-      .select("*")
-      .order("data_lancamento", { ascending: false })
-      .order("id", { ascending: false })
-      .limit(LIMITE_LANCAMENTOS);
-    if (filtroContaId) query = query.eq("conta_id", filtroContaId);
-    if (filtroStatus !== "todos") query = query.eq("status", filtroStatus);
-    if (filtroImportacaoId) query = query.eq("importacao_id", filtroImportacaoId);
-    // Ignorado = "isso não é uma movimentação real", não deve poluir a lista de
-    // trabalho. Some por padrão; só reaparece se o usuário filtrar status=ignorado
-    // de propósito pra conferir o que já foi descartado.
-    if (ocultarIgnorados && filtroStatus !== "ignorado") query = query.neq("status", "ignorado");
-    // "Confirmar dia" marca revisado=true; ocultar por padrão pra lista de trabalho
-    // ir esvaziando conforme o usuário revisa (o dia inteiro some da tabela e do
-    // resumo). Continua tudo lá no banco, só não aparece nessa visão por padrão.
-    if (ocultarRevisados) query = query.eq("revisado", false);
-    const { data, error } = await query;
-    if (!error && data) setLancamentos(data as Lancamento[]);
-    else if (error) setMensagem({ tipo: "erro", texto: "Erro ao carregar os lançamentos: " + error.message });
+    const { data, error, truncado } = await fetchAllRowsSafe<Lancamento>((from, to) => {
+      let query = supabase
+        .from("extrato_lancamento")
+        .select("*")
+        .order("data_lancamento", { ascending: false })
+        .order("id", { ascending: false });
+      if (filtroContaId) query = query.eq("conta_id", filtroContaId);
+      if (filtroStatus !== "todos") query = query.eq("status", filtroStatus);
+      if (filtroImportacaoId) query = query.eq("importacao_id", filtroImportacaoId);
+      // Ignorado = "isso não é uma movimentação real", não deve poluir a lista de
+      // trabalho. Some por padrão; só reaparece se o usuário filtrar status=ignorado
+      // de propósito pra conferir o que já foi descartado.
+      if (ocultarIgnorados && filtroStatus !== "ignorado") query = query.neq("status", "ignorado");
+      // "Confirmar dia" marca revisado=true; ocultar por padrão pra lista de trabalho
+      // ir esvaziando conforme o usuário revisa (o dia inteiro some da tabela e do
+      // resumo). Continua tudo lá no banco, só não aparece nessa visão por padrão.
+      if (ocultarRevisados) query = query.eq("revisado", false);
+      return query.range(from, to);
+    });
+    if (!error) { setLancamentos(data); setLancamentosTruncados(truncado); }
+    else setMensagem({ tipo: "erro", texto: "Erro ao carregar os lançamentos: " + (error instanceof Error ? error.message : String(error)) });
     setCarregandoLancamentos(false);
   }
 
@@ -1087,18 +1094,17 @@ export default function ExtratoPage() {
     setMensagem(null);
     setReprocessando(true);
     try {
-      let query = supabase
-        .from("extrato_lancamento")
-        .select("id, conta_id, descricao_normalizada, valor, status, data_lancamento, conta_pagar_id, movimentacao_id, contas_pagar_candidatas, contas_pagar_duplicatas")
-        .eq("status", "nao_classificado")
-        // Mesmo teto de carregarLancamentos — sem .limit() o PostgREST corta na
-        // sua página padrão e o reprocessamento silenciosamente ignora o resto.
-        .limit(LIMITE_LANCAMENTOS);
-      if (filtroContaId) query = query.eq("conta_id", filtroContaId);
-      const { data: candidatos, error } = await query;
-      if (error) throw new Error(error.message);
+      const { data: candidatos, error } = await fetchAllRowsSafe<LancamentoParaBaixa>((from, to) => {
+        let query = supabase
+          .from("extrato_lancamento")
+          .select("id, conta_id, descricao_normalizada, valor, status, data_lancamento, conta_pagar_id, movimentacao_id, contas_pagar_candidatas, contas_pagar_duplicatas")
+          .eq("status", "nao_classificado");
+        if (filtroContaId) query = query.eq("conta_id", filtroContaId);
+        return query.range(from, to);
+      });
+      if (error) throw new Error(error instanceof Error ? error.message : String(error));
 
-      const candidatosTipados = (candidatos ?? []) as LancamentoParaBaixa[];
+      const candidatosTipados = candidatos;
       const baixasAuto = await processarBaixasAutomaticas(candidatosTipados);
       const paraClassificar = candidatosTipados.filter(
         (l) => !baixasAuto.idsBaixados.has(l.id) && !baixasAuto.idsAmbiguos.has(l.id) && !baixasAuto.idsDuplicatas.has(l.id)
@@ -1149,35 +1155,34 @@ export default function ExtratoPage() {
     setConfirmandoImportacaoId(importacaoId);
     setMensagem(null);
     try {
-      const { data: lote, error } = await supabase
-        .from("extrato_lancamento")
-        .select("*")
-        .eq("importacao_id", importacaoId)
-        .is("conta_pagar_id", null)
-        .is("movimentacao_id", null)
-        .neq("status", "ignorado")
-        // Sem .limit() explícito o PostgREST corta na sua página padrão (1000) e
-        // o resto do lote sumiria em silêncio — aqui isso significaria marcar a
-        // importação como "confirmada" com dinheiro nunca lançado. Mesmo teto de
-        // carregarLancamentos/handleReprocessar (ver commit 693a921).
-        .limit(LIMITE_LANCAMENTOS);
+      const { data: lote, error, truncado: loteTruncado } = await fetchAllRowsSafe<LancamentoParaBaixa & Lancamento>((from, to) =>
+        supabase
+          .from("extrato_lancamento")
+          .select("*")
+          .eq("importacao_id", importacaoId)
+          .is("conta_pagar_id", null)
+          .is("movimentacao_id", null)
+          .neq("status", "ignorado")
+          .range(from, to)
+      );
       if (error) {
-        setMensagem({ tipo: "erro", texto: "Erro ao carregar o lote pra confirmar: " + error.message });
+        setMensagem({ tipo: "erro", texto: "Erro ao carregar o lote pra confirmar: " + (error instanceof Error ? error.message : String(error)) });
         return;
       }
-      if (!lote || lote.length === 0) {
+      if (lote.length === 0) {
         setMensagem({ tipo: "sucesso", texto: "Nada pendente pra confirmar neste lote." });
         await supabase.from("extrato_importacao").update({ status: "confirmada" }).eq("id", importacaoId);
         await refrescarTudo();
         return;
       }
 
-      // Bateu exatamente no teto = provavelmente há mais linhas além dele. Nesse
-      // caso processamos normalmente o que veio, mas NÃO marcamos "confirmada":
+      // loteTruncado só vem true se o lote for absurdamente grande (mais de
+      // 500 mil linhas em uma única importação -- trava de segurança de
+      // fetchAllRowsSafe, não um teto real esperado aqui). Nesse caso
+      // processamos normalmente o que veio, mas NÃO marcamos "confirmada":
       // como a função é idempotente, cada nova execução vai consumindo o que
-      // sobrou (o já lançado deixa de ser elegível) até o lote caber embaixo do
-      // limite e só então virar "confirmada".
-      const loteTruncado = lote.length === LIMITE_LANCAMENTOS;
+      // sobrou (o já lançado deixa de ser elegível) até o lote inteiro ser
+      // processado e só então virar "confirmada".
 
       // 1) Processa PRIMEIRO toda escolha já feita na revisão (ambíguo
       // resolvido, pendente existente escolhida, ou conta recém-cadastrada
@@ -1250,17 +1255,19 @@ export default function ExtratoPage() {
       // terminou e o lançamento sem resolução é esquecido pra sempre no
       // staging (foi exatamente essa a reclamação: boletos ficavam
       // invisíveis, sem sinalização, até depois de já ter confirmado).
-      const { data: restante, error: erroRestante } = await supabase
-        .from("extrato_lancamento")
-        .select("*")
-        .eq("importacao_id", importacaoId)
-        .is("conta_pagar_id", null)
-        .is("movimentacao_id", null)
-        .neq("status", "ignorado")
-        .limit(LIMITE_LANCAMENTOS);
+      const { data: restante, error: erroRestante } = await fetchAllRowsSafe<Lancamento>((from, to) =>
+        supabase
+          .from("extrato_lancamento")
+          .select("*")
+          .eq("importacao_id", importacaoId)
+          .is("conta_pagar_id", null)
+          .is("movimentacao_id", null)
+          .neq("status", "ignorado")
+          .range(from, to)
+      );
       const semDestino = erroRestante
         ? 0
-        : (restante ?? []).filter(
+        : restante.filter(
             (l) =>
               l.status === "nao_classificado" ||
               ehBoletoSemResolucao(l as Lancamento) ||
@@ -1459,25 +1466,26 @@ export default function ExtratoPage() {
     setDesfazendoImportacaoId(importacaoId);
     setMensagem(null);
     try {
-      const { data: linhas, error } = await supabase
-        .from("extrato_lancamento")
-        .select("*")
-        .eq("importacao_id", importacaoId)
-        .limit(LIMITE_LANCAMENTOS);
+      const { data: linhas, error, truncado: loteTruncado } = await fetchAllRowsSafe<LancamentoParaBaixa & Lancamento>((from, to) =>
+        supabase
+          .from("extrato_lancamento")
+          .select("*")
+          .eq("importacao_id", importacaoId)
+          .range(from, to)
+      );
       if (error) {
-        setMensagem({ tipo: "erro", texto: "Erro ao carregar o lote pra desfazer: " + error.message });
+        setMensagem({ tipo: "erro", texto: "Erro ao carregar o lote pra desfazer: " + (error instanceof Error ? error.message : String(error)) });
         return;
       }
 
-      // Mesmo cuidado de confirmarImportacao: sem isso, um lote maior que
-      // LIMITE_LANCAMENTOS marcaria "descartada" tendo revertido só uma parte,
-      // em silêncio.
-      const loteTruncado = (linhas ?? []).length === LIMITE_LANCAMENTOS;
-
+      // Mesmo cuidado de confirmarImportacao: loteTruncado só vem true se a
+      // importação tiver mais de 500 mil linhas (trava de segurança de
+      // fetchAllRowsSafe) -- sem isso, marcaria "descartada" tendo revertido
+      // só uma parte, em silêncio.
       let revertidos = 0;
       let pulados = 0;
 
-      for (const l of (linhas ?? []) as LancamentoParaBaixa[]) {
+      for (const l of linhas) {
         const resultado = await desfazerEfeitosDoLancamento(l);
         if (resultado === "pulado") { pulados++; continue; }
         await supabase.from("extrato_lancamento").delete().eq("id", l.id);
@@ -2845,9 +2853,9 @@ export default function ExtratoPage() {
             <EmptyState variant="search" title="Nenhum lançamento" description="Importe um extrato .ofx na aba Importar para começar." compact />
           ) : (
             <div>
-              {lancamentos.length >= LIMITE_LANCAMENTOS && (
+              {lancamentosTruncados && (
                 <p className="mb-2 text-[10px] text-[var(--color-text-muted)]">
-                  Mostrando apenas os últimos {LIMITE_LANCAMENTOS} lançamentos — o dia mais antigo pode estar incompleto.
+                  Volume muito grande pra carregar de uma vez — o dia mais antigo pode estar incompleto. Use os filtros pra reduzir o período.
                 </p>
               )}
               <div className="space-y-2">

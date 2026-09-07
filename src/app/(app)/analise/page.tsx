@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { fetchAllRows } from "@/lib/supabase/fetch-all";
 
 interface Movimentacao {
   id: string;
@@ -48,17 +49,17 @@ export default function AnalisePage() {
     const anoAnteriorFim = `${ano - 1}-${String(mes + 1).padStart(2, "0")}-${String(new Date(ano - 1, mes + 1, 0).getDate()).padStart(2, "0")}`;
 
     // Buscar dados
-    const { data: movAtual } = await supabase
-      .from("movimentacoes").select("*")
-      .gte("data", mesAtualInicio).lte("data", mesAtualFim);
+    const movAtual = await fetchAllRows<Movimentacao>((from, to) =>
+      supabase.from("movimentacoes").select("*").gte("data", mesAtualInicio).lte("data", mesAtualFim).range(from, to)
+    );
 
-    const { data: movAnterior } = await supabase
-      .from("movimentacoes").select("*")
-      .gte("data", mesAntInicio).lte("data", mesAntFim);
+    const movAnterior = await fetchAllRows<Movimentacao>((from, to) =>
+      supabase.from("movimentacoes").select("*").gte("data", mesAntInicio).lte("data", mesAntFim).range(from, to)
+    );
 
-    const { data: movAnoAnterior } = await supabase
-      .from("movimentacoes").select("*")
-      .gte("data", anoAnteriorInicio).lte("data", anoAnteriorFim);
+    const movAnoAnterior = await fetchAllRows<Movimentacao>((from, to) =>
+      supabase.from("movimentacoes").select("*").gte("data", anoAnteriorInicio).lte("data", anoAnteriorFim).range(from, to)
+    );
 
     const { data: catsEntrada } = await supabase
       .from("categorias_entrada").select("*").eq("ativo", true);

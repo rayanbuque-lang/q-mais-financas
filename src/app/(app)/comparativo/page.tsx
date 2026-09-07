@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { fetchAllRows } from "@/lib/supabase/fetch-all";
 
 interface MesDado {
   mes: number;
@@ -17,6 +18,16 @@ const MESES = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov"
 
 function fmt(v: number) {
   return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
+
+function fetchTodasMovimentacoes(
+  supabase: ReturnType<typeof createClient>,
+  inicio: string,
+  fim: string
+) {
+  return fetchAllRows<{ tipo: string; valor: number; data: string }>((from, to) =>
+    supabase.from("movimentacoes").select("tipo,valor,data").gte("data", inicio).lte("data", fim).range(from, to)
+  );
 }
 
 export default function ComparativoPage() {
@@ -48,11 +59,7 @@ export default function ComparativoPage() {
     const fimDia = new Date(ultimo.ano, ultimo.mes + 1, 0).getDate();
     const fim = `${ultimo.ano}-${String(ultimo.mes + 1).padStart(2, "0")}-${String(fimDia).padStart(2, "0")}`;
 
-    const { data: movs } = await supabase
-      .from("movimentacoes")
-      .select("tipo,valor,data")
-      .gte("data", inicio)
-      .lte("data", fim);
+    const movs = await fetchTodasMovimentacoes(supabase, inicio, fim);
 
     const lista = mesesList.map(({ mes, ano }) => {
       const inicioM = `${ano}-${String(mes + 1).padStart(2, "0")}-01`;

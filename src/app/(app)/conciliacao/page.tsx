@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { fetchAllRows } from "@/lib/supabase/fetch-all";
 import EmptyState from "@/components/empty-state";
 import { useRole } from "@/lib/role-context";
 
@@ -83,10 +84,11 @@ export default function ConciliacaoPage() {
     const ultimoDia = new Date(y, m, 0).getDate();
     const fim = `${y}-${String(m).padStart(2, "0")}-${String(ultimoDia).padStart(2, "0")}`;
 
-    const { data: movs } = await supabase
-      .from("movimentacoes").select("*").gte("data", inicio).lte("data", fim).order("data");
+    const movs = await fetchAllRows<{ id: string; data: string; tipo: string; valor: number; categoria_id: string; observacao: string }>((from, to) =>
+      supabase.from("movimentacoes").select("*").gte("data", inicio).lte("data", fim).order("data").range(from, to)
+    );
 
-    if (!movs || movs.length === 0) return { entradas: 0, saidas: 0, saldo: 0, quantidade: 0, detalhes: [] };
+    if (movs.length === 0) return { entradas: 0, saidas: 0, saldo: 0, quantidade: 0, detalhes: [] };
 
     // Buscar IDs de categorias que contenham o nome do banco
     const [r1, r2] = await Promise.all([

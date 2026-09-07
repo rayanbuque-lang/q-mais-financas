@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
+import { fetchAllRows } from "@/lib/supabase/fetch-all";
 
 interface Movimentacao {
   tipo: string; valor: number; data: string; categoria_id: string;
@@ -58,9 +59,9 @@ export default function DrePage() {
     const { inicio: inicioAnt, fim: fimAnt } = getPeriodo(mesAnt, anoAnt);
 
     const mesSup = mes + 1;
-    const [r1, r2, r4, r5, r6, r7] = await Promise.all([
-      supabase.from("movimentacoes").select("*").gte("data", inicio).lte("data", fim),
-      supabase.from("movimentacoes").select("*").gte("data", inicioAnt).lte("data", fimAnt),
+    const [movAtualData, movAnteriorData, r4, r5, r6, r7] = await Promise.all([
+      fetchAllRows<Movimentacao>((from, to) => supabase.from("movimentacoes").select("*").gte("data", inicio).lte("data", fim).range(from, to)),
+      fetchAllRows<Movimentacao>((from, to) => supabase.from("movimentacoes").select("*").gte("data", inicioAnt).lte("data", fimAnt).range(from, to)),
       supabase.from("categorias_entrada").select("id,nome").eq("ativo", true),
       supabase.from("categorias_saida").select("id,nome").eq("ativo", true),
       supabase.from("metas").select("categoria_id,valor_meta").eq("tipo", "despesa_categoria").eq("mes", mesSup).eq("ano", ano),
@@ -70,11 +71,11 @@ export default function DrePage() {
       supabase.from("fechamento_caixa").select("valor_total_vendas,dinheiro").eq("fechado", true).gte("data", inicio).lte("data", fim),
     ]);
 
-    const erros = [r1.error, r2.error, r4.error, r5.error, r6.error, r7.error].filter(Boolean);
+    const erros = [r4.error, r5.error, r6.error, r7.error].filter(Boolean);
     if (erros.length > 0) setErro("Não foi possível carregar todos os dados do período. Os números abaixo podem estar incompletos.");
 
-    if (r1.data) setMovAtual(r1.data);
-    if (r2.data) setMovAnterior(r2.data);
+    setMovAtual(movAtualData);
+    setMovAnterior(movAnteriorData);
     if (r6.data) setMetasCat(r6.data as Meta[]);
     if (r7.data) setFechamentosMes(r7.data as FechamentoResumo[]);
     const cats: Categoria[] = [...(r4.data || []), ...(r5.data || [])];
@@ -88,9 +89,10 @@ export default function DrePage() {
   async function carregarAnoPassado() {
     setLoadingComparativo(true);
     const { inicio: inicioAP, fim: fimAP } = getPeriodo(mes, ano - 1);
-    const { data, error } = await supabase.from("movimentacoes").select("*").gte("data", inicioAP).lte("data", fimAP);
-    if (error) setErro("Não foi possível carregar os dados do mesmo mês do ano anterior.");
-    if (data) setMovMesmoAnoPassado(data);
+    const data = await fetchAllRows<Movimentacao>((from, to) =>
+      supabase.from("movimentacoes").select("*").gte("data", inicioAP).lte("data", fimAP).range(from, to)
+    );
+    setMovMesmoAnoPassado(data);
     setLoadingComparativo(false);
   }
 

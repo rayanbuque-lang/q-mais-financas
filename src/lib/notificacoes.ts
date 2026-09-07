@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/client";
+import { fetchAllRows } from "@/lib/supabase/fetch-all";
 
 interface NotificacaoNova {
   tipo: string;
@@ -145,13 +146,11 @@ export async function gerarNotificacoes() {
 
   // 6. Fluxo de caixa projetado negativo (próximos 7 dias)
   const inicio = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}-01`;
-  const { data: movsMes } = await supabase
-    .from("movimentacoes")
-    .select("tipo, valor")
-    .gte("data", inicio)
-    .lte("data", hoje);
+  const movsMes = await fetchAllRows<{ tipo: string; valor: number }>((from, to) =>
+    supabase.from("movimentacoes").select("tipo, valor").gte("data", inicio).lte("data", hoje).range(from, to)
+  );
 
-  if (movsMes && movsMes.length > 0) {
+  if (movsMes.length > 0) {
     const entradas = movsMes.filter((m: { tipo: string }) => m.tipo === "entrada").reduce((a: number, m: { valor: number }) => a + m.valor, 0);
     const saidas = movsMes.filter((m: { tipo: string }) => m.tipo === "saida").reduce((a: number, m: { valor: number }) => a + m.valor, 0);
     const saldo = entradas - saidas;

@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { fetchAllRows } from "@/lib/supabase/fetch-all";
 import Link from "next/link";
 import EmptyState from "@/components/empty-state";
 import { useRole } from "@/lib/role-context";
@@ -350,22 +351,25 @@ export default function DashboardPage() {
     const inicioAnt = `${anoAnt}-${pad(mesAnt + 1)}-01`;
     const fimAnt = `${anoAnt}-${pad(mesAnt + 1)}-${pad(new Date(anoAnt, mesAnt + 1, 0).getDate())}`;
 
-    const [r1, r2, r3, r4, r5, r6] = await Promise.all([
-      supabase.from("movimentacoes").select("*").gte("data", inicioAtual).lte("data", fimAtual),
-      supabase.from("movimentacoes").select("*").gte("data", inicioAnt).lte("data", fimAnt),
+    let gMesInicio = mesAtual - 5, gAnoInicio = anoAtual;
+    if (gMesInicio < 0) { gMesInicio += 12; gAnoInicio--; }
+    const inicioGrafico = `${gAnoInicio}-${pad(gMesInicio + 1)}-01`;
+
+    const [movAtualData, movAnteriorData, r3, r4, todosMovs, r6] = await Promise.all([
+      fetchAllRows<Movimentacao>((from, to) => supabase.from("movimentacoes").select("*").gte("data", inicioAtual).lte("data", fimAtual).range(from, to)),
+      fetchAllRows<Movimentacao>((from, to) => supabase.from("movimentacoes").select("*").gte("data", inicioAnt).lte("data", fimAnt).range(from, to)),
       supabase.from("movimentacoes").select("*").order("created_at", { ascending: false }).limit(5),
       supabase.from("contas_pagar").select("*").eq("status", "pendente").order("data_vencimento"),
-      supabase.from("movimentacoes").select("tipo,valor,data"),
+      fetchAllRows<{ tipo: string; valor: number; data: string }>((from, to) => supabase.from("movimentacoes").select("tipo,valor,data").gte("data", inicioGrafico).lte("data", fimAtual).range(from, to)),
       supabase.from("metas").select("id,valor_meta").eq("tipo", "receita").eq("mes", mesAtual + 1).eq("ano", anoAtual).maybeSingle(),
     ]);
 
-    if (r1.data) setMovAtual(r1.data);
-    if (r2.data) setMovAnterior(r2.data);
+    setMovAtual(movAtualData);
+    setMovAnterior(movAnteriorData);
     if (r3.data) setMovRecentes(r3.data);
     if (r4.data) setContasPendentes(r4.data);
     if (r6.data) { setMetaMensal(r6.data.valor_meta); setMetaId(r6.data.id); }
 
-    const todosMovs = r5.data || [];
     const graficoData: MesGrafico[] = [];
     for (let i = 5; i >= 0; i--) {
       let gMes = mesAtual - i, gAno = anoAtual;

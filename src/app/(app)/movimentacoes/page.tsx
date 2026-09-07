@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { fetchAllRows, fetchAllByIds } from "@/lib/supabase/fetch-all";
 import { CurrencyInput } from "@/components/currency-input";
 import { registrarLog, bloquearSeMesFechado } from "@/lib/audit";
 import ComprovantePicker from "@/components/comprovante-picker";
@@ -103,31 +104,35 @@ export default function MovimentacoesPage() {
     const inicio = `${ano}-${String(mes + 1).padStart(2, "0")}-01`;
     const ultimoDia = new Date(ano, mes + 1, 0).getDate();
     const fim = `${ano}-${String(mes + 1).padStart(2, "0")}-${String(ultimoDia).padStart(2, "0")}`;
-    const { data: resultado } = await supabase.from("movimentacoes").select("*").gte("data", inicio).lte("data", fim).order("data", { ascending: true });
-    if (!resultado) return;
-    setMovs(resultado as Movimentacao[]);
+    const resultado = await fetchAllRows<Movimentacao>((from, to) =>
+      supabase.from("movimentacoes").select("*").gte("data", inicio).lte("data", fim).order("data", { ascending: true }).range(from, to)
+    );
+    setMovs(resultado);
 
     // Buscar todos os itens de uma vez (evita N+1)
     const ids = resultado.map(m => m.id);
     if (ids.length > 0) {
-      const { data: todosItens, error: errItens } = await supabase
-        .from("movimentacao_itens")
-        .select("id, movimentacao_id, valor")
-        .in("movimentacao_id", ids)
-        .order("created_at", { ascending: true });
+      const { data: todosItens, error: errItens } = await fetchAllByIds<Item>(ids, (chunk, from, to) =>
+        supabase
+          .from("movimentacao_itens")
+          .select("id, movimentacao_id, valor")
+          .in("movimentacao_id", chunk)
+          .order("created_at", { ascending: true })
+          .range(from, to)
+      );
       if (errItens) {
         // Busca de itens falhou (rede, RLS, etc.) -- mantém o itensPorMov
         // anterior em vez de sobrescrever com {}. Um mapa vazio aqui faria
         // editarMov() achar que nenhuma movimentação tem somatória, e o
         // handleSubmit apagaria itens reais do banco ao salvar (ver
         // tinhaItensAoEditar).
-        console.error("Falha ao carregar itens de somatória:", errItens.message);
+        console.error("Falha ao carregar itens de somatória:", errItens);
         return;
       }
       const mapa: Record<string, Item[]> = {};
-      (todosItens || []).forEach(item => {
+      todosItens.forEach(item => {
         if (!mapa[item.movimentacao_id]) mapa[item.movimentacao_id] = [];
-        mapa[item.movimentacao_id].push(item as Item);
+        mapa[item.movimentacao_id].push(item);
       });
       setItensPorMov(mapa);
     }

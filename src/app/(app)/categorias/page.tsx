@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { fetchAllRows } from "@/lib/supabase/fetch-all";
 import EmptyState from "@/components/empty-state";
 import { useRole } from "@/lib/role-context";
 
@@ -43,18 +44,19 @@ export default function CategoriasPage() {
     if (data) setCategorias(data);
 
     // Carregar contagem de movimentações por categoria
-    const { data: movs } = await supabase
-      .from("movimentacoes")
-      .select("categoria_id")
-      .eq("tipo", aba === "entrada" ? "entrada" : "saida");
+    const movs = await fetchAllRows<{ categoria_id: string }>((from, to) =>
+      supabase
+        .from("movimentacoes")
+        .select("categoria_id")
+        .eq("tipo", aba === "entrada" ? "entrada" : "saida")
+        .range(from, to)
+    );
 
-    if (movs) {
-      const contagem: Record<string, number> = {};
-      movs.forEach((m) => {
-        contagem[m.categoria_id] = (contagem[m.categoria_id] || 0) + 1;
-      });
-      setMovimentacoesPorCategoria(contagem);
-    }
+    const contagem: Record<string, number> = {};
+    movs.forEach((m) => {
+      contagem[m.categoria_id] = (contagem[m.categoria_id] || 0) + 1;
+    });
+    setMovimentacoesPorCategoria(contagem);
   }
 
   useEffect(() => {
