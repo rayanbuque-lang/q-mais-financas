@@ -31,6 +31,7 @@ const menuItems = [
   { label: "XML de Notas Fiscais", href: "/xml-notas", icon: "🧾", modulo: "xml-notas" },
   { label: "Máquinas e Contas", href: "/maquinas", icon: "🏦", modulo: "maquinas" },
   { label: "Vendas Maquininha", href: "/vendas", icon: "💳", modulo: "vendas" },
+  { label: "Conciliação de Cartão", href: "/conciliacao-cartao", icon: "🧾", modulo: "conciliacao-cartao" },
   { label: "Categorias", href: "/categorias", icon: "🏷️", modulo: "categorias" },
   { label: "Fechamento de Caixa", href: "/fechamento-caixa", icon: "🧮", modulo: "fechamento-caixa" },
   { label: "Fluxo de Caixa", href: "/fluxo-de-caixa", icon: "📈", modulo: "fluxo-de-caixa" },

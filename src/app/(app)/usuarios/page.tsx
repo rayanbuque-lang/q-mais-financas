@@ -23,6 +23,7 @@ const todosModulos = [
   { id: "xml-notas", label: "XML de Notas Fiscais", icon: "🧾" },
   { id: "maquinas", label: "Máquinas e Contas", icon: "🏦" },
   { id: "vendas", label: "Vendas Maquininha", icon: "💳" },
+  { id: "conciliacao-cartao", label: "Conciliação de Cartão", icon: "🧾" },
   { id: "categorias", label: "Categorias", icon: "🏷️" },
   { id: "fechamento-caixa", label: "Fechamento de Caixa", icon: "🧮" },
   { id: "fluxo-de-caixa", label: "Fluxo de Caixa", icon: "📈" },
