@@ -20,7 +20,9 @@ export interface TransacaoParaProvisao {
   bandeira: string;
   modalidade: ModalidadeCartao;
   statusTransacao: StatusTransacaoCartao;
+  valorBruto: number;
   valorLiquido: number | null;
+  dataVenda: string; // yyyy-mm-dd -- pra mostrar o período de venda que compõe o bucket
   dataPrevistaPagamento: string | null;
 }
 
@@ -28,11 +30,20 @@ export interface BucketRecebivel {
   dataPrevista: string; // yyyy-mm-dd
   bandeira: string;
   modalidade: ModalidadeCartao;
-  valorPrevisto: number;
+  valorPrevisto: number; // líquido
+  valorBrutoPrevisto: number;
+  dataVendaInicio: string; // menor data de venda que compõe este bucket
+  dataVendaFim: string; // maior data de venda que compõe este bucket
   quantidadeTransacoes: number;
 }
 
-export type StatusConciliacao = "conciliado" | "divergente" | "sem_deposito_encontrado" | "multiplos_candidatos" | "aguardando";
+export type StatusConciliacao =
+  | "conciliado"
+  | "divergente"
+  | "sem_deposito_encontrado"
+  | "multiplos_candidatos"
+  | "aguardando"
+  | "descartada";
 
 export interface CandidatoExtrato {
   id: string;
@@ -74,13 +85,19 @@ export function agruparRecebiveis(transacoes: TransacaoParaProvisao[]): {
     const existente = buckets.get(chave);
     if (existente) {
       existente.valorPrevisto += t.valorLiquido;
+      existente.valorBrutoPrevisto += t.valorBruto;
       existente.quantidadeTransacoes += 1;
+      if (t.dataVenda < existente.dataVendaInicio) existente.dataVendaInicio = t.dataVenda;
+      if (t.dataVenda > existente.dataVendaFim) existente.dataVendaFim = t.dataVenda;
     } else {
       buckets.set(chave, {
         dataPrevista: t.dataPrevistaPagamento,
         bandeira: t.bandeira,
         modalidade: t.modalidade,
         valorPrevisto: t.valorLiquido,
+        valorBrutoPrevisto: t.valorBruto,
+        dataVendaInicio: t.dataVenda,
+        dataVendaFim: t.dataVenda,
         quantidadeTransacoes: 1,
       });
     }
@@ -89,7 +106,10 @@ export function agruparRecebiveis(transacoes: TransacaoParaProvisao[]): {
   // Soma em ponto flutuante ao longo de milhares de transações acumula erro
   // (ex.: 839.5699999999998) -- arredonda só no fechamento do bucket, nunca
   // durante o acúmulo, pra não mascarar centavo real perdido em cada soma.
-  for (const bucket of buckets.values()) bucket.valorPrevisto = arredondar(bucket.valorPrevisto);
+  for (const bucket of buckets.values()) {
+    bucket.valorPrevisto = arredondar(bucket.valorPrevisto);
+    bucket.valorBrutoPrevisto = arredondar(bucket.valorBrutoPrevisto);
+  }
 
   return { buckets: [...buckets.values()], semDataPrevista };
 }
@@ -110,7 +130,7 @@ function arredondar(valor: number): number {
  * mesmo tipo de ajuste de fim de semana/feriado que o banco pode aplicar de
  * forma diferente da adquirente (mesmo raciocínio de cobertura-pix.ts).
  */
-export function conciliarBucket(bucket: BucketRecebivel, candidatos: CandidatoExtrato[], hoje: string): ResultadoConciliacaoBucket {
+export function conciliarBucket(bucket: BucketRecebivel, candidatos: CandidatoExtrato[], dataLimiteCobertura: string): ResultadoConciliacaoBucket {
   const naJanela = candidatos.filter((c) => {
     const d = diferencaDias(c.data, bucket.dataPrevista);
     return d >= -1 && d <= 3;
@@ -153,11 +173,15 @@ export function conciliarBucket(bucket: BucketRecebivel, candidatos: CandidatoEx
   }
 
   if (naJanela.length === 0) {
-    // Data prevista ainda não chegou -- não é "falta de depósito" (o dinheiro
-    // simplesmente ainda não venceu), é só provisão em aberto. Só vira alerta
-    // vermelho quando a data já passou e mesmo assim nada apareceu no
-    // extrato -- é isso que sinaliza prejuízo de verdade.
-    if (bucket.dataPrevista > hoje) {
+    // `dataLimiteCobertura` é o menor entre "hoje" e a última data que o
+    // extrato bancário realmente tem importada -- nunca só "hoje". Sem essa
+    // segunda condição, um extrato importado só até 03/09 faria qualquer
+    // bucket previsto pra 04-07/09 (passado em relação a "hoje", mas nunca
+    // sequer conferido porque o extrato não chega lá) virar alarme vermelho
+    // de "sem depósito" por engano -- quando na verdade é só falta importar
+    // extrato mais recente, não dinheiro perdido. Só é alarme de verdade
+    // quando a data prevista está dentro do que o extrato já cobre.
+    if (bucket.dataPrevista > dataLimiteCobertura) {
       return { ...bucket, status: "aguardando", extratoLancamentoId: null, valorRecebido: null, diferenca: null, candidatosIds: [] };
     }
     return {
@@ -197,13 +221,13 @@ export function conciliarBucket(bucket: BucketRecebivel, candidatos: CandidatoEx
  * foi decidido, e os mesmos candidatos continuam disponíveis pra escolha
  * manual em qualquer bucket que os ofereça.
  */
-export function conciliarBuckets(buckets: BucketRecebivel[], candidatos: CandidatoExtrato[], hoje: string): ResultadoConciliacaoBucket[] {
+export function conciliarBuckets(buckets: BucketRecebivel[], candidatos: CandidatoExtrato[], dataLimiteCobertura: string): ResultadoConciliacaoBucket[] {
   const poolDisponivel = [...candidatos];
   const ordenados = [...buckets].sort((a, b) => a.dataPrevista.localeCompare(b.dataPrevista));
 
   const resultados: ResultadoConciliacaoBucket[] = [];
   for (const bucket of ordenados) {
-    const resultado = conciliarBucket(bucket, poolDisponivel, hoje);
+    const resultado = conciliarBucket(bucket, poolDisponivel, dataLimiteCobertura);
     resultados.push(resultado);
     if (resultado.status === "conciliado" || resultado.status === "divergente") {
       const indice = poolDisponivel.findIndex((c) => c.id === resultado.extratoLancamentoId);

@@ -85,10 +85,13 @@ interface ConciliacaoDb {
   bandeira: string;
   modalidade: string;
   valor_previsto: number;
+  valor_bruto_previsto: number | null;
+  data_venda_inicio: string | null;
+  data_venda_fim: string | null;
   extrato_lancamento_id: string | null;
   valor_recebido: number | null;
   diferenca: number | null;
-  status: StatusConciliacao | "aguardando";
+  status: StatusConciliacao;
   candidatos_ids: string[] | null;
   observacao: string | null;
 }
@@ -137,6 +140,7 @@ function badgeStatusConciliacao(status: ConciliacaoDb["status"]) {
     sem_deposito_encontrado: { label: "🚨 Sem depósito", classe: "bg-red-50 text-red-700 border-red-200" },
     multiplos_candidatos: { label: "◐ Escolher manualmente", classe: "bg-slate-100 text-slate-700 border-slate-300" },
     aguardando: { label: "Aguardando", classe: "bg-gray-100 text-gray-600 border-gray-200" },
+    descartada: { label: "Descartado", classe: "bg-gray-100 text-gray-500 border-gray-200 line-through" },
   };
   return mapa[status] ?? mapa.aguardando;
 }
@@ -388,13 +392,25 @@ export default function ConciliacaoCartaoPage() {
   const [recalculando, setRecalculando] = useState(false);
   const [lancamentosInfo, setLancamentosInfo] = useState<Map<string, LancamentoInfo>>(new Map());
   const [filtroStatusConciliacao, setFiltroStatusConciliacao] = useState<"todos" | ConciliacaoDb["status"]>("todos");
+  // Até onde o extrato bancário realmente está importado -- não é "hoje".
+  // Usado só pra deixar isso visível na tela; o cálculo em si acontece em
+  // handleRecalcularConciliacao (que busca de novo na hora de recalcular).
+  const [coberturaExtrato, setCoberturaExtrato] = useState<string | null>(null);
 
   async function carregarConciliacoes() {
     setCarregandoConciliacoes(true);
+    const { data: coberturaRaw } = await supabase
+      .from("extrato_lancamento")
+      .select("data_lancamento")
+      .order("data_lancamento", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    setCoberturaExtrato((coberturaRaw?.data_lancamento as string | undefined) ?? null);
+
     const { data, error } = await supabase
       .from("cartao_conciliacao")
       .select("*")
-      .order("data_prevista", { ascending: false })
+      .order("data_prevista", { ascending: true })
       .limit(LIMITE_LINHAS);
     if (!error && data) {
       const linhas = data as ConciliacaoDb[];
@@ -431,7 +447,7 @@ export default function ConciliacaoCartaoPage() {
     try {
       const { data: transacoesProvisao, error: erroTransacoes } = await supabase
         .from("cartao_transacao")
-        .select("bandeira, modalidade, status_transacao, valor_liquido, data_prevista_pagamento")
+        .select("bandeira, modalidade, status_transacao, valor_bruto, valor_liquido, data_hora_venda, data_prevista_pagamento")
         .in("status_transacao", ["aprovada", "paga"])
         .not("data_prevista_pagamento", "is", null)
         .limit(LIMITE_LINHAS);
@@ -441,7 +457,9 @@ export default function ConciliacaoCartaoPage() {
         bandeira: t.bandeira as string,
         modalidade: t.modalidade as ModalidadeCartao,
         statusTransacao: t.status_transacao as StatusTransacaoCartao,
+        valorBruto: t.valor_bruto as number,
         valorLiquido: t.valor_liquido as number | null,
+        dataVenda: (t.data_hora_venda as string).slice(0, 10),
         dataPrevistaPagamento: t.data_prevista_pagamento as string | null,
       }));
       const { buckets, semDataPrevista } = agruparRecebiveis(transacoesParaProvisao);
@@ -457,10 +475,16 @@ export default function ConciliacaoCartaoPage() {
       const janelaInicio = new Date(new Date(dataMinima + "T00:00:00Z").getTime() - 2 * 86400000).toISOString().slice(0, 10);
       const janelaFim = new Date(new Date(dataMaxima + "T00:00:00Z").getTime() + 4 * 86400000).toISOString().slice(0, 10);
 
+      // Só considera lançamento que parece repasse de cartão -- sem esse
+      // filtro, qualquer Pix recebido de cliente no mesmo dia (que também é
+      // um valor positivo qualquer) entrava na janela e aparecia como opção
+      // em "escolher manualmente", o que não faz sentido nenhum: um Pix de
+      // cliente nunca é o repasse de uma venda de cartão.
       const { data: candidatosRaw, error: erroCandidatos } = await supabase
         .from("extrato_lancamento")
         .select("id, data_lancamento, valor")
         .gt("valor", 0)
+        .ilike("descricao_normalizada", "%cartao%")
         .gte("data_lancamento", janelaInicio)
         .lte("data_lancamento", janelaFim)
         .limit(LIMITE_LINHAS);
@@ -472,17 +496,17 @@ export default function ConciliacaoCartaoPage() {
         valor: c.valor as number,
       }));
 
-      // Nunca sobrescreve uma escolha manual já feita (handleEscolherManual)
-      // com o recálculo automático -- só recalcula de novo um bucket
-      // 'conciliado_manual' se o valor previsto dele mudou (ex.: chegou mais
-      // transação naquele dia/bandeira depois da escolha manual), porque aí
-      // a escolha antiga não corresponde mais ao valor real provisionado e
+      // Nunca sobrescreve uma decisão manual já feita (escolha manual OU
+      // descarte) com o recálculo automático -- só recalcula de novo um
+      // bucket já decidido se o valor previsto dele mudou (ex.: chegou mais
+      // transação naquele dia/bandeira depois da decisão), porque aí a
+      // decisão antiga não corresponde mais ao valor real provisionado e
       // precisa ser revista. Sem isso, todo "Recalcular" apagaria a decisão
       // humana e devolveria o bucket pro limbo de "escolher de novo".
       const { data: existentesRaw } = await supabase
         .from("cartao_conciliacao")
         .select("data_prevista, bandeira, modalidade, status, valor_previsto, extrato_lancamento_id")
-        .eq("status", "conciliado_manual")
+        .in("status", ["conciliado_manual", "descartada"])
         .limit(LIMITE_LINHAS);
       const manualPreservado = new Map(
         (existentesRaw ?? []).map((e) => [`${e.data_prevista}|${e.bandeira}|${e.modalidade}`, e.valor_previsto as number])
@@ -497,8 +521,23 @@ export default function ConciliacaoCartaoPage() {
       );
       const candidatosDisponiveis = candidatos.filter((c) => !idsJaReivindicadosManualmente.has(c.id));
 
+      // O alarme "sem depósito" só vale dentro do que o extrato bancário já
+      // cobre de verdade -- nunca até "hoje", porque o extrato quase sempre
+      // está alguns dias atrasado em relação a hoje (falta importar o mais
+      // recente), e sem essa distinção esses dias em aberto viram alarme
+      // falso de prejuízo em vez de "ainda não conferido".
       const hoje = new Date().toISOString().slice(0, 10);
-      const resultados = conciliarBuckets(buckets, candidatosDisponiveis, hoje);
+      const { data: coberturaRaw } = await supabase
+        .from("extrato_lancamento")
+        .select("data_lancamento")
+        .order("data_lancamento", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const dataMaximaExtrato = (coberturaRaw?.data_lancamento as string | undefined) ?? null;
+      const dataLimiteCobertura = dataMaximaExtrato && dataMaximaExtrato < hoje ? dataMaximaExtrato : hoje;
+      setCoberturaExtrato(dataMaximaExtrato);
+
+      const resultados = conciliarBuckets(buckets, candidatosDisponiveis, dataLimiteCobertura);
       let preservados = 0;
       const linhas = resultados
         .filter((r) => {
@@ -512,6 +551,9 @@ export default function ConciliacaoCartaoPage() {
           bandeira: r.bandeira,
           modalidade: r.modalidade,
           valor_previsto: r.valorPrevisto,
+          valor_bruto_previsto: r.valorBrutoPrevisto,
+          data_venda_inicio: r.dataVendaInicio,
+          data_venda_fim: r.dataVendaFim,
           extrato_lancamento_id: r.extratoLancamentoId,
           valor_recebido: r.valorRecebido,
           diferenca: r.diferenca,
@@ -526,7 +568,9 @@ export default function ConciliacaoCartaoPage() {
         if (error) throw new Error(error.message);
       }
 
-      const contagem = { conciliado: 0, divergente: 0, sem_deposito_encontrado: 0, multiplos_candidatos: 0, aguardando: 0 };
+      // "descartada" nunca é produzido pelo motor (só por ação manual do
+      // usuário), mas entra no objeto pra satisfazer o tipo StatusConciliacao.
+      const contagem = { conciliado: 0, divergente: 0, sem_deposito_encontrado: 0, multiplos_candidatos: 0, aguardando: 0, descartada: 0 };
       for (const r of resultados) contagem[r.status]++;
       avisar(
         {
@@ -566,10 +610,25 @@ export default function ConciliacaoCartaoPage() {
     else carregarConciliacoes();
   }
 
+  // Descarte é uma decisão manual de "já revisei isso, não é prejuízo real"
+  // (ex.: sabidamente uma venda de teste, ou já resolvido por fora) -- some
+  // do total de "sem depósito" e fica marcado, mas nunca finge que foi
+  // recebido (não mexe em valor_recebido/diferenca).
+  async function handleDescartar(conciliacaoId: string) {
+    if (!confirm("Descartar esta linha? Ela some do total de prejuízo potencial, mas fica registrada como descartada.")) return;
+    const { error } = await supabase
+      .from("cartao_conciliacao")
+      .update({ status: "descartada", calculado_em: new Date().toISOString() })
+      .eq("id", conciliacaoId);
+    if (error) avisar({ tipo: "erro", texto: error.message });
+    else carregarConciliacoes();
+  }
+
   const conciliacoesFiltradas = conciliacoes.filter((c) => filtroStatusConciliacao === "todos" || c.status === filtroStatusConciliacao);
-  const totalPrevisto = conciliacoesFiltradas.reduce((s, c) => s + c.valor_previsto, 0);
-  const totalRecebido = conciliacoesFiltradas.reduce((s, c) => s + (c.valor_recebido ?? 0), 0);
-  const totalSemDeposito = conciliacoesFiltradas.filter((c) => c.status === "sem_deposito_encontrado").reduce((s, c) => s + c.valor_previsto, 0);
+  const conciliacoesAtivas = conciliacoesFiltradas.filter((c) => c.status !== "descartada");
+  const totalPrevisto = conciliacoesAtivas.reduce((s, c) => s + c.valor_previsto, 0);
+  const totalRecebido = conciliacoesAtivas.reduce((s, c) => s + (c.valor_recebido ?? 0), 0);
+  const totalSemDeposito = conciliacoesAtivas.filter((c) => c.status === "sem_deposito_encontrado").reduce((s, c) => s + c.valor_previsto, 0);
 
   // ---------------------------------------------------------------------
   // Taxas contratadas
@@ -1060,6 +1119,13 @@ export default function ConciliacaoCartaoPage() {
 
       {aba === "conciliacao" && (
         <div className="space-y-4">
+          <div className="px-4 py-2.5 rounded-xl text-xs font-medium bg-blue-50 text-blue-800 border border-blue-200">
+            📅 Extrato bancário importado até:{" "}
+            <strong>{coberturaExtrato ? formatarData(coberturaExtrato) : "nenhum extrato importado ainda"}</strong> — o alarme de
+            &quot;sem depósito&quot; só vale até essa data. Datas depois disso aparecem como &quot;Aguardando&quot;, porque o
+            extrato ainda não chegou lá (não significa que o dinheiro não caiu).
+          </div>
+
           <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap gap-4 text-sm">
               <div>
@@ -1088,6 +1154,7 @@ export default function ConciliacaoCartaoPage() {
                 <option value="sem_deposito_encontrado">Sem depósito</option>
                 <option value="multiplos_candidatos">Escolher manualmente</option>
                 <option value="aguardando">Aguardando (ainda não venceu)</option>
+                <option value="descartada">Descartado</option>
               </select>
               {!isReadOnly && (
                 <button
@@ -1117,24 +1184,34 @@ export default function ConciliacaoCartaoPage() {
                   <thead>
                     <tr className="border-b border-[var(--color-border)] text-left text-[var(--color-text-muted)]">
                       <th className="px-3 py-2.5 font-semibold">Data prevista</th>
+                      <th className="px-3 py-2.5 font-semibold">Vendas de</th>
                       <th className="px-3 py-2.5 font-semibold">Bandeira</th>
                       <th className="px-3 py-2.5 font-semibold">Modalidade</th>
-                      <th className="px-3 py-2.5 font-semibold text-right">Previsto</th>
+                      <th className="px-3 py-2.5 font-semibold text-right">Bruto</th>
+                      <th className="px-3 py-2.5 font-semibold text-right">Líquido previsto</th>
                       <th className="px-3 py-2.5 font-semibold text-right">Recebido</th>
                       <th className="px-3 py-2.5 font-semibold text-right">Diferença</th>
                       <th className="px-3 py-2.5 font-semibold">Lançamento no extrato</th>
                       <th className="px-3 py-2.5 font-semibold">Status</th>
+                      {!isReadOnly && <th className="px-3 py-2.5 font-semibold">Ações</th>}
                     </tr>
                   </thead>
                   <tbody>
                     {conciliacoesFiltradas.map((c) => {
                       const badge = badgeStatusConciliacao(c.status);
                       const lancamento = c.extrato_lancamento_id ? lancamentosInfo.get(c.extrato_lancamento_id) : null;
+                      const podeDescartar = ["divergente", "sem_deposito_encontrado", "multiplos_candidatos"].includes(c.status);
                       return (
-                        <tr key={c.id} className="border-b border-[var(--color-border)] last:border-0">
+                        <tr key={c.id} className={`border-b border-[var(--color-border)] last:border-0 ${c.status === "descartada" ? "opacity-50" : ""}`}>
                           <td className="px-3 py-2 whitespace-nowrap">{formatarData(c.data_prevista)}</td>
+                          <td className="px-3 py-2 whitespace-nowrap text-[var(--color-text-muted)]">
+                            {c.data_venda_inicio === c.data_venda_fim || !c.data_venda_fim
+                              ? formatarData(c.data_venda_inicio)
+                              : `${formatarData(c.data_venda_inicio)} – ${formatarData(c.data_venda_fim)}`}
+                          </td>
                           <td className="px-3 py-2">{c.bandeira}</td>
                           <td className="px-3 py-2">{LABEL_MODALIDADE[c.modalidade] ?? c.modalidade}</td>
+                          <td className="px-3 py-2 text-right">{c.valor_bruto_previsto !== null ? formatarMoeda(c.valor_bruto_previsto) : "—"}</td>
                           <td className="px-3 py-2 text-right">{formatarMoeda(c.valor_previsto)}</td>
                           <td className="px-3 py-2 text-right">{c.valor_recebido !== null ? formatarMoeda(c.valor_recebido) : "—"}</td>
                           <td className={`px-3 py-2 text-right font-medium ${c.diferenca && c.diferenca < 0 ? "text-red-700" : c.diferenca && c.diferenca > 0 ? "text-amber-700" : ""}`}>
@@ -1172,6 +1249,18 @@ export default function ConciliacaoCartaoPage() {
                           <td className="px-3 py-2">
                             <span className={`px-2 py-0.5 rounded-full border text-[10px] font-semibold whitespace-nowrap ${badge.classe}`}>{badge.label}</span>
                           </td>
+                          {!isReadOnly && (
+                            <td className="px-3 py-2">
+                              {podeDescartar && (
+                                <button
+                                  onClick={() => handleDescartar(c.id)}
+                                  className="px-2 py-1 rounded-lg border border-[var(--color-border)] text-[11px] font-medium hover:bg-[var(--hover-bg)] whitespace-nowrap"
+                                >
+                                  Descartar
+                                </button>
+                              )}
+                            </td>
+                          )}
                         </tr>
                       );
                     })}
