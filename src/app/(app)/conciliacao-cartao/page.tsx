@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/client";
 import EmptyState from "@/components/empty-state";
 import { useRole } from "@/lib/role-context";
 import { registrarLog } from "@/lib/audit";
+import { fetchAllRowsSafe, fetchAllByIds } from "@/lib/supabase/fetch-all";
 import {
   parseCartaoVendasDetalhado,
   parseCartaoVendasConsolidado,
@@ -28,9 +29,6 @@ import {
 } from "@/lib/conciliacao-cartao";
 import { calcularDataPrevista } from "@/lib/dias-uteis-cartao";
 
-// Teto de linhas por consulta -- mesmo problema/solução do /extrato (limite
-// padrão do PostgREST): ver LIMITE_LANCAMENTOS em extrato/page.tsx.
-const LIMITE_LINHAS = 5000;
 const TAMANHO_LOTE_UPSERT = 500;
 
 type Mensagem = { tipo: "sucesso" | "erro"; texto: string } | null;
@@ -91,7 +89,10 @@ interface ConciliacaoDb {
   extrato_lancamento_id: string | null;
   valor_recebido: number | null;
   diferenca: number | null;
-  status: StatusConciliacao;
+  // "conciliado_manual" só existe no banco (setado por handleEscolherManual)
+  // -- o motor de matching em conciliacao-cartao.ts nunca produz esse valor
+  // sozinho, por isso não faz parte do StatusConciliacao importado de lá.
+  status: StatusConciliacao | "conciliado_manual";
   candidatos_ids: string[] | null;
   observacao: string | null;
 }
@@ -353,29 +354,48 @@ export default function ConciliacaoCartaoPage() {
   // ---------------------------------------------------------------------
   const [transacoes, setTransacoes] = useState<TransacaoDb[]>([]);
   const [carregandoTransacoes, setCarregandoTransacoes] = useState(false);
+  const [transacoesTruncadas, setTransacoesTruncadas] = useState(false);
   const [filtroOrigem, setFiltroOrigem] = useState<"todas" | "cartoes" | "voucher">("todas");
   const [filtroStatus, setFiltroStatus] = useState<"todos" | StatusTransacaoCartao>("todos");
   const [filtroBandeira, setFiltroBandeira] = useState("");
   const [filtroDataInicio, setFiltroDataInicio] = useState("");
   const [filtroDataFim, setFiltroDataFim] = useState("");
+  const [buscaTransacoes, setBuscaTransacoes] = useState("");
+  // 5000 linhas soltas numa tabela é inviável de rolar até o fim -- agrupa
+  // por dia da venda e só renderiza o detalhe dos dias abertos. Nenhum dia
+  // começa aberto: com muitos dias importados de uma vez, abrir todos por
+  // padrão voltaria a ser a mesma rolagem infinita de antes.
+  const [diasExpandidos, setDiasExpandidos] = useState<Set<string>>(new Set());
+  // Colapsar cada dia não basta: com meses inteiros importados, a LISTA de
+  // blocos de dia por si só já fica enorme (um por dia). Renderiza só os N
+  // mais recentes e carrega mais sob demanda, em vez de todos de uma vez.
+  const DIAS_POR_PAGINA = 15;
+  const [diasVisiveis, setDiasVisiveis] = useState(DIAS_POR_PAGINA);
 
   async function carregarTransacoes() {
     setCarregandoTransacoes(true);
-    let query = supabase
-      .from("cartao_transacao")
-      .select(
-        "id, importacao_id, origem_planilha, bandeira, modalidade, forma_pagamento, data_hora_venda, status_transacao, parcelas, numero_cartao_mascarado, numero_autorizacao, numero_comprovante, numero_terminal, valor_bruto, valor_taxa, valor_liquido, data_prevista_pagamento, data_prevista_calculada"
-      )
-      .order("data_hora_venda", { ascending: false })
-      .limit(LIMITE_LINHAS);
-    if (filtroOrigem !== "todas") query = query.eq("origem_planilha", filtroOrigem);
-    if (filtroStatus !== "todos") query = query.eq("status_transacao", filtroStatus);
-    if (filtroBandeira.trim()) query = query.ilike("bandeira", `%${filtroBandeira.trim()}%`);
-    if (filtroDataInicio) query = query.gte("data_hora_venda", filtroDataInicio);
-    if (filtroDataFim) query = query.lte("data_hora_venda", filtroDataFim + "T23:59:59");
-
-    const { data, error } = await query;
-    if (!error && data) setTransacoes(data as TransacaoDb[]);
+    // fetchAllRowsSafe pagina de verdade em vez de um .limit() fixo -- um
+    // teto fixo (mesmo "generoso" como 5000) é cortado silenciosamente pelo
+    // limite real de linhas por requisição do projeto Supabase (comumente
+    // 1000), como já aconteceu e foi corrigido em /extrato e /movimentacoes.
+    const { data, error, truncado } = await fetchAllRowsSafe<TransacaoDb>((from, to) => {
+      let query = supabase
+        .from("cartao_transacao")
+        .select(
+          "id, importacao_id, origem_planilha, bandeira, modalidade, forma_pagamento, data_hora_venda, status_transacao, parcelas, numero_cartao_mascarado, numero_autorizacao, numero_comprovante, numero_terminal, valor_bruto, valor_taxa, valor_liquido, data_prevista_pagamento, data_prevista_calculada"
+        )
+        .order("data_hora_venda", { ascending: false })
+        .range(from, to);
+      if (filtroOrigem !== "todas") query = query.eq("origem_planilha", filtroOrigem);
+      if (filtroStatus !== "todos") query = query.eq("status_transacao", filtroStatus);
+      if (filtroBandeira.trim()) query = query.ilike("bandeira", `%${filtroBandeira.trim()}%`);
+      if (filtroDataInicio) query = query.gte("data_hora_venda", filtroDataInicio);
+      if (filtroDataFim) query = query.lte("data_hora_venda", filtroDataFim + "T23:59:59");
+      return query;
+    });
+    if (error) avisar({ tipo: "erro", texto: "Erro ao carregar transações." });
+    else setTransacoes(data);
+    setTransacoesTruncadas(truncado);
     setCarregandoTransacoes(false);
   }
 
@@ -383,6 +403,53 @@ export default function ConciliacaoCartaoPage() {
     if (aba === "transacoes") carregarTransacoes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aba, filtroOrigem, filtroStatus, filtroBandeira, filtroDataInicio, filtroDataFim]);
+
+  // Muda o filtro/busca -> volta pra primeira leva de dias, senão um filtro
+  // que já tinha "carregado mais" antes ficaria com uma contagem de dias
+  // visíveis sem relação nenhuma com o resultado novo.
+  useEffect(() => {
+    setDiasVisiveis(DIAS_POR_PAGINA);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtroOrigem, filtroStatus, filtroBandeira, filtroDataInicio, filtroDataFim, buscaTransacoes]);
+
+  // Busca livre além dos filtros estruturados -- roda em cima do que já
+  // veio do servidor (client-side), então cobre comprovante, valor (digitar
+  // "97" acha "R$ 9,70" e "197,00") e dia (digitar "05/08" acha o dia
+  // inteiro) sem precisar de mais uma query a cada tecla.
+  const buscaNormalizada = buscaTransacoes.trim().toLowerCase();
+  const transacoesFiltradas = buscaNormalizada
+    ? transacoes.filter((t) => {
+        const alvo = [
+          t.numero_comprovante,
+          t.numero_autorizacao,
+          t.numero_cartao_mascarado,
+          formatarMoeda(t.valor_bruto),
+          t.valor_liquido !== null ? formatarMoeda(t.valor_liquido) : "",
+          formatarDataHora(t.data_hora_venda),
+          t.bandeira,
+        ]
+          .join(" ")
+          .toLowerCase();
+        return alvo.includes(buscaNormalizada);
+      })
+    : transacoes;
+
+  const gruposPorDia = new Map<string, TransacaoDb[]>();
+  for (const t of transacoesFiltradas) {
+    const dia = t.data_hora_venda.slice(0, 10);
+    const grupo = gruposPorDia.get(dia);
+    if (grupo) grupo.push(t);
+    else gruposPorDia.set(dia, [t]);
+  }
+
+  function alternarDia(dia: string) {
+    setDiasExpandidos((atual) => {
+      const novo = new Set(atual);
+      if (novo.has(dia)) novo.delete(dia);
+      else novo.add(dia);
+      return novo;
+    });
+  }
 
   // ---------------------------------------------------------------------
   // Conciliação (Provisão x Recebido)
@@ -396,6 +463,7 @@ export default function ConciliacaoCartaoPage() {
   // Usado só pra deixar isso visível na tela; o cálculo em si acontece em
   // handleRecalcularConciliacao (que busca de novo na hora de recalcular).
   const [coberturaExtrato, setCoberturaExtrato] = useState<string | null>(null);
+  const [mesesExpandidos, setMesesExpandidos] = useState<Set<string>>(new Set());
 
   async function carregarConciliacoes() {
     setCarregandoConciliacoes(true);
@@ -407,13 +475,11 @@ export default function ConciliacaoCartaoPage() {
       .maybeSingle();
     setCoberturaExtrato((coberturaRaw?.data_lancamento as string | undefined) ?? null);
 
-    const { data, error } = await supabase
-      .from("cartao_conciliacao")
-      .select("*")
-      .order("data_prevista", { ascending: true })
-      .limit(LIMITE_LINHAS);
-    if (!error && data) {
-      const linhas = data as ConciliacaoDb[];
+    const { data, error } = await fetchAllRowsSafe<ConciliacaoDb>((from, to) =>
+      supabase.from("cartao_conciliacao").select("*").order("data_prevista", { ascending: true }).range(from, to)
+    );
+    if (!error) {
+      const linhas = data;
       setConciliacoes(linhas);
 
       const idsParaBuscar = new Set<string>();
@@ -422,12 +488,11 @@ export default function ConciliacaoCartaoPage() {
         for (const c of l.candidatos_ids ?? []) idsParaBuscar.add(c);
       }
       if (idsParaBuscar.size > 0) {
-        const { data: lancamentos } = await supabase
-          .from("extrato_lancamento")
-          .select("id, data_lancamento, valor, descricao")
-          .in("id", [...idsParaBuscar]);
+        const { data: lancamentos } = await fetchAllByIds<LancamentoInfo>([...idsParaBuscar], (chunk, from, to) =>
+          supabase.from("extrato_lancamento").select("id, data_lancamento, valor, descricao").in("id", chunk).range(from, to)
+        );
         const mapa = new Map<string, LancamentoInfo>();
-        for (const l of lancamentos ?? []) mapa.set(l.id as string, l as LancamentoInfo);
+        for (const l of lancamentos) mapa.set(l.id, l);
         setLancamentosInfo(mapa);
       } else {
         setLancamentosInfo(new Map());
@@ -445,15 +510,34 @@ export default function ConciliacaoCartaoPage() {
     setRecalculando(true);
     avisar(null);
     try {
-      const { data: transacoesProvisao, error: erroTransacoes } = await supabase
-        .from("cartao_transacao")
-        .select("bandeira, modalidade, status_transacao, valor_bruto, valor_liquido, data_hora_venda, data_prevista_pagamento")
-        .in("status_transacao", ["aprovada", "paga"])
-        .not("data_prevista_pagamento", "is", null)
-        .limit(LIMITE_LINHAS);
-      if (erroTransacoes) throw new Error(erroTransacoes.message);
+      const {
+        data: transacoesProvisao,
+        error: erroTransacoes,
+        truncado: transacoesTruncadas,
+      } = await fetchAllRowsSafe<{
+        bandeira: string;
+        modalidade: string;
+        status_transacao: string;
+        valor_bruto: number;
+        valor_liquido: number | null;
+        data_hora_venda: string;
+        data_prevista_pagamento: string | null;
+      }>((from, to) =>
+        supabase
+          .from("cartao_transacao")
+          .select("bandeira, modalidade, status_transacao, valor_bruto, valor_liquido, data_hora_venda, data_prevista_pagamento")
+          .in("status_transacao", ["aprovada", "paga"])
+          .not("data_prevista_pagamento", "is", null)
+          .range(from, to)
+      );
+      if (erroTransacoes) throw new Error("Erro ao ler as transações provisionáveis.");
+      if (transacoesTruncadas) {
+        throw new Error(
+          "Volume de transações grande demais pra recalcular com segurança de uma vez -- avise pra ajustarmos (paginação atingiu o teto de segurança)."
+        );
+      }
 
-      const transacoesParaProvisao: TransacaoParaProvisao[] = (transacoesProvisao ?? []).map((t) => ({
+      const transacoesParaProvisao: TransacaoParaProvisao[] = transacoesProvisao.map((t) => ({
         bandeira: t.bandeira as string,
         modalidade: t.modalidade as ModalidadeCartao,
         statusTransacao: t.status_transacao as StatusTransacaoCartao,
@@ -480,20 +564,23 @@ export default function ConciliacaoCartaoPage() {
       // um valor positivo qualquer) entrava na janela e aparecia como opção
       // em "escolher manualmente", o que não faz sentido nenhum: um Pix de
       // cliente nunca é o repasse de uma venda de cartão.
-      const { data: candidatosRaw, error: erroCandidatos } = await supabase
-        .from("extrato_lancamento")
-        .select("id, data_lancamento, valor")
-        .gt("valor", 0)
-        .ilike("descricao_normalizada", "%cartao%")
-        .gte("data_lancamento", janelaInicio)
-        .lte("data_lancamento", janelaFim)
-        .limit(LIMITE_LINHAS);
-      if (erroCandidatos) throw new Error(erroCandidatos.message);
+      const { data: candidatosRaw, error: erroCandidatos } = await fetchAllRowsSafe<{ id: string; data_lancamento: string; valor: number }>(
+        (from, to) =>
+          supabase
+            .from("extrato_lancamento")
+            .select("id, data_lancamento, valor")
+            .gt("valor", 0)
+            .ilike("descricao_normalizada", "%cartao%")
+            .gte("data_lancamento", janelaInicio)
+            .lte("data_lancamento", janelaFim)
+            .range(from, to)
+      );
+      if (erroCandidatos) throw new Error("Erro ao ler os lançamentos do extrato.");
 
-      const candidatos: CandidatoExtrato[] = (candidatosRaw ?? []).map((c) => ({
-        id: c.id as string,
-        data: c.data_lancamento as string,
-        valor: c.valor as number,
+      const candidatos: CandidatoExtrato[] = candidatosRaw.map((c) => ({
+        id: c.id,
+        data: c.data_lancamento,
+        valor: c.valor,
       }));
 
       // Nunca sobrescreve uma decisão manual já feita (escolha manual OU
@@ -503,21 +590,28 @@ export default function ConciliacaoCartaoPage() {
       // decisão antiga não corresponde mais ao valor real provisionado e
       // precisa ser revista. Sem isso, todo "Recalcular" apagaria a decisão
       // humana e devolveria o bucket pro limbo de "escolher de novo".
-      const { data: existentesRaw } = await supabase
-        .from("cartao_conciliacao")
-        .select("data_prevista, bandeira, modalidade, status, valor_previsto, extrato_lancamento_id")
-        .in("status", ["conciliado_manual", "descartada"])
-        .limit(LIMITE_LINHAS);
-      const manualPreservado = new Map(
-        (existentesRaw ?? []).map((e) => [`${e.data_prevista}|${e.bandeira}|${e.modalidade}`, e.valor_previsto as number])
+      const { data: existentesRaw } = await fetchAllRowsSafe<{
+        data_prevista: string;
+        bandeira: string;
+        modalidade: string;
+        status: string;
+        valor_previsto: number;
+        extrato_lancamento_id: string | null;
+      }>((from, to) =>
+        supabase
+          .from("cartao_conciliacao")
+          .select("data_prevista, bandeira, modalidade, status, valor_previsto, extrato_lancamento_id")
+          .in("status", ["conciliado_manual", "descartada"])
+          .range(from, to)
       );
+      const manualPreservado = new Map(existentesRaw.map((e) => [`${e.data_prevista}|${e.bandeira}|${e.modalidade}`, e.valor_previsto]));
       // Lançamentos já reivindicados por uma escolha manual não podem ser
       // oferecidos a outro bucket neste recálculo -- mesma razão de
       // conciliarBuckets consumir o pool conforme casa: sem isso, o mesmo
       // depósito real apareceria como match "automático" de um segundo
       // bucket mesmo já estando comprometido com a escolha manual do primeiro.
       const idsJaReivindicadosManualmente = new Set(
-        (existentesRaw ?? []).map((e) => e.extrato_lancamento_id).filter((id): id is string => !!id)
+        existentesRaw.map((e) => e.extrato_lancamento_id).filter((id): id is string => !!id)
       );
       const candidatosDisponiveis = candidatos.filter((c) => !idsJaReivindicadosManualmente.has(c.id));
 
@@ -630,6 +724,57 @@ export default function ConciliacaoCartaoPage() {
   const totalRecebido = conciliacoesAtivas.reduce((s, c) => s + (c.valor_recebido ?? 0), 0);
   const totalSemDeposito = conciliacoesAtivas.filter((c) => c.status === "sem_deposito_encontrado").reduce((s, c) => s + c.valor_previsto, 0);
 
+  const MESES_NOMES = [
+    "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+    "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
+  ];
+  function formatarMesAno(chave: string) {
+    const [ano, mes] = chave.split("-");
+    return `${MESES_NOMES[parseInt(mes, 10) - 1]}/${ano}`;
+  }
+
+  type StatusMes = "conciliado" | "pendencias" | "aguardando" | "andamento";
+  interface GrupoMes {
+    chave: string;
+    linhas: ConciliacaoDb[];
+    totalPrevisto: number;
+    totalRecebido: number;
+    totalSemDeposito: number;
+    status: StatusMes;
+  }
+  const RESOLVIDOS: ConciliacaoDb["status"][] = ["conciliado", "conciliado_manual", "descartada"];
+  const PROBLEMATICOS: ConciliacaoDb["status"][] = ["sem_deposito_encontrado", "divergente", "multiplos_candidatos"];
+  const gruposPorMesMap = new Map<string, ConciliacaoDb[]>();
+  for (const c of conciliacoesFiltradas) {
+    const chave = c.data_prevista.slice(0, 7);
+    const grupo = gruposPorMesMap.get(chave);
+    if (grupo) grupo.push(c);
+    else gruposPorMesMap.set(chave, [c]);
+  }
+  const gruposPorMes: GrupoMes[] = [...gruposPorMesMap.entries()].map(([chave, linhas]) => {
+    const ativas = linhas.filter((c) => c.status !== "descartada");
+    let status: StatusMes;
+    if (linhas.some((c) => PROBLEMATICOS.includes(c.status))) status = "pendencias";
+    else if (linhas.every((c) => c.status === "aguardando")) status = "aguardando";
+    else if (linhas.every((c) => RESOLVIDOS.includes(c.status))) status = "conciliado";
+    else status = "andamento";
+    return {
+      chave,
+      linhas,
+      totalPrevisto: ativas.reduce((s, c) => s + c.valor_previsto, 0),
+      totalRecebido: ativas.reduce((s, c) => s + (c.valor_recebido ?? 0), 0),
+      totalSemDeposito: ativas.filter((c) => c.status === "sem_deposito_encontrado").reduce((s, c) => s + c.valor_previsto, 0),
+      status,
+    };
+  });
+
+  const BADGE_STATUS_MES: Record<StatusMes, { label: string; classe: string }> = {
+    conciliado: { label: "✓ Totalmente conciliado", classe: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+    pendencias: { label: "🚨 Tem pendência", classe: "bg-red-50 text-red-700 border-red-200" },
+    aguardando: { label: "Aguardando", classe: "bg-gray-100 text-gray-600 border-gray-200" },
+    andamento: { label: "◐ Em andamento", classe: "bg-amber-50 text-amber-700 border-amber-200" },
+  };
+
   // ---------------------------------------------------------------------
   // Taxas contratadas
   // ---------------------------------------------------------------------
@@ -662,15 +807,18 @@ export default function ConciliacaoCartaoPage() {
       return;
     }
     setCarregandoAuditoria(true);
-    const { data } = await supabase
-      .from("cartao_transacao")
-      .select("bandeira, modalidade, valor_bruto, valor_taxa")
-      .in("status_transacao", ["aprovada", "paga"])
-      .limit(LIMITE_LINHAS);
-    if (data) {
+    const { data, error } = await fetchAllRowsSafe<{ bandeira: string; modalidade: string; valor_bruto: number; valor_taxa: number | null }>(
+      (from, to) =>
+        supabase
+          .from("cartao_transacao")
+          .select("bandeira, modalidade, valor_bruto, valor_taxa")
+          .in("status_transacao", ["aprovada", "paga"])
+          .range(from, to)
+    );
+    if (!error) {
       setAuditoria(
         auditarTaxas(
-          data.map((t) => ({ bandeira: t.bandeira as string, modalidade: t.modalidade as ModalidadeCartao, valorBruto: t.valor_bruto as number, valorTaxa: t.valor_taxa as number | null })),
+          data.map((t) => ({ bandeira: t.bandeira, modalidade: t.modalidade as ModalidadeCartao, valorBruto: t.valor_bruto, valorTaxa: t.valor_taxa })),
           contratadasComTaxa.map((t) => ({ bandeira: t.bandeira, modalidade: t.modalidade, taxaPercentual: t.taxa_percentual }))
         )
       );
@@ -763,15 +911,18 @@ export default function ConciliacaoCartaoPage() {
     }
     setAplicandoRetroativo(taxa.id);
     try {
-      const { data: pendentes, error: erroPendentes } = await supabase
-        .from("cartao_transacao")
-        .select("id, data_hora_venda, valor_bruto")
-        .eq("bandeira", taxa.bandeira)
-        .eq("modalidade", taxa.modalidade)
-        .is("data_prevista_pagamento", null)
-        .limit(LIMITE_LINHAS);
-      if (erroPendentes) throw new Error(erroPendentes.message);
-      if (!pendentes || pendentes.length === 0) {
+      const { data: pendentes, error: erroPendentes } = await fetchAllRowsSafe<{ id: string; data_hora_venda: string; valor_bruto: number }>(
+        (from, to) =>
+          supabase
+            .from("cartao_transacao")
+            .select("id, data_hora_venda, valor_bruto")
+            .eq("bandeira", taxa.bandeira)
+            .eq("modalidade", taxa.modalidade)
+            .is("data_prevista_pagamento", null)
+            .range(from, to)
+      );
+      if (erroPendentes) throw new Error("Erro ao ler as transações pendentes.");
+      if (pendentes.length === 0) {
         avisar({ tipo: "sucesso", texto: "Nenhuma transação pendente para essa bandeira/modalidade." });
         return;
       }
@@ -1056,62 +1207,130 @@ export default function ConciliacaoCartaoPage() {
               <label className="block text-[11px] font-semibold text-[var(--color-text-muted)] mb-1">Até</label>
               <input type="date" value={filtroDataFim} onChange={(e) => setFiltroDataFim(e.target.value)} className="px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-xs" />
             </div>
+            <div className="flex-1 min-w-[180px]">
+              <label className="block text-[11px] font-semibold text-[var(--color-text-muted)] mb-1">Buscar</label>
+              <input
+                value={buscaTransacoes}
+                onChange={(e) => setBuscaTransacoes(e.target.value)}
+                placeholder="valor, comprovante, dia..."
+                className="w-full px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-xs"
+              />
+            </div>
           </div>
 
-          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
-            {carregandoTransacoes ? (
-              <div className="skeleton h-32 rounded-xl m-4" />
-            ) : transacoes.length === 0 ? (
-              <EmptyState variant="search" title="Nenhuma transação encontrada" description="Importe um relatório na aba Importar ou ajuste os filtros." compact />
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="border-b border-[var(--color-border)] text-left text-[var(--color-text-muted)]">
-                      <th className="px-3 py-2.5 font-semibold">Data/hora</th>
-                      <th className="px-3 py-2.5 font-semibold">Origem</th>
-                      <th className="px-3 py-2.5 font-semibold">Bandeira</th>
-                      <th className="px-3 py-2.5 font-semibold">Modalidade</th>
-                      <th className="px-3 py-2.5 font-semibold">Comprovante</th>
-                      <th className="px-3 py-2.5 font-semibold text-right">Bruto</th>
-                      <th className="px-3 py-2.5 font-semibold text-right">Taxa</th>
-                      <th className="px-3 py-2.5 font-semibold text-right">Líquido</th>
-                      <th className="px-3 py-2.5 font-semibold">Previsão</th>
-                      <th className="px-3 py-2.5 font-semibold">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {transacoes.map((t) => {
-                      const badge = badgeStatusTransacao(t.status_transacao);
-                      const divergeDia = t.data_prevista_calculada && t.data_prevista_pagamento && t.data_prevista_calculada !== t.data_prevista_pagamento;
-                      return (
-                        <tr key={t.id} className="border-b border-[var(--color-border)] last:border-0">
-                          <td className="px-3 py-2 whitespace-nowrap">{formatarDataHora(t.data_hora_venda)}</td>
-                          <td className="px-3 py-2">{LABEL_ORIGEM[t.origem_planilha]}</td>
-                          <td className="px-3 py-2">{t.bandeira}</td>
-                          <td className="px-3 py-2">{LABEL_MODALIDADE[t.modalidade]}</td>
-                          <td className="px-3 py-2 whitespace-nowrap">{t.numero_comprovante ?? "—"}</td>
-                          <td className="px-3 py-2 text-right">{formatarMoeda(t.valor_bruto)}</td>
-                          <td className="px-3 py-2 text-right text-[var(--color-text-muted)]">{t.valor_taxa !== null ? formatarMoeda(t.valor_taxa) : "—"}</td>
-                          <td className="px-3 py-2 text-right font-medium">{t.valor_liquido !== null ? formatarMoeda(t.valor_liquido) : "—"}</td>
-                          <td className="px-3 py-2 whitespace-nowrap" title={divergeDia ? `Nosso cálculo: ${formatarData(t.data_prevista_calculada)}` : undefined}>
-                            {formatarData(t.data_prevista_pagamento)}
-                            {divergeDia && <span className="ml-1 text-amber-600">⚠</span>}
-                          </td>
-                          <td className="px-3 py-2">
-                            <span className={`px-2 py-0.5 rounded-full border text-[10px] font-semibold whitespace-nowrap ${badge.classe}`}>{badge.label}</span>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-                {transacoes.length >= LIMITE_LINHAS && (
-                  <p className="px-4 py-2 text-[11px] text-amber-700 bg-amber-50">
-                    Mostrando apenas as últimas {LIMITE_LINHAS} transações — refine os filtros pra ver um período específico.
-                  </p>
-                )}
+          {transacoesFiltradas.length > 0 && (
+            <div className="flex items-center justify-between text-[11px] text-[var(--color-text-muted)] px-1">
+              <span>
+                {transacoesFiltradas.length} transação(ões) em {gruposPorDia.size} dia(s)
+                {gruposPorDia.size > diasVisiveis && ` — mostrando os ${diasVisiveis} mais recentes`}
+              </span>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setDiasExpandidos(new Set([...gruposPorDia.keys()].slice(0, diasVisiveis)))}
+                  className="underline hover:text-[var(--color-text)]"
+                >
+                  Expandir visíveis
+                </button>
+                <button onClick={() => setDiasExpandidos(new Set())} className="underline hover:text-[var(--color-text)]">
+                  Recolher tudo
+                </button>
               </div>
+            </div>
+          )}
+
+          <div className="space-y-2">
+            {carregandoTransacoes ? (
+              <div className="skeleton h-32 rounded-xl" />
+            ) : transacoesFiltradas.length === 0 ? (
+              <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
+                <EmptyState variant="search" title="Nenhuma transação encontrada" description="Importe um relatório na aba Importar ou ajuste os filtros/busca." compact />
+              </div>
+            ) : (
+              [...gruposPorDia.entries()].slice(0, diasVisiveis).map(([dia, doDia]) => {
+                const aberto = diasExpandidos.has(dia);
+                const totalBruto = doDia.reduce((s, t) => s + t.valor_bruto, 0);
+                const totalLiquido = doDia.reduce((s, t) => s + (t.valor_liquido ?? 0), 0);
+                return (
+                  <div key={dia} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
+                    <button
+                      onClick={() => alternarDia(dia)}
+                      className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left hover:bg-[var(--hover-bg)]"
+                    >
+                      <span className="flex items-center gap-2 text-sm font-semibold">
+                        <span className={`inline-block transition-transform ${aberto ? "rotate-90" : ""}`}>▸</span>
+                        {formatarData(dia)}
+                        <span className="font-normal text-[var(--color-text-muted)]">({doDia.length} transação(ões))</span>
+                      </span>
+                      <span className="flex gap-4 text-xs text-[var(--color-text-muted)]">
+                        <span>
+                          Bruto: <strong className="text-[var(--color-text)]">{formatarMoeda(totalBruto)}</strong>
+                        </span>
+                        <span>
+                          Líquido: <strong className="text-[var(--color-text)]">{formatarMoeda(totalLiquido)}</strong>
+                        </span>
+                      </span>
+                    </button>
+                    {aberto && (
+                      <div className="overflow-x-auto border-t border-[var(--color-border)]">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="border-b border-[var(--color-border)] text-left text-[var(--color-text-muted)]">
+                              <th className="px-3 py-2.5 font-semibold">Hora</th>
+                              <th className="px-3 py-2.5 font-semibold">Origem</th>
+                              <th className="px-3 py-2.5 font-semibold">Bandeira</th>
+                              <th className="px-3 py-2.5 font-semibold">Modalidade</th>
+                              <th className="px-3 py-2.5 font-semibold">Comprovante</th>
+                              <th className="px-3 py-2.5 font-semibold text-right">Bruto</th>
+                              <th className="px-3 py-2.5 font-semibold text-right">Taxa</th>
+                              <th className="px-3 py-2.5 font-semibold text-right">Líquido</th>
+                              <th className="px-3 py-2.5 font-semibold">Previsão</th>
+                              <th className="px-3 py-2.5 font-semibold">Status</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {doDia.map((t) => {
+                              const badge = badgeStatusTransacao(t.status_transacao);
+                              const divergeDia = t.data_prevista_calculada && t.data_prevista_pagamento && t.data_prevista_calculada !== t.data_prevista_pagamento;
+                              return (
+                                <tr key={t.id} className="border-b border-[var(--color-border)] last:border-0">
+                                  <td className="px-3 py-2 whitespace-nowrap">{formatarDataHora(t.data_hora_venda).split(" ")[1] ?? formatarDataHora(t.data_hora_venda)}</td>
+                                  <td className="px-3 py-2">{LABEL_ORIGEM[t.origem_planilha]}</td>
+                                  <td className="px-3 py-2">{t.bandeira}</td>
+                                  <td className="px-3 py-2">{LABEL_MODALIDADE[t.modalidade]}</td>
+                                  <td className="px-3 py-2 whitespace-nowrap">{t.numero_comprovante ?? "—"}</td>
+                                  <td className="px-3 py-2 text-right">{formatarMoeda(t.valor_bruto)}</td>
+                                  <td className="px-3 py-2 text-right text-[var(--color-text-muted)]">{t.valor_taxa !== null ? formatarMoeda(t.valor_taxa) : "—"}</td>
+                                  <td className="px-3 py-2 text-right font-medium">{t.valor_liquido !== null ? formatarMoeda(t.valor_liquido) : "—"}</td>
+                                  <td className="px-3 py-2 whitespace-nowrap" title={divergeDia ? `Nosso cálculo: ${formatarData(t.data_prevista_calculada)}` : undefined}>
+                                    {formatarData(t.data_prevista_pagamento)}
+                                    {divergeDia && <span className="ml-1 text-amber-600">⚠</span>}
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <span className={`px-2 py-0.5 rounded-full border text-[10px] font-semibold whitespace-nowrap ${badge.classe}`}>{badge.label}</span>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            )}
+            {gruposPorDia.size > diasVisiveis && (
+              <button
+                onClick={() => setDiasVisiveis((n) => n + DIAS_POR_PAGINA)}
+                className="w-full py-2.5 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] text-xs font-semibold hover:bg-[var(--hover-bg)]"
+              >
+                Carregar mais {Math.min(DIAS_POR_PAGINA, gruposPorDia.size - diasVisiveis)} dia(s) ({gruposPorDia.size - diasVisiveis} restante(s))
+              </button>
+            )}
+            {transacoesTruncadas && (
+              <p className="px-4 py-2 text-[11px] text-amber-700 bg-amber-50 rounded-xl">
+                Volume muito grande — a lista pode estar incompleta. Refine os filtros pra ver um período específico.
+              </p>
             )}
           </div>
         </div>
@@ -1168,107 +1387,149 @@ export default function ConciliacaoCartaoPage() {
             </div>
           </div>
 
-          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
-            {carregandoConciliacoes ? (
-              <div className="skeleton h-32 rounded-xl m-4" />
-            ) : conciliacoesFiltradas.length === 0 ? (
+          {carregandoConciliacoes ? (
+            <div className="skeleton h-32 rounded-xl" />
+          ) : conciliacoesFiltradas.length === 0 ? (
+            <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
               <EmptyState
                 variant="search"
                 title="Nenhuma conciliação calculada ainda"
                 description="Importe as transações e clique em Recalcular conciliação."
                 compact
               />
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="border-b border-[var(--color-border)] text-left text-[var(--color-text-muted)]">
-                      <th className="px-3 py-2.5 font-semibold">Data prevista</th>
-                      <th className="px-3 py-2.5 font-semibold">Vendas de</th>
-                      <th className="px-3 py-2.5 font-semibold">Bandeira</th>
-                      <th className="px-3 py-2.5 font-semibold">Modalidade</th>
-                      <th className="px-3 py-2.5 font-semibold text-right">Bruto</th>
-                      <th className="px-3 py-2.5 font-semibold text-right">Líquido previsto</th>
-                      <th className="px-3 py-2.5 font-semibold text-right">Recebido</th>
-                      <th className="px-3 py-2.5 font-semibold text-right">Diferença</th>
-                      <th className="px-3 py-2.5 font-semibold">Lançamento no extrato</th>
-                      <th className="px-3 py-2.5 font-semibold">Status</th>
-                      {!isReadOnly && <th className="px-3 py-2.5 font-semibold">Ações</th>}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {conciliacoesFiltradas.map((c) => {
-                      const badge = badgeStatusConciliacao(c.status);
-                      const lancamento = c.extrato_lancamento_id ? lancamentosInfo.get(c.extrato_lancamento_id) : null;
-                      const podeDescartar = ["divergente", "sem_deposito_encontrado", "multiplos_candidatos"].includes(c.status);
-                      return (
-                        <tr key={c.id} className={`border-b border-[var(--color-border)] last:border-0 ${c.status === "descartada" ? "opacity-50" : ""}`}>
-                          <td className="px-3 py-2 whitespace-nowrap">{formatarData(c.data_prevista)}</td>
-                          <td className="px-3 py-2 whitespace-nowrap text-[var(--color-text-muted)]">
-                            {c.data_venda_inicio === c.data_venda_fim || !c.data_venda_fim
-                              ? formatarData(c.data_venda_inicio)
-                              : `${formatarData(c.data_venda_inicio)} – ${formatarData(c.data_venda_fim)}`}
-                          </td>
-                          <td className="px-3 py-2">{c.bandeira}</td>
-                          <td className="px-3 py-2">{LABEL_MODALIDADE[c.modalidade] ?? c.modalidade}</td>
-                          <td className="px-3 py-2 text-right">{c.valor_bruto_previsto !== null ? formatarMoeda(c.valor_bruto_previsto) : "—"}</td>
-                          <td className="px-3 py-2 text-right">{formatarMoeda(c.valor_previsto)}</td>
-                          <td className="px-3 py-2 text-right">{c.valor_recebido !== null ? formatarMoeda(c.valor_recebido) : "—"}</td>
-                          <td className={`px-3 py-2 text-right font-medium ${c.diferenca && c.diferenca < 0 ? "text-red-700" : c.diferenca && c.diferenca > 0 ? "text-amber-700" : ""}`}>
-                            {c.diferenca !== null ? formatarMoeda(c.diferenca) : "—"}
-                          </td>
-                          <td className="px-3 py-2">
-                            {c.status === "multiplos_candidatos" && (c.candidatos_ids?.length ?? 0) > 0 ? (
-                              <select
-                                disabled={isReadOnly}
-                                defaultValue=""
-                                onChange={(e) => e.target.value && handleEscolherManual(c.id, e.target.value)}
-                                className="px-2 py-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-[11px]"
-                              >
-                                <option value="" disabled>
-                                  Escolher lançamento...
-                                </option>
-                                {(c.candidatos_ids ?? []).map((id) => {
-                                  const info = lancamentosInfo.get(id);
-                                  if (!info) return null;
-                                  return (
-                                    <option key={id} value={id}>
-                                      {formatarData(info.data_lancamento)} · {formatarMoeda(info.valor)} · {info.descricao.slice(0, 30)}
-                                    </option>
-                                  );
-                                })}
-                              </select>
-                            ) : lancamento ? (
-                              <span title={lancamento.descricao}>
-                                {formatarData(lancamento.data_lancamento)} · {formatarMoeda(lancamento.valor)}
-                              </span>
-                            ) : (
-                              "—"
-                            )}
-                          </td>
-                          <td className="px-3 py-2">
-                            <span className={`px-2 py-0.5 rounded-full border text-[10px] font-semibold whitespace-nowrap ${badge.classe}`}>{badge.label}</span>
-                          </td>
-                          {!isReadOnly && (
-                            <td className="px-3 py-2">
-                              {podeDescartar && (
-                                <button
-                                  onClick={() => handleDescartar(c.id)}
-                                  className="px-2 py-1 rounded-lg border border-[var(--color-border)] text-[11px] font-medium hover:bg-[var(--hover-bg)] whitespace-nowrap"
-                                >
-                                  Descartar
-                                </button>
-                              )}
-                            </td>
-                          )}
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {gruposPorMes.map((grupo) => {
+                const aberto = mesesExpandidos.has(grupo.chave);
+                const badgeMes = BADGE_STATUS_MES[grupo.status];
+                return (
+                  <div key={grupo.chave} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
+                    <button
+                      onClick={() =>
+                        setMesesExpandidos((atual) => {
+                          const novo = new Set(atual);
+                          if (novo.has(grupo.chave)) novo.delete(grupo.chave);
+                          else novo.add(grupo.chave);
+                          return novo;
+                        })
+                      }
+                      className="w-full flex flex-wrap items-center justify-between gap-3 px-4 py-3 text-left hover:bg-[var(--hover-bg)]"
+                    >
+                      <span className="flex items-center gap-2 text-sm font-semibold">
+                        <span className={`inline-block transition-transform ${aberto ? "rotate-90" : ""}`}>▸</span>
+                        {formatarMesAno(grupo.chave)}
+                        <span className={`px-2 py-0.5 rounded-full border text-[10px] font-semibold whitespace-nowrap ${badgeMes.classe}`}>{badgeMes.label}</span>
+                      </span>
+                      <span className="flex gap-4 text-xs text-[var(--color-text-muted)]">
+                        <span>
+                          Previsto: <strong className="text-[var(--color-text)]">{formatarMoeda(grupo.totalPrevisto)}</strong>
+                        </span>
+                        <span>
+                          Recebido: <strong className="text-[var(--color-text)]">{formatarMoeda(grupo.totalRecebido)}</strong>
+                        </span>
+                        {grupo.totalSemDeposito > 0 && (
+                          <span>
+                            Sem depósito: <strong className="text-red-700">{formatarMoeda(grupo.totalSemDeposito)}</strong>
+                          </span>
+                        )}
+                      </span>
+                    </button>
+                    {aberto && (
+                      <div className="overflow-x-auto border-t border-[var(--color-border)]">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="border-b border-[var(--color-border)] text-left text-[var(--color-text-muted)]">
+                              <th className="px-3 py-2.5 font-semibold">Data prevista</th>
+                              <th className="px-3 py-2.5 font-semibold">Vendas de</th>
+                              <th className="px-3 py-2.5 font-semibold">Bandeira</th>
+                              <th className="px-3 py-2.5 font-semibold">Modalidade</th>
+                              <th className="px-3 py-2.5 font-semibold text-right">Bruto</th>
+                              <th className="px-3 py-2.5 font-semibold text-right">Líquido previsto</th>
+                              <th className="px-3 py-2.5 font-semibold text-right">Recebido</th>
+                              <th className="px-3 py-2.5 font-semibold text-right">Diferença</th>
+                              <th className="px-3 py-2.5 font-semibold">Lançamento no extrato</th>
+                              <th className="px-3 py-2.5 font-semibold">Status</th>
+                              {!isReadOnly && <th className="px-3 py-2.5 font-semibold">Ações</th>}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {grupo.linhas.map((c) => {
+                              const badge = badgeStatusConciliacao(c.status);
+                              const lancamento = c.extrato_lancamento_id ? lancamentosInfo.get(c.extrato_lancamento_id) : null;
+                              const podeDescartar = ["divergente", "sem_deposito_encontrado", "multiplos_candidatos"].includes(c.status);
+                              return (
+                                <tr key={c.id} className={`border-b border-[var(--color-border)] last:border-0 ${c.status === "descartada" ? "opacity-50" : ""}`}>
+                                  <td className="px-3 py-2 whitespace-nowrap">{formatarData(c.data_prevista)}</td>
+                                  <td className="px-3 py-2 whitespace-nowrap text-[var(--color-text-muted)]">
+                                    {c.data_venda_inicio === c.data_venda_fim || !c.data_venda_fim
+                                      ? formatarData(c.data_venda_inicio)
+                                      : `${formatarData(c.data_venda_inicio)} – ${formatarData(c.data_venda_fim)}`}
+                                  </td>
+                                  <td className="px-3 py-2">{c.bandeira}</td>
+                                  <td className="px-3 py-2">{LABEL_MODALIDADE[c.modalidade] ?? c.modalidade}</td>
+                                  <td className="px-3 py-2 text-right">{c.valor_bruto_previsto !== null ? formatarMoeda(c.valor_bruto_previsto) : "—"}</td>
+                                  <td className="px-3 py-2 text-right">{formatarMoeda(c.valor_previsto)}</td>
+                                  <td className="px-3 py-2 text-right">{c.valor_recebido !== null ? formatarMoeda(c.valor_recebido) : "—"}</td>
+                                  <td className={`px-3 py-2 text-right font-medium ${c.diferenca && c.diferenca < 0 ? "text-red-700" : c.diferenca && c.diferenca > 0 ? "text-amber-700" : ""}`}>
+                                    {c.diferenca !== null ? formatarMoeda(c.diferenca) : "—"}
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    {c.status === "multiplos_candidatos" && (c.candidatos_ids?.length ?? 0) > 0 ? (
+                                      <select
+                                        disabled={isReadOnly}
+                                        defaultValue=""
+                                        onChange={(e) => e.target.value && handleEscolherManual(c.id, e.target.value)}
+                                        className="px-2 py-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-[11px]"
+                                      >
+                                        <option value="" disabled>
+                                          Escolher lançamento...
+                                        </option>
+                                        {(c.candidatos_ids ?? []).map((id) => {
+                                          const info = lancamentosInfo.get(id);
+                                          if (!info) return null;
+                                          return (
+                                            <option key={id} value={id}>
+                                              {formatarData(info.data_lancamento)} · {formatarMoeda(info.valor)} · {info.descricao.slice(0, 30)}
+                                            </option>
+                                          );
+                                        })}
+                                      </select>
+                                    ) : lancamento ? (
+                                      <span title={lancamento.descricao}>
+                                        {formatarData(lancamento.data_lancamento)} · {formatarMoeda(lancamento.valor)}
+                                      </span>
+                                    ) : (
+                                      "—"
+                                    )}
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <span className={`px-2 py-0.5 rounded-full border text-[10px] font-semibold whitespace-nowrap ${badge.classe}`}>{badge.label}</span>
+                                  </td>
+                                  {!isReadOnly && (
+                                    <td className="px-3 py-2">
+                                      {podeDescartar && (
+                                        <button
+                                          onClick={() => handleDescartar(c.id)}
+                                          className="px-2 py-1 rounded-lg border border-[var(--color-border)] text-[11px] font-medium hover:bg-[var(--hover-bg)] whitespace-nowrap"
+                                        >
+                                          Descartar
+                                        </button>
+                                      )}
+                                    </td>
+                                  )}
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
