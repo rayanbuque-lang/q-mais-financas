@@ -1521,6 +1521,42 @@ export default function ExtratoPage() {
 
   // ---------- Importar ----------
 
+  // Lê só o suficiente do arquivo (ACCTID) pra tentar pré-selecionar a conta
+  // certa no dropdown assim que o usuário escolhe o arquivo -- nunca troca uma
+  // seleção manual já feita por acerto de "nenhuma conta bate" ou "mais de uma
+  // conta bate" (ambiguidade real não deve decidir sozinha por engano), e
+  // qualquer arquivo ilegível aqui simplesmente não pré-seleciona nada: o erro
+  // detalhado de verdade continua vindo do handleImportar ao clicar em Importar.
+  async function handleArquivoSelecionado(file: File | null) {
+    setArquivo(file);
+    if (!file) return;
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const texto = decodificarOfx(bytes, file.name);
+      const parsed = parseOfx(texto, file.name);
+      const acctIdArquivo = (parsed.conta.acctId ?? "").replace(/\D/g, "");
+      if (!acctIdArquivo) return;
+
+      const encontradas = contas.filter((c) => {
+        const numeroCadastrado = (c.conta ?? "").replace(/\D/g, "");
+        return numeroCadastrado.length > 0 && numeroCadastrado === acctIdArquivo;
+      });
+      if (encontradas.length === 1) {
+        setContaImportId(encontradas[0].id);
+        setMensagem({ tipo: "sucesso", texto: `Conta detectada automaticamente pelo arquivo: ${nomeConta(encontradas[0])}.` });
+      } else if (encontradas.length === 0) {
+        setMensagem({
+          tipo: "erro",
+          texto: "Não encontrei nenhuma conta cadastrada com o número deste arquivo — selecione manualmente ou cadastre uma conta nova.",
+        });
+      }
+      // Mais de uma conta cadastrada com o mesmo número: não deveria acontecer,
+      // mas por segurança não decide sozinho -- deixa a seleção manual como está.
+    } catch {
+      // Arquivo ilegível ou corrompido: deixa em branco, sem pré-selecionar nada.
+    }
+  }
+
   async function handleCriarConta() {
     if (!novaContaApelido.trim() && !novaContaNumero.trim()) {
       setMensagem({ tipo: "erro", texto: "Informe ao menos o apelido ou o número da conta." });
@@ -2389,7 +2425,7 @@ export default function ExtratoPage() {
               type="file"
               accept=".ofx"
               disabled={!podeEscrever}
-              onChange={(e) => setArquivo(e.target.files?.[0] ?? null)}
+              onChange={(e) => handleArquivoSelecionado(e.target.files?.[0] ?? null)}
               className="w-full text-sm mb-4 file:mr-3 file:px-3 file:py-2 file:rounded-lg file:border-0 file:bg-emerald-50 file:text-emerald-700 file:text-xs file:font-semibold"
             />
 

@@ -64,6 +64,21 @@ function detectarEncoding(headerAscii: string): "utf-8" | "iso-8859-1" {
  * quanto no servidor.
  */
 export function decodificarOfx(bytes: Uint8Array, nomeArquivo: string): string {
+  // Alguns bancos (confirmado no export do Banco Inter) declaram
+  // ENCODING:USASCII/CHARSET:1252 no cabeçalho mas gravam o corpo em UTF-8 de
+  // verdade (nomes com acento viram bytes multi-byte válidos). ISO-8859-1
+  // aceita QUALQUER byte -- então "seguir o cabeçalho" nesse caso decodificaria
+  // errado sem erro nenhum, corrompendo nome (ex.: "Gonçalves" -> "GonÃ§alves").
+  // Testamos UTF-8 estrito primeiro: texto legado ISO-8859-1/CP1252 com acento
+  // quase nunca forma sequências UTF-8 válidas por coincidência, então isso é
+  // seguro na prática e não muda o comportamento pro Santander (que é
+  // ISO-8859-1 de verdade e falha nesse teste, caindo no fallback abaixo).
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    // não é utf-8 válido -- segue o que o cabeçalho declarar
+  }
+
   const head = new TextDecoder("iso-8859-1").decode(bytes.subarray(0, 512));
   const encoding = detectarEncoding(head);
   try {
