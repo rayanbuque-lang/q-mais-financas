@@ -702,8 +702,13 @@ async function lancarMovimentacaoDireta(
   // Pix recebido também precisa ser somado ao Fechamento de Caixa do dia
   // (agrupado por banco) -- se o dia já estiver fechado lá, bloqueia tudo
   // ANTES de escrever qualquer coisa, mesma filosofia do mês fechado.
+  //
+  // Exceção: "Compras à Prazo" é um Pix que chegou na conta, mas é o
+  // recebimento de uma venda a prazo já reconhecida antes -- não é dinheiro
+  // novo do caixa do dia, então não soma em pix_santander/pix_inter (decisão
+  // explícita: só entra em Movimentações, o Fechamento de Caixa não muda).
   let campoPix: "pix_santander" | "pix_inter" | null = null;
-  if (tipo === "entrada" && ehPixRecebido(lancamento.descricao_normalizada)) {
+  if (tipo === "entrada" && categoriaNome !== "Compras à Prazo" && ehPixRecebido(lancamento.descricao_normalizada)) {
     const { data: contaExtrato } = await supabase.from("extrato_conta").select("banco").eq("id", lancamento.conta_id).single();
     campoPix = bancoParaCampoPix(contaExtrato?.banco ?? "");
     if (campoPix && (await verificarDiaFechadoCaixa(lancamento.data_lancamento))) {
