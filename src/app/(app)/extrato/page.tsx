@@ -548,6 +548,11 @@ function ehPagamentoDeBoleto(descricaoNormalizada: string): boolean {
   return descricaoNormalizada.includes(PADRAO_BOLETO);
 }
 
+// Únicas categorias que representam "Pix genérico do dia" pra fins de
+// Fechamento de Caixa -- uma por banco. Qualquer outra categoria (mesmo que
+// a descrição também comece com "Pix recebido") soma só em Movimentações.
+const CATEGORIAS_PIX_CAIXA = new Set(["Pix Santander", "Pix Inter"]);
+
 // "Boleto que não achou resolução nenhuma": nem baixa (conta_pagar_id), nem
 // movimentação, nem sinalização de ambiguidade/duplicata pra resolver, e não
 // foi descartado. É o único estado em que faz sentido oferecer "Cadastrar
@@ -703,12 +708,15 @@ async function lancarMovimentacaoDireta(
   // (agrupado por banco) -- se o dia já estiver fechado lá, bloqueia tudo
   // ANTES de escrever qualquer coisa, mesma filosofia do mês fechado.
   //
-  // Exceção: "Compras à Prazo" é um Pix que chegou na conta, mas é o
-  // recebimento de uma venda a prazo já reconhecida antes -- não é dinheiro
-  // novo do caixa do dia, então não soma em pix_santander/pix_inter (decisão
-  // explícita: só entra em Movimentações, o Fechamento de Caixa não muda).
+  // Só soma quando a categoria final é o "Pix genérico" do próprio banco
+  // (CATEGORIAS_PIX_CAIXA) -- decisão explícita: qualquer outra categoria
+  // (Cartão/VR, Vencidos, Compras à Prazo, Repasse Tuna, Prefeitura
+  // Municipal, ou qualquer reclassificação manual) entra só em
+  // Movimentações. O texto "Pix recebido" sozinho não basta mais: várias
+  // dessas categorias também chegam como Pix na conta, mas não representam
+  // dinheiro novo do caixa do dia (ou já são contadas em outro lugar).
   let campoPix: "pix_santander" | "pix_inter" | null = null;
-  if (tipo === "entrada" && categoriaNome !== "Compras à Prazo" && ehPixRecebido(lancamento.descricao_normalizada)) {
+  if (tipo === "entrada" && CATEGORIAS_PIX_CAIXA.has(categoriaNome) && ehPixRecebido(lancamento.descricao_normalizada)) {
     const { data: contaExtrato } = await supabase.from("extrato_conta").select("banco").eq("id", lancamento.conta_id).single();
     campoPix = bancoParaCampoPix(contaExtrato?.banco ?? "");
     if (campoPix && (await verificarDiaFechadoCaixa(lancamento.data_lancamento))) {
