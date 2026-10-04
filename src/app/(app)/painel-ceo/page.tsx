@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { fetchAllRows } from "@/lib/supabase/fetch-all";
+import { AnaliseInteligentePainel } from "@/components/analise-inteligente-painel";
 
 const mesesNomes = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
 const diasSemana = ["Dom","Seg","Ter","Qua","Qui","Sex","Sáb"];
@@ -14,10 +15,6 @@ interface MovResumo { tipo: string; valor: number; categoria_id: string; data: s
 interface CatInfo { id: string; nome: string; }
 interface ResumoAnterior { totalVendido: number; totalSaidas: number; resultado: number; }
 
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
-}
-
 export default function PainelCeoPage() {
   const router = useRouter();
   const [acessoPermitido, setAcessoPermitido] = useState<boolean | null>(null);
@@ -26,8 +23,6 @@ export default function PainelCeoPage() {
   const [mes, setMes] = useState(new Date().getMonth() + 1);
   const [ano, setAno] = useState(new Date().getFullYear());
   const [loading, setLoading] = useState(false);
-  const [analiseIA, setAnaliseIA] = useState("");
-  const [carregandoIA, setCarregandoIA] = useState(false);
 
   const [caixas, setCaixas] = useState<DiaResumo[]>([]);
   const [meta, setMeta] = useState<Meta>({ meta_mensal: 0, meta_diaria: 0 });
@@ -135,7 +130,7 @@ export default function PainelCeoPage() {
     setLoading(false);
   }
 
-  useEffect(() => { if (acessoPermitido) carregarDados(); setAnaliseIA(""); }, [mes, ano, acessoPermitido]);
+  useEffect(() => { if (acessoPermitido) carregarDados(); }, [mes, ano, acessoPermitido]);
 
   async function salvarMeta() {
     const mm = parseFloat(metaMensal.replace(",", "."));
@@ -153,59 +148,6 @@ export default function PainelCeoPage() {
     }
     setMeta({ meta_mensal: mm, meta_diaria: md });
     setMetaEditando(false);
-  }
-
-  async function gerarAnalise() {
-    setCarregandoIA(true);
-    setAnaliseIA("");
-
-    const totalVendido = caixas.reduce((a, c) => a + c.totalVendas, 0);
-    const mediaDiaria = caixas.length > 0 ? totalVendido / caixas.length : 0;
-    const melhorDia = caixas.length > 0 ? caixas.reduce((a, b) => a.totalVendas > b.totalVendas ? a : b) : null;
-    const piorDia = caixas.length > 0 ? caixas.reduce((a, b) => a.totalVendas < b.totalVendas ? a : b) : null;
-    const totalDinheiro = caixas.reduce((a, c) => a + c.dinheiro, 0);
-    const totalCartao = caixas.reduce((a, c) => a + c.cartao, 0);
-    const totalPix = caixas.reduce((a, c) => a + c.pix, 0);
-    const totalOutros = caixas.reduce((a, c) => a + c.outros, 0);
-    const totalDespesas = movs.filter(m => m.tipo === "saida").reduce((a, m) => a + m.valor, 0);
-    const catDespesas: Record<string, number> = {};
-    const catIdToNome: Record<string, string> = {};
-    cats.forEach(c => catIdToNome[c.id] = c.nome);
-    movs.filter(m => m.tipo === "saida").forEach(m => {
-      const nome = catIdToNome[m.categoria_id] || "Outros";
-      catDespesas[nome] = (catDespesas[nome] || 0) + m.valor;
-    });
-    const topDespesa = Object.entries(catDespesas).sort((a, b) => b[1] - a[1])[0];
-    const metaAtingida = meta.meta_mensal > 0 ? ((totalVendido / meta.meta_mensal) * 100).toFixed(1) : "N/A";
-
-    const prompt = `Analise os dados financeiros de um mercado para ${mesesNomes[mes - 1]}/${ano} e dê insights estratégicos:
-
-- Total vendido: R$ ${totalVendido.toFixed(2)}
-- Média diária: R$ ${mediaDiaria.toFixed(2)}
-- Meta mensal: R$ ${meta.meta_mensal.toFixed(2)} (${metaAtingida}% atingida)
-- Meta diária: R$ ${meta.meta_diaria.toFixed(2)}
-- Melhor dia: ${melhorDia ? `${melhorDia.dia} (${melhorDia.semana}) - R$ ${melhorDia.totalVendas.toFixed(2)}` : "N/A"}
-- Pior dia: ${piorDia ? `${piorDia.dia} (${piorDia.semana}) - R$ ${piorDia.totalVendas.toFixed(2)}` : "N/A"}
-- Dias com dados: ${caixas.length}, Dias fechados: ${diasFechados}
-- Formas de pagamento: Dinheiro R$ ${totalDinheiro.toFixed(2)}, Cartão R$ ${totalCartao.toFixed(2)}, Pix R$ ${totalPix.toFixed(2)}, Outros R$ ${totalOutros.toFixed(2)}
-- Despesas totais: R$ ${totalDespesas.toFixed(2)}
-- Maior despesa: ${topDespesa ? `${topDespesa[0]} - R$ ${topDespesa[1].toFixed(2)}` : "N/A"}
-- Contas pendentes: ${contasPendentes}, Contas vencidas: ${contasVencidas}
-
-Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Seja direto, use bullet points. Foque em: performance vs meta, padrão de vendas por dia da semana, mix de pagamento, controle de despesas, e oportunidades de melhoria.`;
-
-    try {
-      const res = await fetch("/api/analise", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt }),
-      });
-      const data = await res.json();
-      setAnaliseIA(data.result || "Não foi possível gerar a análise.");
-    } catch {
-      setAnaliseIA("Erro ao conectar com a IA. Verifique se a chave OpenAI está configurada.");
-    }
-    setCarregandoIA(false);
   }
 
   function exportarPDF() {
@@ -269,11 +211,6 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
           <div style="padding: 8px 12px; border-radius: 8px; background: ${contasVencidas > 0 ? "var(--red-subtle)" : "var(--brand-subtle)"}; color: ${contasVencidas > 0 ? "var(--red)" : "var(--brand-strong)"}; font-size: 12px;">
             Contas Vencidas: ${contasVencidas} | Pendentes: ${contasPendentes} | Dias Conferidos: ${diasFechados}/${totalDiasComDados}
           </div>
-
-          ${analiseIA ? `
-          <h2>Análise Estratégica por IA</h2>
-          <div style="background: #f5f3ff; border: 1px solid #ddd6fe; border-radius: 8px; padding: 16px; font-size: 12px; line-height: 1.6; white-space: pre-wrap;">${escapeHtml(analiseIA)}</div>
-          ` : ""}
 
           <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0 12px;">
           <p style="font-size: 10px; color: #9ca3af; text-align: center;">
@@ -354,9 +291,6 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
         </div>
         <div className="flex gap-2 flex-wrap">
           <button onClick={exportarPDF} className="px-4 py-3 bg-gradient-to-r from-gray-700 to-gray-600 text-white font-semibold rounded-xl hover:from-gray-800 hover:to-gray-700 transition-all text-sm shadow-md">Imprimir / PDF</button>
-          <button onClick={gerarAnalise} disabled={carregandoIA} className="px-4 py-3 bg-gradient-to-r from-purple-600 to-purple-500 text-white font-semibold rounded-xl hover:from-purple-700 hover:to-purple-600 transition-all text-sm shadow-md disabled:opacity-50">
-            {carregandoIA ? "Analisando..." : "Análise IA"}
-          </button>
         </div>
       </div>
 
@@ -507,17 +441,9 @@ Dê 5-7 insights práticos e ações recomendadas para melhorar o resultado. Sej
           Vencidas e Pendentes consideram apenas contas com vencimento em {mesesNomes[mes - 1]}/{ano} — não é o total geral de pendências da empresa.
         </p>
 
-        {/* Analise IA */}
-        {analiseIA && (
-          <div className="bg-gradient-to-br from-purple-50 to-indigo-50 border border-purple-200 rounded-2xl p-6 mb-6">
-            <div className="flex items-center gap-2 mb-4">
-              <span className="text-xl">🧠</span>
-              <h3 className="font-bold text-purple-800">Análise Estratégica por IA</h3>
-            </div>
-            <div className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{analiseIA}</div>
-          </div>
-        )}
       </div>
+
+      <AnaliseInteligentePainel />
     </div>
   );
 }

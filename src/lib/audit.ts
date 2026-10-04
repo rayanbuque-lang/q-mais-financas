@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/client";
 
 interface AuditParams {
-  acao: "criou" | "editou" | "excluiu" | "pagou" | "fechou" | "reabriu" | "recebeu" | "importou";
+  acao: "criou" | "editou" | "excluiu" | "pagou" | "fechou" | "reabriu" | "recebeu" | "importou" | "analisou";
   tabela: string;
   registroId?: string;
   dadosAnteriores?: Record<string, unknown> | null;
