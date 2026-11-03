@@ -1497,28 +1497,63 @@ export default function ExtratoPage() {
       // só uma parte, em silêncio.
       let revertidos = 0;
       let pulados = 0;
+      // Efeito financeiro já foi desfeito (movimentação/baixa removida), mas
+      // a linha de staging em si não saiu -- incidente real 2026-11-03:
+      // o delete() não tinha verificação nenhuma, contava como "revertido"
+      // mesmo que a linha continuasse ali (RLS, rede, ou a aba fechar no meio
+      // do loop). Fica como "falhaAoExcluir", não "revertido" -- e por não
+      // ter sido realmente excluída, ela aparece de novo na próxima consulta
+      // a esta importação, pronta pra um novo clique em "Desfazer" terminar o
+      // que ficou pela metade (desfazerEfeitosDoLancamento já é seguro de
+      // rodar de novo: lançamento sem movimentacao_id/conta_pagar_id cai
+      // direto em "ok", sem tentar desfazer o que já não existe mais).
+      let falhasAoExcluir = 0;
 
       for (const l of linhas) {
         const resultado = await desfazerEfeitosDoLancamento(l);
         if (resultado === "pulado") { pulados++; continue; }
-        await supabase.from("extrato_lancamento").delete().eq("id", l.id);
+        const { data: linhaExcluida, error: erroExcluir } = await supabase
+          .from("extrato_lancamento")
+          .delete()
+          .eq("id", l.id)
+          .select("id");
+        if (erroExcluir || !linhaExcluida || linhaExcluida.length === 0) {
+          falhasAoExcluir++;
+          continue;
+        }
         revertidos++;
       }
 
-      if (!loteTruncado && pulados === 0) {
+      // Confere contra o banco de verdade, não só os contadores desta
+      // execução: se a aba fechar ou a conexão cair no meio do loop, esta
+      // chamada nunca chega até aqui de qualquer jeito -- mas isso garante
+      // que só marca "descartada" quando REALMENTE não sobra nenhuma linha
+      // de staging desta importação, mesmo que um "Desfazer" anterior tenha
+      // ficado pela metade e deixado pulados/falhasAoExcluir de outra vez.
+      const { count: restantes } = await supabase
+        .from("extrato_lancamento")
+        .select("id", { count: "exact", head: true })
+        .eq("importacao_id", importacaoId);
+
+      if (!loteTruncado && (restantes ?? 0) === 0) {
         await supabase.from("extrato_importacao").update({ status: "descartada" }).eq("id", importacaoId);
       }
       await registrarLog({
         acao: "excluiu",
         tabela: "extrato_importacao",
         registroId: importacaoId,
-        detalhes: `Importação descartada: ${revertidos} revertido(s), ${pulados} não puderam ser desfeitos (mês/dia fechado ou erro)${loteTruncado ? " -- lote grande, clique em desfazer de novo pra continuar" : ""}`,
+        detalhes:
+          `Importação descartada: ${revertidos} revertido(s), ${pulados} não puderam ser desfeitos (mês/dia fechado ou erro)` +
+          (falhasAoExcluir > 0 ? `, ${falhasAoExcluir} com falha ao excluir a linha de staging` : "") +
+          (loteTruncado ? " -- lote grande, clique em desfazer de novo pra continuar" : "") +
+          ((restantes ?? 0) > 0 ? ` -- ${restantes} linha(s) ainda restam, importação continua pendente` : ""),
       });
       setMensagem({
-        tipo: pulados > 0 || loteTruncado ? "erro" : "sucesso",
+        tipo: pulados > 0 || falhasAoExcluir > 0 || loteTruncado ? "erro" : "sucesso",
         texto:
           `${revertidos} revertido(s)` +
           (pulados > 0 ? ` · ${pulados} não puderam ser desfeitos: mês/dia fechado ou erro — revise manualmente` : "") +
+          (falhasAoExcluir > 0 ? ` · ${falhasAoExcluir} desfeito(s) mas sem conseguir remover da lista — clique em "Desfazer" de novo pra terminar` : "") +
           (loteTruncado ? ` · lote grande demais pra desfazer de uma vez — clique em "Desfazer" de novo pra continuar` : ""),
       });
       await refrescarTudo();
