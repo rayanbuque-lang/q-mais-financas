@@ -888,7 +888,7 @@ export default function ExtratoPage() {
   const inputArquivoRef = useRef<HTMLInputElement>(null);
   const [arquivoPix, setArquivoPix] = useState<File | null>(null);
   const [importandoPix, setImportandoPix] = useState(false);
-  const [resumoImportacaoPix, setResumoImportacaoPix] = useState<{ lidas: number; novas: number; duplicadas: number; movimentacoesLancadas: number; movimentacoesMesFechado: number; movimentacoesFalharam: number; movimentacoesSinalIncompativel: number; movimentacoesCategoriaInativa: number; movimentacoesDiaFechadoCaixa: number; movimentacoesPixCaixaNaoSincronizado: number; avisos: string[] } | null>(null);
+  const [resumoImportacaoPix, setResumoImportacaoPix] = useState<{ lidas: number; novas: number; duplicadas: number; cobertos: number; movimentacoesLancadas: number; movimentacoesMesFechado: number; movimentacoesFalharam: number; movimentacoesSinalIncompativel: number; movimentacoesCategoriaInativa: number; movimentacoesDiaFechadoCaixa: number; movimentacoesPixCaixaNaoSincronizado: number; avisos: string[] } | null>(null);
   const inputArquivoPixRef = useRef<HTMLInputElement>(null);
 
   // Lançamentos
@@ -1877,7 +1877,56 @@ export default function ExtratoPage() {
 
       const { data: { user } } = await supabase.auth.getUser();
 
-      const linhas = parsed.linhas.map((l) => ({
+      // Mesma proteção que o import do .ofx já tem, na direção oposta: evita
+      // duplicar aqui um Pix que o extrato bancário já trouxe antes (nome real
+      // do relatório Pix vs CPF/CNPJ mascarado do .ofx -- textos incompatíveis
+      // entre si, então a chave natural do upsert abaixo nunca pega isso
+      // sozinha). Faltava essa direção -- confirmado incidente real
+      // 2026-11-03: importar o .ofx primeiro e o relatório Pix depois (ordem
+      // invertida da mais comum) duplicava todo Pix do dia.
+      const JANELA_BUSCA_DIAS = 7;
+      const datasArquivo = parsed.linhas.map((l) => l.data);
+      const dataMaximaArquivo = datasArquivo.reduce((max, d) => (d > max ? d : max));
+      const dataMinimaArquivo = datasArquivo.reduce((min, d) => (d < min ? d : min));
+      const dataMinimaBusca = new Date(
+        new Date(dataMinimaArquivo + "T00:00:00Z").getTime() - JANELA_BUSCA_DIAS * 24 * 60 * 60 * 1000
+      )
+        .toISOString()
+        .slice(0, 10);
+
+      // Pool de cobertura = só linhas que vieram do .ofx (fitid numérico puro,
+      // nunca começa com "E" nem "PIXREL:") -- uma linha de outro relatório
+      // Pix anterior não deve cobrir nada aqui, a chave natural do upsert já
+      // cuida de duplicata dentro da mesma fonte.
+      const [{ data: existentesOfx, error: erroExistentesOfx }, { data: feriadosRaw, error: erroFeriados }] = await Promise.all([
+        supabase
+          .from("extrato_lancamento")
+          .select("id, data_lancamento, valor, descricao_normalizada")
+          .eq("conta_id", contaImportId)
+          .ilike("descricao_normalizada", "%pix recebido%")
+          .not("fitid", "like", "E%")
+          .not("fitid", "like", "PIXREL:%")
+          .gte("data_lancamento", dataMinimaBusca)
+          .lte("data_lancamento", dataMaximaArquivo),
+        supabase.from("feriados").select("data").gte("data", dataMinimaBusca).lte("data", dataMaximaArquivo),
+      ]);
+      if (erroExistentesOfx) throw new Error(erroExistentesOfx.message);
+      if (erroFeriados) throw new Error(erroFeriados.message);
+
+      const candidatosCobertura: CandidatoOfx[] = parsed.linhas.map((l, indice) => ({
+        indice,
+        data: l.data,
+        valor: l.valor,
+        descricaoNormalizada: l.descricaoNormalizada,
+      }));
+      const feriadosSet = new Set((feriadosRaw ?? []).map((f) => f.data as string));
+      const cobertura = calcularCobertura(candidatosCobertura, (existentesOfx ?? []) as LancamentoExistentePix[], feriadosSet);
+      const indicesCobertosSet = new Set(cobertura.indicesCobertos);
+      const cobertosPeloExtrato = indicesCobertosSet.size;
+
+      const linhas = parsed.linhas
+        .filter((_, indice) => !indicesCobertosSet.has(indice))
+        .map((l) => ({
         conta_id: contaImportId,
         fitid: l.idTransacao ?? `PIXREL:${l.data}:${l.valor}:${l.ocorrencia}`,
         data_lancamento: l.data,
@@ -1907,7 +1956,7 @@ export default function ExtratoPage() {
           nome_arquivo: arquivoPix.name,
           periodo_inicio: datas.length > 0 ? datas.reduce((min, d) => (d < min ? d : min)) : null,
           periodo_fim: datas.length > 0 ? datas.reduce((max, d) => (d > max ? d : max)) : null,
-          qtd_linhas: linhas.length,
+          qtd_linhas: parsed.linhas.length,
           qtd_novas: novas,
           qtd_duplicadas: duplicadas,
           importado_por: user?.id ?? null,
@@ -1927,7 +1976,7 @@ export default function ExtratoPage() {
         acao: "importou",
         tabela: "extrato_importacao",
         registroId: (importacaoCriada?.id as string) ?? undefined,
-        detalhes: `${arquivoPix.name} - ${novas} novo(s), ${duplicadas} já existente(s)`,
+        detalhes: `${arquivoPix.name} - ${novas} novo(s), ${duplicadas} já existente(s)${cobertosPeloExtrato > 0 ? `, ${cobertosPeloExtrato} já cobertos pelo extrato bancário` : ""}`,
       });
 
       let classificadosAuto = 0;
@@ -1936,11 +1985,12 @@ export default function ExtratoPage() {
         classificadosAuto = resultadosRegra.length;
       }
 
-      setResumoImportacaoPix({ lidas: linhas.length, novas, duplicadas, movimentacoesLancadas: 0, movimentacoesMesFechado: 0, movimentacoesFalharam: 0, movimentacoesSinalIncompativel: 0, movimentacoesCategoriaInativa: 0, movimentacoesDiaFechadoCaixa: 0, movimentacoesPixCaixaNaoSincronizado: 0, avisos: parsed.avisos });
+      setResumoImportacaoPix({ lidas: parsed.linhas.length, novas, duplicadas, cobertos: cobertosPeloExtrato, movimentacoesLancadas: 0, movimentacoesMesFechado: 0, movimentacoesFalharam: 0, movimentacoesSinalIncompativel: 0, movimentacoesCategoriaInativa: 0, movimentacoesDiaFechadoCaixa: 0, movimentacoesPixCaixaNaoSincronizado: 0, avisos: parsed.avisos });
       setMensagem({
         tipo: "sucesso",
         texto:
-          `${linhas.length} lidas · ${novas} novas · ${duplicadas} já existentes` +
+          `${parsed.linhas.length} lidas · ${novas} novas · ${duplicadas} já existentes` +
+          (cobertosPeloExtrato > 0 ? ` · ${cobertosPeloExtrato} já cobertos pelo extrato bancário` : "") +
           (classificadosAuto > 0 ? ` · ${classificadosAuto} classificada(s) automaticamente` : "") +
           " — revise na aba Lançamentos e confirme quando estiver tudo certo.",
       });
@@ -2625,6 +2675,7 @@ export default function ExtratoPage() {
               <div className="mt-4 p-3 rounded-xl bg-blue-50 border border-blue-200 text-xs text-blue-800">
                 <p className="font-semibold">
                   {resumoImportacaoPix.lidas} lidas · {resumoImportacaoPix.novas} novas · {resumoImportacaoPix.duplicadas} já existentes
+                  {resumoImportacaoPix.cobertos > 0 ? ` · ${resumoImportacaoPix.cobertos} já cobertos pelo extrato bancário` : ""}
                 </p>
                 {resumoImportacaoPix.movimentacoesLancadas > 0 && (
                   <p className="mt-1 font-semibold">

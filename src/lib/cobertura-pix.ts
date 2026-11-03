@@ -116,11 +116,18 @@ export function calcularCobertura(
     }
 
     const pool = poolPorValor.get(candidato.valor) ?? [];
-    // Cobre SÓ quando o candidato cai exatamente no próximo dia útil do
-    // existente -- é isso, e não "algum dia próximo", que caracteriza o eco
-    // do banco. Valores coincidentes de pagadores diferentes em dias
-    // distintos (o bug real de 2026-08-18) deixam de casar.
-    const posicao = pool.findIndex((e) => candidato.data === proximoDiaUtil(e.data_lancamento, feriados));
+    // Cobre quando o candidato cai no MESMO dia do existente (caso normal:
+    // extrato e relatório Pix concordam na data) OU no próximo dia útil (caso
+    // fim de semana/feriado: o banco carimba o eco do PIX com a data do
+    // próximo dia útil). Nunca "algum dia próximo" além disso -- é isso que
+    // evita casar valores coincidentes de pagadores diferentes em dias
+    // distintos (o bug real de 2026-08-18). Confirmado incidente real
+    // 2026-11-03: faltava o caso "mesmo dia", então um Pix de dia útil comum
+    // importado pelos dois caminhos (extrato e relatório Pix) nunca casava,
+    // e entrava duplicado sempre que a ordem de importação fosse invertida.
+    const posicao = pool.findIndex(
+      (e) => candidato.data === e.data_lancamento || candidato.data === proximoDiaUtil(e.data_lancamento, feriados)
+    );
 
     if (posicao === -1) {
       indicesParaImportar.push(candidato.indice);
