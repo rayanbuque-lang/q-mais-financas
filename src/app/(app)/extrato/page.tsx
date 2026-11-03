@@ -2262,6 +2262,35 @@ export default function ExtratoPage() {
     await Promise.all([carregarLancamentos(), carregarResumo()]);
   }
 
+  // Desfaz um "Ignorar" -- faltava por completo: um lançamento ignorado não
+  // tinha NENHUM botão de volta na tela (só um "—"), e ignorar por engano um
+  // lançamento de verdade (ex.: confundir com um duplicado durante uma
+  // limpeza) deixava dinheiro real fora de Movimentações/Fechamento de Caixa
+  // sem nenhum jeito de corrigir pela tela. Incidente real 2026-11-03.
+  // handleIgnorar já limpa conta_pagar_id/movimentacao_id/candidatas/
+  // duplicatas ao ignorar, então só o status precisa voltar.
+  async function handleReclassificar(lancamento: Lancamento) {
+    setAcaoLancamentoId(lancamento.id);
+    setMensagem(null);
+    const { data, error } = await supabase
+      .from("extrato_lancamento")
+      .update({ status: "nao_classificado" })
+      .eq("id", lancamento.id)
+      .eq("status", "ignorado")
+      .select("id");
+    setAcaoLancamentoId(null);
+    if (error) {
+      setMensagem({ tipo: "erro", texto: "Erro ao reclassificar: " + error.message });
+      return;
+    }
+    if (!data || data.length === 0) {
+      setMensagem({ tipo: "erro", texto: "Este lançamento não está mais ignorado — atualizando a lista." });
+    } else {
+      setMensagem({ tipo: "sucesso", texto: "Lançamento voltou para 'não classificado' — classifique ou confirme normalmente." });
+    }
+    await Promise.all([carregarLancamentos(), carregarResumo()]);
+  }
+
   // "Revisado" é um estado interno do staging /extrato — nunca grava em
   // movimentacoes/contas_pagar. Marca que o usuário já conferiu visualmente a
   // classificação daquele dia. Só pode confirmar se não sobrar pendente no dia.
@@ -3129,7 +3158,18 @@ export default function ExtratoPage() {
                                       // categoria/conta_pagar_id/movimentacao_id (dado antigo, gravado
                                       // antes de handleIgnorar passar a limpá-los) não pode cair nos
                                       // ramos abaixo como se ainda estivesse pendente de ação.
-                                      <span className="text-[10px] text-[var(--color-text-muted)]">—</span>
+                                      podeEscrever ? (
+                                        <button
+                                          type="button"
+                                          disabled={acaoLancamentoId === l.id}
+                                          onClick={() => handleReclassificar(l)}
+                                          className="px-2 py-1 rounded-full border border-[var(--color-border)] text-[10px] font-medium whitespace-nowrap hover:bg-[var(--hover-bg)] disabled:opacity-50"
+                                        >
+                                          {acaoLancamentoId === l.id ? "..." : "Reclassificar"}
+                                        </button>
+                                      ) : (
+                                        <span className="text-[10px] text-[var(--color-text-muted)]">—</span>
+                                      )
                                     ) : l.conta_pagar_escolhida_id ? (
                                       // Conta já escolhida na revisão (ambíguo resolvido, pendente
                                       // existente ou conta recém-cadastrada) -- ainda NÃO foi baixada,
