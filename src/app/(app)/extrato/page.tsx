@@ -857,6 +857,13 @@ export default function ExtratoPage() {
 
   const [contas, setContas] = useState<Conta[]>([]);
   const [importacoes, setImportacoes] = useState<{ id: string; conta_id: string; nome_arquivo: string; importado_em: string; qtd_linhas: number; status: string }[]>([]);
+  // Quantos lançamentos de cada importação ainda não têm destino (nem
+  // conta_pagar_id, nem movimentacao_id, nem ignorado) -- calculado à parte
+  // de `status`, porque o status gravado pode ficar desatualizado (ex.:
+  // "confirmada" só de nome, de um Confirmar/Desfazer que não terminou --
+  // incidente real 2026-11-03). É isso que decide quem aparece em "Aguardando
+  // confirmação", não só o texto salvo em extrato_importacao.status.
+  const [pendenciasPorImportacao, setPendenciasPorImportacao] = useState<Record<string, number>>({});
   const [carregandoImportacoes, setCarregandoImportacoes] = useState(false);
 
   // Importar
@@ -1040,8 +1047,31 @@ export default function ExtratoPage() {
       .select("id, conta_id, nome_arquivo, importado_em, qtd_linhas, status")
       .order("importado_em", { ascending: false })
       .limit(20);
-    if (!error && data) setImportacoes(data);
-    else if (error) setMensagem({ tipo: "erro", texto: "Erro ao carregar importações: " + error.message });
+    if (!error && data) {
+      setImportacoes(data);
+      const ids = data.map((i) => i.id);
+      if (ids.length === 0) {
+        setPendenciasPorImportacao({});
+      } else {
+        const { data: linhasPendentes, error: erroPendencias } = await supabase
+          .from("extrato_lancamento")
+          .select("importacao_id")
+          .in("importacao_id", ids)
+          .is("conta_pagar_id", null)
+          .is("movimentacao_id", null)
+          .neq("status", "ignorado");
+        if (!erroPendencias) {
+          const mapa: Record<string, number> = {};
+          for (const l of linhasPendentes ?? []) {
+            const id = l.importacao_id as string;
+            mapa[id] = (mapa[id] ?? 0) + 1;
+          }
+          setPendenciasPorImportacao(mapa);
+        }
+      }
+    } else if (error) {
+      setMensagem({ tipo: "erro", texto: "Erro ao carregar importações: " + error.message });
+    }
     setCarregandoImportacoes(false);
   }
 
@@ -2766,7 +2796,7 @@ export default function ExtratoPage() {
             <h2 className="font-semibold text-sm mb-3">Aguardando confirmação</h2>
             {carregandoImportacoes ? (
               <div className="skeleton h-24 rounded-xl" />
-            ) : importacoes.filter((i) => i.status === "pendente").length === 0 ? (
+            ) : importacoes.filter((i) => i.status === "pendente" || (pendenciasPorImportacao[i.id] ?? 0) > 0).length === 0 ? (
               <p className="text-xs text-[var(--color-text-muted)]">Nada pendente — toda importação já foi revisada.</p>
             ) : (
               <div className="overflow-x-auto">
@@ -2782,13 +2812,21 @@ export default function ExtratoPage() {
                   </thead>
                   <tbody>
                     {importacoes
-                      .filter((imp) => imp.status === "pendente")
+                      .filter((imp) => imp.status === "pendente" || (pendenciasPorImportacao[imp.id] ?? 0) > 0)
                       .map((imp) => {
                         const conta = contas.find((c) => c.id === imp.conta_id);
                         const emAcao = confirmandoImportacaoId === imp.id || desfazendoImportacaoId === imp.id;
+                        const pendencias = pendenciasPorImportacao[imp.id] ?? 0;
                         return (
                           <tr key={imp.id} className="border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--hover-bg)]">
-                            <td className="py-2 pr-3 max-w-[220px] truncate" title={imp.nome_arquivo}>{imp.nome_arquivo}</td>
+                            <td className="py-2 pr-3 max-w-[220px] truncate" title={imp.nome_arquivo}>
+                              {imp.nome_arquivo}
+                              {imp.status !== "pendente" && (
+                                <span className="block text-[10px] text-amber-600 font-medium">
+                                  status salvo "{imp.status}", mas {pendencias} linha(s) ainda sem destino — precisa revisar
+                                </span>
+                              )}
+                            </td>
                             <td className="py-2 pr-3 whitespace-nowrap">{conta ? nomeConta(conta) : "—"}</td>
                             <td className="py-2 pr-3 whitespace-nowrap">{new Date(imp.importado_em).toLocaleString("pt-BR")}</td>
                             <td className="py-2 pr-3 text-right">{imp.qtd_linhas}</td>
